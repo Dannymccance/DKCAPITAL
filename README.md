@@ -52,7 +52,15 @@ Generate a Telegram session interactively:
 docker compose run --rm telegram-session
 ```
 
-Copy the printed session value into `.env` as `TELEGRAM_SESSION_STRING`, then start the listener:
+Copy the printed session value into `.env` as `TELEGRAM_SESSION_STRING`.
+
+If you need the numeric ID for a private channel or group, list every chat visible to the Telegram account:
+
+```bash
+docker compose run --rm telegram-dialogs
+```
+
+Put the required ID or username into `TELEGRAM_SOURCE_CHATS`, then start the listener:
 
 ```bash
 docker compose up -d telegram-listener
