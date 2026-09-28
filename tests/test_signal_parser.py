@@ -56,6 +56,46 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(actions[0].kind, "commentary")
 
+    def test_sl_and_be_hits_close_trades(self) -> None:
+        sl = parse_actions("SL HIT", reply_to_message_id=10)
+        be = parse_actions("BREAKEVEN HIT", reply_to_message_id=11)
+        self.assertEqual(sl[0].kind, "stop_loss")
+        self.assertEqual(be[0].kind, "breakeven_close")
+
+    def test_reply_through_commentary_keeps_signal_context(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            {
+                "event_type": "new_message",
+                "chat_id": 1,
+                "message_id": 1,
+                "date": "2026-09-28T08:00:00+00:00",
+                "reply_to_message_id": None,
+                "text": "BUY XAUUSD AT 4200 - 4198\\nTP1 4205\\nSL 4190",
+            }
+        )
+        state.ingest_event(
+            {
+                "event_type": "new_message",
+                "chat_id": 1,
+                "message_id": 2,
+                "date": "2026-09-28T08:01:00+00:00",
+                "reply_to_message_id": 1,
+                "text": "Heavy volume here, keep watching.",
+            }
+        )
+        state.ingest_event(
+            {
+                "event_type": "new_message",
+                "chat_id": 1,
+                "message_id": 3,
+                "date": "2026-09-28T08:02:00+00:00",
+                "reply_to_message_id": 2,
+                "text": "SL TO 4195",
+            }
+        )
+        self.assertEqual(state.signals["1:1"].current_sl, 4195)
+
     def test_reply_chain_and_global_updates(self) -> None:
         events = [
             {
