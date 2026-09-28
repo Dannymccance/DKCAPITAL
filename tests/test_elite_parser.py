@@ -140,6 +140,8 @@ This is not financial advice"""
                 minute=17,
             )
         )
+        first = state.signals["200:10"]
+        second = state.signals["200:11"]
         self.assertEqual(first.partial_close_count, 0)
         self.assertEqual(first.current_sl, 4257)
         self.assertEqual(second.partial_close_count, 1)
