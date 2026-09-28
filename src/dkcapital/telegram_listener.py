@@ -52,19 +52,41 @@ async def _resolve_chat_ids(
     client: TelegramClient,
     configured_chats: tuple[ChatRef, ...],
 ) -> list[int]:
+    # StringSession stores authentication, not a durable entity cache. Loading dialogs
+    # here gives Telethon the access hashes needed for private numeric channel IDs.
+    dialogs = await client.get_dialogs()
+    dialog_entities = {
+        utils.get_peer_id(dialog.entity): dialog.entity
+        for dialog in dialogs
+    }
+
     resolved: list[int] = []
 
     for chat in configured_chats:
         try:
-            entity = await client.get_entity(chat)
+            if isinstance(chat, int) and chat in dialog_entities:
+                entity = dialog_entities[chat]
+            else:
+                entity = await client.get_entity(chat)
         except Exception:
-            logger.exception("Unable to resolve configured Telegram source %r", chat)
+            logger.exception(
+                "Unable to resolve configured Telegram source %r. "
+                "Confirm the listening account can see the chat and that the ID/username is correct.",
+                chat,
+            )
             raise
 
         peer_id = utils.get_peer_id(entity)
         if peer_id not in resolved:
             resolved.append(peer_id)
-        logger.info("Resolved Telegram source %r -> %s", chat, peer_id)
+
+        title = (
+            getattr(entity, "title", None)
+            or getattr(entity, "username", None)
+            or getattr(entity, "first_name", None)
+            or "unknown"
+        )
+        logger.info("Resolved Telegram source %r -> %s (%s)", chat, peer_id, title)
 
     return resolved
 
