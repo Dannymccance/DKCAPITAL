@@ -33,6 +33,9 @@ class Signal:
     layers: int = 1
     reentries: int = 0
     layer_max: float | None = None
+    source_style: str | None = None
+    remaining_fraction: float = 1.0
+    partial_close_count: int = 0
     status: str = "ACTIVE"
     last_update_at: str | None = None
     last_update_text: str = ""
@@ -113,6 +116,7 @@ class SignalState:
                         timestamp=timestamp,
                         symbol=action.symbol,
                         direction=action.direction,
+                        source_style=action.source_style,
                         fallback=signal_id,
                     )
                     signal = Signal(
@@ -135,6 +139,7 @@ class SignalState:
                         current_sl=action.sl,
                         sl_mode="PRICE" if action.sl is not None else "UNSET",
                         layer_max=action.layer_max,
+                        source_style=action.source_style,
                         last_update_at=timestamp,
                         last_update_text=text,
                         source_message_ids=[message_id],
@@ -180,8 +185,11 @@ class SignalState:
         timestamp: str,
         symbol: str,
         direction: str,
+        source_style: str | None,
         fallback: str,
     ) -> str:
+        if source_style == "elite":
+            return fallback
         compatible = [
             signal
             for signal in self.signals.values()
@@ -232,6 +240,9 @@ class SignalState:
 
         if action.scope == "all_symbol":
             return [signal.signal_id for signal in matching]
+
+        if action.scope == "latest_symbol":
+            return [matching[-1].signal_id]
 
         if action.scope == "latest_position":
             return [matching[-1].signal_id]
@@ -318,6 +329,15 @@ class SignalState:
 
             if signal.tps and set(signal.tps).issubset(set(signal.tp_hits)):
                 signal.status = "COMPLETED"
+
+        elif action.kind == "partial_close":
+            if action.partial_percent is not None:
+                fraction = max(0.0, min(1.0, action.partial_percent / 100.0))
+                signal.remaining_fraction *= 1.0 - fraction
+                signal.partial_close_count += 1
+                if signal.remaining_fraction <= 1e-9:
+                    signal.remaining_fraction = 0.0
+                    signal.status = "CLOSED"
 
         elif action.kind == "add_layer":
             signal.layers += 1
