@@ -90,6 +90,10 @@ class SignalState:
 
             for action in actions:
                 if action.kind == "commentary":
+                    if reply_to is not None:
+                        inherited = self.message_targets.get((chat_id, int(reply_to)), [])
+                        if inherited:
+                            self.message_targets[(chat_id, message_id)] = list(inherited)
                     continue
 
                 if action.kind == "new_signal":
@@ -247,6 +251,12 @@ class SignalState:
 
         elif action.kind == "close":
             signal.status = "CLOSED"
+
+        elif action.kind == "stop_loss":
+            signal.status = "STOPPED"
+
+        elif action.kind == "breakeven_close":
+            signal.status = "BREAKEVEN"
 
         signal.last_update_at = timestamp
         signal.last_update_text = text
