@@ -34,9 +34,11 @@ class Settings:
     telegram_session_string: str | None
     telegram_source_chats: tuple[ChatRef, ...]
     telegram_event_log_path: Path
+    signal_state_path: Path
 
     discord_bot_token: str | None
     discord_guild_id: int | None
+    discord_dashboard_config_path: Path
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,8 +55,17 @@ class Settings:
             telegram_event_log_path=Path(
                 os.getenv("TELEGRAM_EVENT_LOG_PATH", "/app/data/telegram-events.jsonl")
             ),
+            signal_state_path=Path(
+                os.getenv("SIGNAL_STATE_PATH", "/app/data/signal-state.json")
+            ),
             discord_bot_token=os.getenv("DISCORD_BOT_TOKEN", "").strip() or None,
             discord_guild_id=int(guild_id_raw) if guild_id_raw else None,
+            discord_dashboard_config_path=Path(
+                os.getenv(
+                    "DISCORD_DASHBOARD_CONFIG_PATH",
+                    "/app/data/discord-dashboard.json",
+                )
+            ),
         )
 
     def validate_telegram_credentials(self) -> None:
