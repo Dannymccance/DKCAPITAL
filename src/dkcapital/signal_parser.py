@@ -7,6 +7,7 @@ from typing import Any, Literal
 ActionKind = Literal[
     "new_signal",
     "trade_update",
+    "partial_close",
     "add_layer",
     "reenter",
     "cancel",
@@ -32,6 +33,8 @@ def _number(value: str) -> float:
 def _symbol(text: str) -> str | None:
     if re.search(r"\b(?:XAU\s*/?\s*USD|XAUUSD|XAUUSDT|XAU|GOLD)\b", text):
         return "XAUUSD"
+    if re.search(r"\b(?:BTCUSDT|BTCUSD|BTC|BITCOIN)\b", text):
+        return "BTCUSDT"
     match = re.search(r"\b([A-Z]{3,10}USDT?)\b", text)
     return match.group(1) if match else None
 
@@ -72,8 +75,12 @@ def _explicit_sl(text: str) -> float | None:
     patterns = (
         r"\b(?:BOTH\s+|ALL\s+(?:GOLD|XAU(?:USD|USDT)?)\s+)?"
         r"SL(?:'S)?(?:\s+MOVE(?:D)?(?:\s+AGAIN)?|\s+ONE\s+MORE\s+TIME)?"
-        r"\s+TO\s+(\d+(?:\.\d+)?)\b",
+        r"\s+TO\s+(?:THIS\s+)?(\d+(?:\.\d+)?)\b",
         r"\bSL\s+ALSO\s+(\d+(?:\.\d+)?)\b",
+        r"\b(?:MOVE|SET|ADJUST|TRAIL)\s+(?:YOUR\s+|THE\s+)?"
+        r"(?:STOP\s*LOSS|STOP|SL)\s+(?:TO|AT|@)\s+(?:THIS\s+)?(\d+(?:\.\d+)?)\b",
+        r"\b(?:STOP\s*LOSS|STOP|SL)\s+(?:TO|AT|@)\s+(?:THIS\s+)?(\d+(?:\.\d+)?)\b",
+        r"\b(?:STOP\s*LOSS|SL)\s*:\s*(\d+(?:\.\d+)?)\b",
         r"\bSL\s*[:=@-]?\s*(\d+(?:\.\d+)?)\b",
     )
     for pattern in patterns:
@@ -91,22 +98,53 @@ def _layer_max(text: str) -> float | None:
     return _number(match.group(1)) if match else None
 
 
+def _partial_percent(text: str) -> float | None:
+    percent_patterns = (
+        r"\b(?:TAKE\s+)?(?:FURTHER\s+)?(\d{1,3}(?:\.\d+)?)\s*%\s+PARTIAL\b",
+        r"\b(?:PARTIAL|CLOSE)\s+(\d{1,3}(?:\.\d+)?)\s*%\b",
+    )
+    for pattern in percent_patterns:
+        match = re.search(pattern, text)
+        if match:
+            value = _number(match.group(1))
+            if 0 < value < 100:
+                return value
+
+    if re.search(
+        r"\b(?:TP|TAKE|CLOSE|PARTIAL)\s+(?:A\s+)?HALF\b|"
+        r"\bHALF\s+OFF\b|\bTAKE\s+HALF\s+OFF\b",
+        text,
+    ):
+        return 50.0
+
+    return None
+
+
 def _move_to_be(text: str) -> bool:
     return bool(
         re.search(
             r"\b(?:SL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY)|"
-            r"(?:MOVE|SET|ADJUST)\s+(?:THE\s+)?SL\s+(?:TO\s+)?"
+            r"(?:MOVE|SET|ADJUST)\s+(?:THE\s+|YOUR\s+)?"
+            r"(?:SL|STOP(?:\s+LOSS)?)\s+(?:TO\s+)?"
             r"(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY))\b",
             text,
         )
     )
 
 
-def _scope(text: str, reply_to_message_id: int | None) -> str:
+def _scope(
+    text: str,
+    reply_to_message_id: int | None,
+    symbol: str | None,
+) -> str:
     if reply_to_message_id is not None:
         return "reply"
-    if re.search(r"\bALL\s+(?:GOLD|XAU(?:USD|USDT)?)\b", text):
+    if re.search(r"\bALL\s+(?:GOLD|XAU(?:USD|USDT)?|BTC(?:USD|USDT)?)\b", text):
         return "all_symbol"
+    if re.search(r"\bBOTH\b", text):
+        return "current_group"
+    if symbol is not None:
+        return "latest_symbol"
     return "current_group"
 
 
@@ -122,6 +160,8 @@ class ParsedAction:
     tp_hits: tuple[int, ...] = ()
     move_sl_to_be: bool = False
     layer_max: float | None = None
+    partial_percent: float | None = None
+    source_style: str | None = None
     scope: str = "none"
     reply_to_message_id: int | None = None
     raw_text: str = ""
@@ -138,6 +178,8 @@ class ParsedAction:
             "tp_hits": list(self.tp_hits),
             "move_sl_to_be": self.move_sl_to_be,
             "layer_max": self.layer_max,
+            "partial_percent": self.partial_percent,
+            "source_style": self.source_style,
             "scope": self.scope,
             "reply_to_message_id": self.reply_to_message_id,
             "raw_text": self.raw_text,
@@ -150,9 +192,10 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     direction = _direction(normalized)
     actions: list[ParsedAction] = []
 
+    # GWS-style one-line/range signal.
     entry = re.search(
         r"\b(?:BUY|SELL)\s+"
-        r"(?:XAU\s*/?\s*USD|XAUUSD|XAUUSDT|XAU|GOLD|[A-Z]{3,10}USDT?)"
+        r"(?:XAU\s*/?\s*USD|XAUUSD|XAUUSDT|XAU|GOLD|BTC(?:USD|USDT)?|BITCOIN|[A-Z]{3,10}USDT?)"
         r"\s+(?:AT|@)\s*(\d+(?:\.\d+)?)"
         r"(?:\s*-\s*(\d+(?:\.\d+)?))?",
         normalized,
@@ -170,13 +213,48 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 tps=_extract_tps(normalized),
                 sl=_explicit_sl(normalized),
                 layer_max=_layer_max(normalized),
+                source_style="gws",
                 scope="new",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
         ]
 
-    scope = _scope(normalized, reply_to_message_id)
+    # Elite Portfolios-style structured signal:
+    # "I am personally entering ... Gold buy ... Entry: 4281 ... Stop loss: 4275 ... Take profit: Open"
+    structured_entry = re.search(r"\bENTRY\s*:\s*(\d+(?:\.\d+)?)\b", normalized)
+    structured_sl = re.search(
+        r"\b(?:STOP\s*LOSS|SL)\s*:\s*(\d+(?:\.\d+)?)\b",
+        normalized,
+    )
+    if (
+        structured_entry
+        and structured_sl
+        and symbol
+        and direction
+        and (
+            "I AM PERSONALLY ENTERING" in normalized
+            or "TAKE PROFIT:" in normalized
+        )
+    ):
+        price = _number(structured_entry.group(1))
+        return [
+            ParsedAction(
+                kind="new_signal",
+                symbol=symbol,
+                direction=direction,
+                entry_low=price,
+                entry_high=price,
+                tps=_extract_tps(normalized),
+                sl=_number(structured_sl.group(1)),
+                source_style="elite",
+                scope="new",
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        ]
+
+    scope = _scope(normalized, reply_to_message_id, symbol)
 
     if re.search(
         r"\b(?:BOTH\s+)?(?:OUT\s+ON\s+SL|SL(?:'S)?\s+(?:HIT|HITTED|TAGGED|TAKEN|OUT))\b",
@@ -223,7 +301,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     explicit_cancel = bool(
         re.search(
             r"\b(?:CANCEL(?:LED)?(?:\s+(?:HERE|THIS|IT))?|"
-            r"DON'?T\s+TAKE(?:\s+THIS)?|IGNORE\s+THIS|LEAVE\s+IT)\b",
+            r"DON'?T\s+TAKE(?:\s+THIS)?|DO\s+NOT\s+ENTER|"
+            r"IGNORE\s+(?:THIS|GOLD|BTC)|LEAVE\s+IT)\b",
             normalized,
         )
     )
@@ -248,8 +327,9 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
         )
 
     if re.search(
-        r"(?:^|\n)\s*(?:CLOSE(?:D)?|EXIT(?:ED)?|GET\s+OUT)\b"
-        r"|\b(?:CLOSE|EXIT)\s+(?:THIS|IT|NOW|ALL|GOLD|XAUUSD|TRADE|POSITION)\b",
+        r"(?:^|\n)\s*(?:CLOSE(?:D)?|EXIT(?:ED)?|GET\s+OUT|I'?M\s+OUT)\b"
+        r"|\b(?:CLOSE|EXIT|CUT)\s+(?:THIS|IT|NOW|ALL|GOLD|BTC|XAUUSD|TRADE|POSITION)\b"
+        r"|\bOUT\s+OF\s+(?:GOLD|BTC)\b",
         normalized,
     ):
         actions.append(
@@ -257,6 +337,20 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 kind="close",
                 symbol=symbol,
                 direction=direction,
+                scope=scope,
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        )
+
+    partial_percent = _partial_percent(normalized)
+    if partial_percent is not None:
+        actions.append(
+            ParsedAction(
+                kind="partial_close",
+                symbol=symbol,
+                direction=direction,
+                partial_percent=partial_percent,
                 scope=scope,
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
@@ -306,7 +400,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
             )
         )
 
-    if re.search(r"\b(?:WE\s+)?RE-?ENTER(?:\s+SAME)?\b|\bREENTRY\b", normalized):
+    if re.search(r"\b(?:WE\s+)?RE-?ENTER(?:ING)?(?:\s+SAME)?\b|\bREENTRY\b", normalized):
         actions.append(
             ParsedAction(
                 kind="reenter",
