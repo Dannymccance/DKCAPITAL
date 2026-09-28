@@ -39,11 +39,17 @@ class Settings:
     discord_bot_token: str | None
     discord_guild_id: int | None
     discord_dashboard_config_path: Path
+    discord_internal_signals_channel_id: int
+    discord_internal_signals_state_path: Path
 
     @classmethod
     def from_env(cls) -> "Settings":
         api_id_raw = os.getenv("TELEGRAM_API_ID", "").strip()
         guild_id_raw = os.getenv("DISCORD_GUILD_ID", "").strip()
+        internal_signals_channel_raw = os.getenv(
+            "DISCORD_INTERNAL_SIGNALS_CHANNEL_ID",
+            "1554231371013169235",
+        ).strip()
 
         return cls(
             app_env=os.getenv("APP_ENV", "production").strip(),
@@ -64,6 +70,13 @@ class Settings:
                 os.getenv(
                     "DISCORD_DASHBOARD_CONFIG_PATH",
                     "/app/data/discord-dashboard.json",
+                )
+            ),
+            discord_internal_signals_channel_id=int(internal_signals_channel_raw),
+            discord_internal_signals_state_path=Path(
+                os.getenv(
+                    "DISCORD_INTERNAL_SIGNALS_STATE_PATH",
+                    "/app/data/discord-internal-signals.json",
                 )
             ),
         )
