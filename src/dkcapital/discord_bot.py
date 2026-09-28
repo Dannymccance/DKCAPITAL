@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,105 @@ def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
     return embed
 
 
+def _provider_name(signal: dict[str, Any]) -> str:
+    style = str(signal.get("source_style") or "").lower()
+    if style == "elite":
+        return "Elite Portfolios"
+    if style == "gws":
+        return "GWS"
+    return "Telegram Provider"
+
+
+def _signal_fingerprint(signal: dict[str, Any]) -> str:
+    relevant = {
+        "direction": signal.get("direction"),
+        "symbol": signal.get("symbol"),
+        "entry_low": signal.get("entry_low"),
+        "entry_high": signal.get("entry_high"),
+        "tps": signal.get("tps"),
+        "current_sl": signal.get("current_sl"),
+        "sl_mode": signal.get("sl_mode"),
+        "tp_hits": signal.get("tp_hits"),
+        "layers": signal.get("layers"),
+        "reentries": signal.get("reentries"),
+        "layer_max": signal.get("layer_max"),
+        "remaining_fraction": signal.get("remaining_fraction"),
+        "partial_close_count": signal.get("partial_close_count"),
+        "status": signal.get("status"),
+        "last_update_at": signal.get("last_update_at"),
+    }
+    return json.dumps(relevant, sort_keys=True, separators=(",", ":"))
+
+
+def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
+    direction = str(signal.get("direction") or "?")
+    symbol = str(signal.get("symbol") or "?")
+    provider = _provider_name(signal)
+    status = str(signal.get("status") or "UNKNOWN")
+
+    low = _price(signal.get("entry_low"))
+    high = _price(signal.get("entry_high"))
+    entry = low if low == high else f"{low} - {high}"
+
+    embed = discord.Embed(
+        title=f"{direction} {symbol}",
+        description=f"**Internal parsed signal**\nSource: **{provider}**",
+    )
+    embed.add_field(name="Entry", value=entry, inline=True)
+
+    if signal.get("sl_mode") == "BREAKEVEN":
+        sl_text = "BE"
+    elif signal.get("sl_mode") == "UNSET":
+        sl_text = "Not set"
+    else:
+        sl_text = _price(signal.get("current_sl"))
+    embed.add_field(name="Stop Loss", value=sl_text, inline=True)
+    embed.add_field(name="Status", value=status, inline=True)
+
+    tps = signal.get("tps") or {}
+    hits = {int(value) for value in signal.get("tp_hits") or []}
+    if tps:
+        tp_lines: list[str] = []
+        for raw_index, target in sorted(tps.items(), key=lambda item: int(item[0])):
+            index = int(raw_index)
+            marker = "✅" if index in hits else "⬜"
+            tp_lines.append(f"{marker} TP{index}: {_price(target)}")
+        embed.add_field(name="Targets", value="\n".join(tp_lines), inline=False)
+    else:
+        embed.add_field(name="Take Profit", value="Open", inline=False)
+
+    partials = int(signal.get("partial_close_count", 0) or 0)
+    if partials:
+        remaining = float(signal.get("remaining_fraction", 1.0) or 0.0) * 100
+        embed.add_field(
+            name="Position Management",
+            value=f"Partials taken: {partials}\nRemaining: {remaining:.2f}%",
+            inline=False,
+        )
+
+    extra: list[str] = []
+    layers = int(signal.get("layers", 1) or 1)
+    reentries = int(signal.get("reentries", 0) or 0)
+    if layers > 1:
+        extra.append(f"Layers: {layers}")
+    if reentries:
+        extra.append(f"Re-entries: {reentries}")
+    if signal.get("layer_max") is not None:
+        extra.append(f"Layer max: {_price(signal.get('layer_max'))}")
+    if extra:
+        embed.add_field(name="Setup", value="\n".join(extra), inline=False)
+
+    opened_at = signal.get("opened_at")
+    root_message_id = signal.get("root_message_id")
+    footer = "INTERNAL ONLY"
+    if root_message_id is not None:
+        footer += f" | Telegram message {root_message_id}"
+    if opened_at:
+        footer += f" | {opened_at}"
+    embed.set_footer(text=footer)
+    return embed
+
+
 def build_bot(settings: Settings) -> commands.Bot:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
@@ -143,6 +243,119 @@ def build_bot(settings: Settings) -> commands.Bot:
             logger.exception("Discord dashboard update failed")
         return False
 
+    async def sync_internal_signals() -> None:
+        state = _load_json(settings.signal_state_path)
+        signals = list(state.get("signals") or [])
+        registry = _load_json(settings.discord_internal_signals_state_path)
+
+        if not registry.get("initialized"):
+            registry = {
+                "initialized": True,
+                "watermark": datetime.now(UTC).isoformat(),
+                "messages": {},
+            }
+            _write_json(settings.discord_internal_signals_state_path, registry)
+            logger.info(
+                "Internal signal feed initialized channel=%s watermark=%s",
+                settings.discord_internal_signals_channel_id,
+                registry["watermark"],
+            )
+            return
+
+        channel_id = settings.discord_internal_signals_channel_id
+        try:
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception("Unable to access internal signal channel %s", channel_id)
+            return
+
+        if not hasattr(channel, "send"):
+            logger.error("Configured internal signal channel %s is not messageable", channel_id)
+            return
+
+        messages = registry.setdefault("messages", {})
+        watermark = str(registry.get("watermark") or "")
+        changed = False
+
+        # First update messages we have already published.
+        for signal in signals:
+            signal_id = str(signal.get("signal_id") or "")
+            if not signal_id or signal_id not in messages:
+                continue
+
+            record = messages.get(signal_id)
+            if isinstance(record, int):
+                record = {"message_id": record, "fingerprint": ""}
+            elif not isinstance(record, dict):
+                record = {}
+
+            message_id = record.get("message_id")
+            fingerprint = _signal_fingerprint(signal)
+            if message_id and record.get("fingerprint") == fingerprint:
+                continue
+
+            try:
+                if message_id:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.edit(embed=_signal_embed(signal))
+                else:
+                    message = await channel.send(embed=_signal_embed(signal))
+                messages[signal_id] = {
+                    "message_id": message.id,
+                    "fingerprint": fingerprint,
+                }
+                changed = True
+            except discord.NotFound:
+                message = await channel.send(embed=_signal_embed(signal))
+                messages[signal_id] = {
+                    "message_id": message.id,
+                    "fingerprint": fingerprint,
+                }
+                changed = True
+            except (discord.Forbidden, discord.HTTPException):
+                logger.exception("Failed updating internal signal %s", signal_id)
+
+        # Then publish new signals after the persisted watermark. Historical
+        # backfill from before the feed was enabled is intentionally not dumped.
+        for signal in sorted(signals, key=lambda item: str(item.get("opened_at") or "")):
+            signal_id = str(signal.get("signal_id") or "")
+            opened_at = str(signal.get("opened_at") or "")
+            if not signal_id or signal_id in messages:
+                continue
+            if not opened_at or (watermark and opened_at <= watermark):
+                continue
+
+            try:
+                message = await channel.send(embed=_signal_embed(signal))
+            except (discord.Forbidden, discord.HTTPException):
+                logger.exception("Failed publishing internal signal %s", signal_id)
+                break
+
+            messages[signal_id] = {
+                "message_id": message.id,
+                "fingerprint": _signal_fingerprint(signal),
+            }
+            watermark = opened_at
+            registry["watermark"] = watermark
+            changed = True
+            logger.info(
+                "Published internal signal signal_id=%s channel=%s message=%s",
+                signal_id,
+                channel_id,
+                message.id,
+            )
+
+        if changed:
+            _write_json(settings.discord_internal_signals_state_path, registry)
+
+    @tasks.loop(seconds=2)
+    async def internal_signal_loop() -> None:
+        await sync_internal_signals()
+
+    @internal_signal_loop.before_loop
+    async def before_internal_signal_loop() -> None:
+        await bot.wait_until_ready()
+
     @tasks.loop(seconds=5)
     async def dashboard_loop() -> None:
         await update_dashboard()
@@ -167,6 +380,8 @@ def build_bot(settings: Settings) -> commands.Bot:
 
         if not dashboard_loop.is_running():
             dashboard_loop.start()
+        if not internal_signal_loop.is_running():
+            internal_signal_loop.start()
 
     @bot.tree.command(name="ping", description="Check whether the DK Capital bot is online.")
     async def ping(interaction: discord.Interaction) -> None:
