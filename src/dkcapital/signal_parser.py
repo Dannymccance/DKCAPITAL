@@ -12,6 +12,7 @@ ActionKind = Literal[
     "cancel",
     "close",
     "stop_loss",
+    "setup_failed",
     "breakeven_close",
     "commentary",
 ]
@@ -19,6 +20,7 @@ ActionKind = Literal[
 
 def _norm(text: str) -> str:
     text = text.upper().replace("–", "-").replace("—", "-")
+    text = text.replace("’", "'").replace("‘", "'")
     text = re.sub(r"[^\S\r\n]+", " ", text)
     return text.strip()
 
@@ -28,7 +30,7 @@ def _number(value: str) -> float:
 
 
 def _symbol(text: str) -> str | None:
-    if re.search(r"\b(?:XAU\s*/?\s*USD|XAUUSD|GOLD)\b", text):
+    if re.search(r"\b(?:XAU\s*/?\s*USD|XAUUSD|XAUUSDT|XAU|GOLD)\b", text):
         return "XAUUSD"
     match = re.search(r"\b([A-Z]{3,10}USDT?)\b", text)
     return match.group(1) if match else None
@@ -43,34 +45,35 @@ def _direction(text: str) -> str | None:
 
 
 def _extract_tps(text: str) -> dict[int, float]:
+    """Extract targets in message order and preserve repeated sequential labels."""
     result: dict[int, float] = {}
-    for index, value in re.findall(r"\bTP\s*(\d+)\s*[:=@-]?\s*(\d+(?:\.\d+)?)\b", text):
-        result[int(index)] = _number(value)
+    for raw_index, value in re.findall(
+        r"\bTP\s*(\d+)\s*[:=@-]?\s*(\d+(?:\.\d+)?)\b",
+        text,
+    ):
+        index = int(raw_index)
+        while index in result:
+            index += 1
+        result[index] = _number(value)
     return result
 
 
 def _extract_tp_hits(text: str) -> list[int]:
-    hits: set[int] = set()
-
-    if re.search(r"\bTP\s*1\s*(?:&|\+|AND)\s*TP\s*2\b", text):
-        if re.search(r"\b(?:HIT|HITS|PIPS|DONE|SECURED)\b", text):
-            hits.update((1, 2))
-
-    for index in re.findall(
-        r"\bTP\s*(\d+)\b(?=[^\n]{0,30}\b(?:HIT|HITS|DONE|SECURED|\+\s*\d+(?:\.\d+)?\s*PIPS)\b)",
-        text,
-    ):
-        hits.add(int(index))
-
-    for index in re.findall(r"\bTP\s*(\d+)\s+HIT\b", text):
-        hits.add(int(index))
-
-    return sorted(hits)
+    positive_result = bool(
+        re.search(r"\b(?:HIT|HITS|DONE|SECURED)\b", text)
+        or re.search(r"\+\s*\d+(?:\.\d+)?\s*PIPS?\b", text)
+    )
+    if not positive_result:
+        return []
+    return sorted({int(value) for value in re.findall(r"\bTP\s*(\d+)\b", text)})
 
 
 def _explicit_sl(text: str) -> float | None:
     patterns = (
-        r"\bSL(?:\s+MOVE(?:D)?(?:\s+AGAIN)?|\s+ONE\s+MORE\s+TIME)?\s+TO\s+(\d+(?:\.\d+)?)\b",
+        r"\b(?:BOTH\s+|ALL\s+(?:GOLD|XAU(?:USD|USDT)?)\s+)?"
+        r"SL(?:'S)?(?:\s+MOVE(?:D)?(?:\s+AGAIN)?|\s+ONE\s+MORE\s+TIME)?"
+        r"\s+TO\s+(\d+(?:\.\d+)?)\b",
+        r"\bSL\s+ALSO\s+(\d+(?:\.\d+)?)\b",
         r"\bSL\s*[:=@-]?\s*(\d+(?:\.\d+)?)\b",
     )
     for pattern in patterns:
@@ -80,24 +83,31 @@ def _explicit_sl(text: str) -> float | None:
     return None
 
 
+def _layer_max(text: str) -> float | None:
+    match = re.search(
+        r"\b(?:ALLOWED\s+TO\s+)?LAYER(?:ING)?\s+(?:UNTIL\s+)?MAX\s+(\d+(?:\.\d+)?)\b",
+        text,
+    )
+    return _number(match.group(1)) if match else None
+
+
 def _move_to_be(text: str) -> bool:
     return bool(
         re.search(
             r"\b(?:SL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY)|"
-            r"(?:MOVE|SET|ADJUST)\s+(?:THE\s+)?SL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY))\b",
+            r"(?:MOVE|SET|ADJUST)\s+(?:THE\s+)?SL\s+(?:TO\s+)?"
+            r"(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY))\b",
             text,
         )
     )
 
 
-def _scope(text: str, reply_to_message_id: int | None, symbol: str | None) -> str:
+def _scope(text: str, reply_to_message_id: int | None) -> str:
     if reply_to_message_id is not None:
         return "reply"
-    if re.search(r"\bALL\s+(?:GOLD|XAU(?:USD)?)\b", text):
-        return "all_matching"
-    if re.search(r"\b(?:ALL|BOTH)\s+(?:SL|TRADES?|POSITIONS?|BUYS?|SELLS?)\b", text):
-        return "all_matching"
-    return "latest_matching" if symbol else "latest_active"
+    if re.search(r"\bALL\s+(?:GOLD|XAU(?:USD|USDT)?)\b", text):
+        return "all_symbol"
+    return "current_group"
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,7 @@ class ParsedAction:
     sl: float | None = None
     tp_hits: tuple[int, ...] = ()
     move_sl_to_be: bool = False
+    layer_max: float | None = None
     scope: str = "none"
     reply_to_message_id: int | None = None
     raw_text: str = ""
@@ -126,6 +137,7 @@ class ParsedAction:
             "sl": self.sl,
             "tp_hits": list(self.tp_hits),
             "move_sl_to_be": self.move_sl_to_be,
+            "layer_max": self.layer_max,
             "scope": self.scope,
             "reply_to_message_id": self.reply_to_message_id,
             "raw_text": self.raw_text,
@@ -139,7 +151,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     actions: list[ParsedAction] = []
 
     entry = re.search(
-        r"\b(?:BUY|SELL)\s+(?:XAU\s*/?\s*USD|XAUUSD|GOLD|[A-Z]{3,10}USDT?)"
+        r"\b(?:BUY|SELL)\s+"
+        r"(?:XAU\s*/?\s*USD|XAUUSD|XAUUSDT|XAU|GOLD|[A-Z]{3,10}USDT?)"
         r"\s+(?:AT|@)\s*(\d+(?:\.\d+)?)"
         r"(?:\s*-\s*(\d+(?:\.\d+)?))?",
         normalized,
@@ -156,25 +169,95 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 entry_high=max(first, second),
                 tps=_extract_tps(normalized),
                 sl=_explicit_sl(normalized),
+                layer_max=_layer_max(normalized),
                 scope="new",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
         ]
 
-    close_match = re.search(
-        r"(?:^|\n)\s*(CANCEL(?:LED)?|CLOSE(?:D)?|EXIT(?:ED)?|GET\s+OUT)\b"
-        r"|\b(?:CANCEL|CLOSE|EXIT)\s+(?:THIS|IT|NOW|ALL|GOLD|XAUUSD|TRADE|POSITION)\b",
+    scope = _scope(normalized, reply_to_message_id)
+
+    if re.search(
+        r"\b(?:BOTH\s+)?(?:OUT\s+ON\s+SL|SL(?:'S)?\s+(?:HIT|HITTED|TAGGED|TAKEN|OUT))\b",
         normalized,
-    )
-    if close_match:
-        matched = close_match.group(0).strip()
+    ):
         actions.append(
             ParsedAction(
-                kind="cancel" if matched.startswith("CANCEL") else "close",
+                kind="stop_loss",
                 symbol=symbol,
                 direction=direction,
-                scope=_scope(normalized, reply_to_message_id, symbol),
+                scope=scope,
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        )
+
+    if re.search(
+        r"\b(?:BE|BREAKEVEN|BREAK\s*EVEN)\s+(?:HIT|HITTED|TAGGED|TAKEN|OUT)\b",
+        normalized,
+    ):
+        actions.append(
+            ParsedAction(
+                kind="breakeven_close",
+                symbol=symbol,
+                direction=direction,
+                scope=scope,
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        )
+
+    if re.search(r"\bSETUP\s+FAILED\b", normalized):
+        actions.append(
+            ParsedAction(
+                kind="setup_failed",
+                symbol=symbol,
+                direction=direction,
+                scope=scope,
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        )
+
+    explicit_cancel = bool(
+        re.search(
+            r"\b(?:CANCEL(?:LED)?(?:\s+(?:HERE|THIS|IT))?|"
+            r"DON'?T\s+TAKE(?:\s+THIS)?|IGNORE\s+THIS|LEAVE\s+IT)\b",
+            normalized,
+        )
+    )
+    contextual_cancel = bool(
+        reply_to_message_id is not None
+        and re.search(
+            r"\b(?:MARKET\s+(?:IS\s+)?NOT\s+GOOD(?:\s+NOW)?|"
+            r"WAIT\s+I\s+WILL\s+UPDATE\s+(?:A\s+)?GOOD\s+SIGNAL\s+LATER)\b",
+            normalized,
+        )
+    )
+    if explicit_cancel or contextual_cancel:
+        actions.append(
+            ParsedAction(
+                kind="cancel",
+                symbol=symbol,
+                direction=direction,
+                scope=scope,
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        )
+
+    if re.search(
+        r"(?:^|\n)\s*(?:CLOSE(?:D)?|EXIT(?:ED)?|GET\s+OUT)\b"
+        r"|\b(?:CLOSE|EXIT)\s+(?:THIS|IT|NOW|ALL|GOLD|XAUUSD|TRADE|POSITION)\b",
+        normalized,
+    ):
+        actions.append(
+            ParsedAction(
+                kind="close",
+                symbol=symbol,
+                direction=direction,
+                scope=scope,
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
@@ -183,46 +266,62 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     tp_hits = _extract_tp_hits(normalized)
     move_to_be = _move_to_be(normalized)
     sl = None if move_to_be else _explicit_sl(normalized)
-    if tp_hits or move_to_be or sl is not None:
-        actions.append(
-            ParsedAction(
-                kind="trade_update",
-                symbol=symbol,
-                direction=direction,
-                sl=sl,
-                tp_hits=tuple(tp_hits),
-                move_sl_to_be=move_to_be,
-                scope=_scope(normalized, reply_to_message_id, symbol),
-                reply_to_message_id=reply_to_message_id,
-                raw_text=text,
-            )
-        )
+    tps = _extract_tps(normalized)
+    layer_max = _layer_max(normalized)
 
-    if re.fullmatch(r"(?:ADD|ADDS|LAYER|LAYER\s+IN|ADD\s+MORE)[.! ]*", normalized):
+    terminal_result = any(
+        action.kind in {"stop_loss", "setup_failed", "breakeven_close"}
+        for action in actions
+    )
+    if tps or tp_hits or move_to_be or sl is not None or layer_max is not None:
+        if not terminal_result or tp_hits:
+            actions.append(
+                ParsedAction(
+                    kind="trade_update",
+                    symbol=symbol,
+                    direction=direction,
+                    tps=tps,
+                    sl=sl,
+                    tp_hits=tuple(tp_hits),
+                    move_sl_to_be=move_to_be,
+                    layer_max=layer_max,
+                    scope=scope,
+                    reply_to_message_id=reply_to_message_id,
+                    raw_text=text,
+                )
+            )
+
+    if re.search(
+        r"^(?:\+?LAYERS?|ADD(?:ING|S)?|ASDING)(?:\s+NOW)?(?:\s+SAME\s+SL)?[.! ]*$",
+        normalized,
+    ):
         actions.append(
             ParsedAction(
                 kind="add_layer",
                 symbol=symbol,
                 direction=direction,
-                scope=_scope(normalized, reply_to_message_id, symbol),
+                scope="reply" if reply_to_message_id is not None else "latest_position",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
         )
 
-    if re.search(r"\b(?:BACK\s+AT\s+ENTRY.*ENTER\s+AGAIN|RE-?ENTER|REENTRY)\b", normalized):
+    if re.search(r"\b(?:WE\s+)?RE-?ENTER(?:\s+SAME)?\b|\bREENTRY\b", normalized):
         actions.append(
             ParsedAction(
                 kind="reenter",
                 symbol=symbol,
                 direction=direction,
-                scope=_scope(normalized, reply_to_message_id, symbol),
+                scope="reply" if reply_to_message_id is not None else "latest_position",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
         )
 
     if actions:
+        kinds = {action.kind for action in actions}
+        if "stop_loss" in kinds and "setup_failed" in kinds:
+            actions = [action for action in actions if action.kind != "setup_failed"]
         return actions
 
     return [
