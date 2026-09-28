@@ -11,6 +11,8 @@ ActionKind = Literal[
     "reenter",
     "cancel",
     "close",
+    "stop_loss",
+    "breakeven_close",
     "commentary",
 ]
 
