@@ -82,6 +82,12 @@ def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
             details.append(
                 f"Layers: {signal.get('layers', 1)} | Re-entries: {signal.get('reentries', 0)}"
             )
+            partials = int(signal.get("partial_close_count", 0) or 0)
+            if partials:
+                remaining = float(signal.get("remaining_fraction", 1.0) or 0.0) * 100
+                details.append(
+                    f"Partials: {partials} | Remaining: {remaining:.2f}%"
+                )
             if signal.get("layer_max") is not None:
                 details.append(f"Layer max: {_price(signal.get('layer_max'))}")
 
