@@ -1,0 +1,28 @@
+services:
+  telegram-listener:
+    build: .
+    command: ["python", "-m", "dkcapital.telegram_listener"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  telegram-session:
+    build: .
+    command: ["python", "scripts/generate_telegram_session.py"]
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    profiles:
+      - tools
+
+  discord-bot:
+    build: .
+    command: ["python", "-m", "dkcapital.discord_bot"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    profiles:
+      - discord
