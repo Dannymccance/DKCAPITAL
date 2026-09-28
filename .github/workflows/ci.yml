@@ -20,5 +20,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Compile
+      - name: Compile Python
         run: python -m compileall -q src scripts
+
+      - name: Validate Docker Compose
+        run: |
+          cp .env.example .env
+          docker compose config -q
