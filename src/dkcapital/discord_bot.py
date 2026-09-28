@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -156,9 +157,14 @@ def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
     high = _price(signal.get("entry_high"))
     entry = low if low == high else f"{low} - {high}"
 
+    is_test = bool(signal.get("is_test"))
     embed = discord.Embed(
-        title=f"{direction} {symbol}",
-        description=f"**Internal parsed signal**\nSource: **{provider}**",
+        title=f"{'TEST | ' if is_test else ''}{direction} {symbol}",
+        description=(
+            f"**Internal test signal**\nSource: **{provider}**"
+            if is_test
+            else f"**Internal parsed signal**\nSource: **{provider}**"
+        ),
     )
     embed.add_field(name="Entry", value=entry, inline=True)
 
@@ -417,6 +423,78 @@ def build_bot(settings: Settings) -> commands.Bot:
             interaction.guild.id,
             interaction.channel.id,
             message.id,
+        )
+
+
+    @bot.tree.command(
+        name="test_signal",
+        description="Send a test signal to the DK Capital internal signal channel.",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def test_signal(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        channel_id = settings.discord_internal_signals_channel_id
+        try:
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception("Unable to access internal signal channel %s", channel_id)
+            await interaction.followup.send(
+                "I could not access the internal signal channel.",
+                ephemeral=True,
+            )
+            return
+
+        if not hasattr(channel, "send"):
+            await interaction.followup.send(
+                "The configured internal signal channel is not messageable.",
+                ephemeral=True,
+            )
+            return
+
+        now = datetime.now(UTC).isoformat()
+        test = {
+            "signal_id": "test:elite",
+            "source_style": "elite",
+            "direction": "BUY",
+            "symbol": "XAUUSD",
+            "entry_low": 4300,
+            "entry_high": 4300,
+            "current_sl": 4294,
+            "sl_mode": "PRICE",
+            "tps": {},
+            "tp_hits": [],
+            "layers": 1,
+            "reentries": 0,
+            "layer_max": None,
+            "remaining_fraction": 1.0,
+            "partial_close_count": 0,
+            "status": "ACTIVE",
+            "opened_at": now,
+            "root_message_id": "TEST",
+            "is_test": True,
+        }
+
+        try:
+            message = await channel.send(embed=_signal_embed(test))
+            await asyncio.sleep(2)
+
+            test["current_sl"] = 4300
+            test["partial_close_count"] = 1
+            test["remaining_fraction"] = 0.5
+            test["last_update_at"] = datetime.now(UTC).isoformat()
+            await message.edit(embed=_signal_embed(test))
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("Failed sending internal test signal")
+            await interaction.followup.send(
+                "The test signal could not be sent.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Test signal sent and management update applied in <#{channel_id}>.",
+            ephemeral=True,
         )
 
     @bot.tree.command(
