@@ -21,7 +21,12 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python
-        run: python -m compileall -q src scripts
+        run: python -m compileall -q src scripts tests
+
+      - name: Run tests
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
 
       - name: Validate Docker Compose
         run: |
