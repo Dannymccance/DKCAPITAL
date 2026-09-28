@@ -2,14 +2,33 @@
 
 VPS-ready Python services for DK Capital.
 
-Initial services:
+Current services:
 
 - Telegram listener using a Telegram user session
-- Discord bot skeleton
+- Deterministic signal parser and live state processor
+- Discord bot with an auto-updating live trade dashboard
 - Docker Compose deployment
-- Structured logging and local JSONL event persistence
+- Structured logging and durable local JSON/JSONL state
 
-The Telegram listener is intentionally kept separate from signal parsing and execution logic so those layers can be added safely later.
+The Telegram listener remains separate from parsing. Raw source messages are always retained first, then the signal processor derives current trade state from them. This makes edits, deletes and parser corrections recoverable.
+
+## What the parser understands
+
+The parser is designed for messy provider chat rather than a rigid signal format. It handles:
+
+- New signals such as `BUY XAUUSD AT 4139 - 4136`
+- TP and SL values supplied in the signal
+- Replies to the original signal or to later update messages
+- `TP1 HIT`, `TP1&TP2 +125 PIPS`
+- `SL BREAKEVEN`, `SL TO BE`, `SL TO 4147`
+- Global instructions such as `ALL GOLD SL TO 4272`
+- Multi-position instructions such as `BOTH SL ONE MORE TIME TO 4142`
+- `ADDS` / layering
+- `BACK AT ENTRY WE ENTER AGAIN` / re-entry
+- Explicit close and cancellation commands
+- Telegram message edits and deletions
+
+Ordinary commentary is ignored. Recognized updates that cannot be safely attached to a trade are retained in `unresolved_actions` rather than silently discarded.
 
 ## Quick start
 
@@ -18,22 +37,45 @@ The Telegram listener is intentionally kept separate from signal parsing and exe
 3. Generate a Telegram StringSession using `scripts/generate_telegram_session.py`.
 4. Put the generated session string in `.env`.
 5. Set `TELEGRAM_SOURCE_CHATS` to the channel/group IDs or usernames you want to listen to.
-6. Run `docker compose up -d telegram-listener`.
-7. Follow logs with `docker compose logs -f telegram-listener`.
+6. Add the Discord bot token and server ID.
+7. Start the services.
 
-Discord is optional at this stage and is behind the `discord` Compose profile.
+```bash
+docker compose --profile discord up -d --build
+docker compose ps
+```
 
-See the deployment section below for the full VPS flow.
+## Discord dashboard
 
-## Telegram events
+Once the bot is online, run this slash command in the channel where you want the live dashboard:
 
-The listener records:
+```text
+/dashboard_create
+```
 
-- new messages
-- edited messages
-- deleted messages
+The bot stores that dashboard message ID in the shared Docker volume and refreshes it automatically as Telegram updates are parsed.
 
-Normalized events are written to stdout and to `data/telegram-events.jsonl`. This gives us a durable raw event stream to build the later signal parser against.
+You can force a refresh with:
+
+```text
+/dashboard_refresh
+```
+
+The dashboard currently shows active trades, entry range, TP state, current SL or breakeven state, layers, re-entries and recent completed/closed trades.
+
+## Data flow
+
+```text
+Telegram
+  -> telegram-listener
+  -> /app/data/telegram-events.jsonl
+  -> signal-processor
+  -> /app/data/signal-state.json
+  -> discord-bot
+  -> live Discord dashboard
+```
+
+The state processor rebuilds from the latest version of every Telegram message, so edits are reflected deterministically. Replies resolve back through the message chain. Explicit `ALL GOLD` and `BOTH` instructions can target multiple open trades.
 
 ## VPS deployment
 
@@ -43,37 +85,23 @@ After cloning the repository:
 cd DKCAPITAL
 cp .env.example .env
 nano .env
-docker compose build
+docker compose --profile discord up -d --build
+docker compose ps
+docker compose logs -f telegram-listener signal-processor discord-bot
 ```
 
-Generate a Telegram session interactively:
-
-```bash
-docker compose run --rm telegram-session
-```
-
-Copy the printed session value into `.env` as `TELEGRAM_SESSION_STRING`.
-
-If you need the numeric ID for a private channel or group, list every chat visible to the Telegram account:
+If you need the numeric ID for a private Telegram channel or group:
 
 ```bash
 docker compose run --rm telegram-dialogs
 ```
 
-Put the required ID or username into `TELEGRAM_SOURCE_CHATS`, then start the listener:
+## Tests
 
 ```bash
-docker compose up -d telegram-listener
-docker compose ps
-docker compose logs -f telegram-listener
-```
-
-To enable the Discord bot later, add `DISCORD_BOT_TOKEN` to `.env` and run:
-
-```bash
-docker compose --profile discord up -d
+python -m unittest discover -s tests -v
 ```
 
 ## Security
 
-Never commit `.env`, Telegram session strings, Discord tokens, API hashes, or session files. A Telegram StringSession grants account-level API access and must be treated like a password.
+Never commit `.env`, Telegram session strings, Discord tokens, API hashes, or session files. A Telegram StringSession and a Discord bot token must both be treated like passwords.
