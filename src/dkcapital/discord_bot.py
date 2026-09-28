@@ -31,7 +31,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _price(value: Any) -> str:
     if value is None:
-        return "N/A"
+        return "Not set"
     number = float(value)
     if number.is_integer():
         return str(int(number))
@@ -82,6 +82,8 @@ def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
             details.append(
                 f"Layers: {signal.get('layers', 1)} | Re-entries: {signal.get('reentries', 0)}"
             )
+            if signal.get("layer_max") is not None:
+                details.append(f"Layer max: {_price(signal.get('layer_max'))}")
 
             embed.add_field(
                 name=f"{direction} {symbol} | {entry}",
