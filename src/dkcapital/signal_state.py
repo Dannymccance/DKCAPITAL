@@ -7,6 +7,7 @@ from typing import Any
 from dkcapital.signal_parser import ParsedAction, parse_actions
 
 OPEN_STATUSES = {"ACTIVE"}
+GROUP_WINDOW_MINUTES = 180
 
 
 def _timestamp(event: dict[str, Any]) -> str:
@@ -16,6 +17,7 @@ def _timestamp(event: dict[str, Any]) -> str:
 @dataclass
 class Signal:
     signal_id: str
+    group_id: str
     chat_id: int
     root_message_id: int
     opened_at: str
@@ -30,6 +32,7 @@ class Signal:
     tp_hits: list[int] = field(default_factory=list)
     layers: int = 1
     reentries: int = 0
+    layer_max: float | None = None
     status: str = "ACTIVE"
     last_update_at: str | None = None
     last_update_text: str = ""
@@ -69,7 +72,6 @@ class SignalState:
         self.signals = {}
         self.message_targets = {}
         self.unresolved_actions = []
-        last_targets: dict[int, tuple[str, list[str]]] = {}
 
         ordered = sorted(
             self.messages.values(),
@@ -88,12 +90,15 @@ class SignalState:
             actions = parse_actions(text, int(reply_to) if reply_to is not None else None)
             timestamp = _timestamp(event)
 
+            inherited_targets: list[str] = []
+            if reply_to is not None:
+                inherited_targets = list(
+                    self.message_targets.get((chat_id, int(reply_to)), [])
+                )
+
+            message_targets: list[str] = []
             for action in actions:
                 if action.kind == "commentary":
-                    if reply_to is not None:
-                        inherited = self.message_targets.get((chat_id, int(reply_to)), [])
-                        if inherited:
-                            self.message_targets[(chat_id, message_id)] = list(inherited)
                     continue
 
                 if action.kind == "new_signal":
@@ -103,8 +108,16 @@ class SignalState:
                     assert action.entry_high is not None
 
                     signal_id = f"{chat_id}:{message_id}"
+                    group_id = self._group_for_new_signal(
+                        chat_id=chat_id,
+                        timestamp=timestamp,
+                        symbol=action.symbol,
+                        direction=action.direction,
+                        fallback=signal_id,
+                    )
                     signal = Signal(
                         signal_id=signal_id,
+                        group_id=group_id,
                         chat_id=chat_id,
                         root_message_id=message_id,
                         opened_at=timestamp,
@@ -112,24 +125,28 @@ class SignalState:
                         direction=action.direction,
                         entry_low=action.entry_low,
                         entry_high=action.entry_high,
-                        tps=dict(action.tps),
+                        tps=self._validated_tps(
+                            action.tps,
+                            action.direction,
+                            action.entry_low,
+                            action.entry_high,
+                        ),
                         original_sl=action.sl,
                         current_sl=action.sl,
                         sl_mode="PRICE" if action.sl is not None else "UNSET",
+                        layer_max=action.layer_max,
                         last_update_at=timestamp,
                         last_update_text=text,
                         source_message_ids=[message_id],
                     )
                     self.signals[signal_id] = signal
-                    self.message_targets[(chat_id, message_id)] = [signal_id]
-                    last_targets[chat_id] = (timestamp, [signal_id])
+                    message_targets = [signal_id]
                     continue
 
                 targets = self._resolve_targets(
                     action=action,
                     chat_id=chat_id,
-                    timestamp=timestamp,
-                    last_targets=last_targets,
+                    inherited_targets=inherited_targets,
                 )
                 if not targets:
                     self.unresolved_actions.append(
@@ -142,19 +159,51 @@ class SignalState:
                     )
                     continue
 
-                self.message_targets[(chat_id, message_id)] = targets
-                last_targets[chat_id] = (timestamp, targets)
                 for signal_id in targets:
                     signal = self.signals.get(signal_id)
                     if signal is not None:
                         self._apply(signal, action, message_id, timestamp, text)
 
-    def _resolve_targets(
+                for signal_id in targets:
+                    if signal_id not in message_targets:
+                        message_targets.append(signal_id)
+
+            if message_targets:
+                self.message_targets[(chat_id, message_id)] = message_targets
+            elif inherited_targets:
+                self.message_targets[(chat_id, message_id)] = inherited_targets
+
+    def _group_for_new_signal(
         self,
-        action: ParsedAction,
+        *,
         chat_id: int,
         timestamp: str,
-        last_targets: dict[int, tuple[str, list[str]]],
+        symbol: str,
+        direction: str,
+        fallback: str,
+    ) -> str:
+        compatible = [
+            signal
+            for signal in self.signals.values()
+            if signal.chat_id == chat_id
+            and signal.status in OPEN_STATUSES
+            and signal.symbol == symbol
+            and signal.direction == direction
+        ]
+        if not compatible:
+            return fallback
+
+        latest = compatible[-1]
+        if self._within_minutes(latest.opened_at, timestamp, GROUP_WINDOW_MINUTES):
+            return latest.group_id
+        return fallback
+
+    def _resolve_targets(
+        self,
+        *,
+        action: ParsedAction,
+        chat_id: int,
+        inherited_targets: list[str],
     ) -> list[str]:
         active = [
             signal
@@ -170,35 +219,30 @@ class SignalState:
             return True
 
         if action.scope == "reply" and action.reply_to_message_id is not None:
-            return list(self.message_targets.get((chat_id, action.reply_to_message_id), []))
+            return [
+                signal_id
+                for signal_id in inherited_targets
+                if signal_id in self.signals
+                and self.signals[signal_id].status in OPEN_STATUSES
+            ]
 
         matching = [signal for signal in active if matches(signal)]
-
-        if action.scope == "all_matching":
-            return [signal.signal_id for signal in matching]
-
-        if action.scope == "latest_matching":
-            if matching:
-                return [matching[-1].signal_id]
+        if not matching:
             return []
 
-        if action.scope == "latest_active":
-            if len(active) == 1:
-                return [active[0].signal_id]
+        if action.scope == "all_symbol":
+            return [signal.signal_id for signal in matching]
 
-            sticky = last_targets.get(chat_id)
-            if sticky and self._within_minutes(sticky[0], timestamp, 45):
-                still_active = [
-                    signal_id
-                    for signal_id in sticky[1]
-                    if signal_id in self.signals
-                    and self.signals[signal_id].status in OPEN_STATUSES
-                ]
-                if still_active:
-                    return still_active
+        if action.scope == "latest_position":
+            return [matching[-1].signal_id]
 
-            if active:
-                return [active[-1].signal_id]
+        if action.scope == "current_group":
+            latest = matching[-1]
+            return [
+                signal.signal_id
+                for signal in matching
+                if signal.group_id == latest.group_id
+            ]
 
         return []
 
@@ -210,6 +254,32 @@ class SignalState:
             return 0 <= (b - a).total_seconds() <= minutes * 60
         except (TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _validated_tps(
+        tps: dict[int, float],
+        direction: str,
+        entry_low: float,
+        entry_high: float,
+    ) -> dict[int, float]:
+        if not tps:
+            return {}
+
+        ordered = [value for _, value in sorted(tps.items())]
+        anchor = entry_high if direction == "BUY" else entry_low
+        if direction == "BUY":
+            valid = all(value > anchor for value in ordered) and all(
+                left < right for left, right in zip(ordered, ordered[1:])
+            )
+        else:
+            valid = all(value < anchor for value in ordered) and all(
+                left > right for left, right in zip(ordered, ordered[1:])
+            )
+
+        # Keep explicit provider values even if they fail monotonic validation.
+        # The validation result exists to prevent us from inventing targets, not
+        # to silently discard an explicitly sent correction.
+        return dict(sorted(tps.items())) if valid else dict(sorted(tps.items()))
 
     def _apply(
         self,
@@ -223,6 +293,14 @@ class SignalState:
             signal.source_message_ids.append(message_id)
 
         if action.kind == "trade_update":
+            if action.tps:
+                signal.tps = self._validated_tps(
+                    action.tps,
+                    signal.direction,
+                    signal.entry_low,
+                    signal.entry_high,
+                )
+
             for tp in action.tp_hits:
                 if tp not in signal.tp_hits:
                     signal.tp_hits.append(tp)
@@ -235,6 +313,9 @@ class SignalState:
                 signal.sl_mode = "PRICE"
                 signal.current_sl = action.sl
 
+            if action.layer_max is not None:
+                signal.layer_max = action.layer_max
+
             if signal.tps and set(signal.tps).issubset(set(signal.tp_hits)):
                 signal.status = "COMPLETED"
 
@@ -243,8 +324,6 @@ class SignalState:
 
         elif action.kind == "reenter":
             signal.reentries += 1
-            if signal.status == "COMPLETED":
-                signal.status = "ACTIVE"
 
         elif action.kind == "cancel":
             signal.status = "CANCELLED"
@@ -255,6 +334,9 @@ class SignalState:
         elif action.kind == "stop_loss":
             signal.status = "STOPPED"
 
+        elif action.kind == "setup_failed":
+            signal.status = "FAILED"
+
         elif action.kind == "breakeven_close":
             signal.status = "BREAKEVEN"
 
@@ -263,7 +345,25 @@ class SignalState:
 
     def snapshot(self) -> dict[str, Any]:
         ordered = sorted(self.signals.values(), key=lambda s: (s.opened_at, s.signal_id))
+        groups: dict[str, dict[str, Any]] = {}
+        for signal in ordered:
+            group = groups.setdefault(
+                signal.group_id,
+                {
+                    "group_id": signal.group_id,
+                    "chat_id": signal.chat_id,
+                    "symbol": signal.symbol,
+                    "direction": signal.direction,
+                    "signal_ids": [],
+                    "active_signal_ids": [],
+                },
+            )
+            group["signal_ids"].append(signal.signal_id)
+            if signal.status in OPEN_STATUSES:
+                group["active_signal_ids"].append(signal.signal_id)
+
         return {
             "signals": [signal.as_dict() for signal in ordered],
+            "groups": list(groups.values()),
             "unresolved_actions": self.unresolved_actions,
         }
