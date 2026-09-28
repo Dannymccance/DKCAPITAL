@@ -26,6 +26,16 @@ services:
     profiles:
       - tools
 
+  telegram-backfill:
+    build: .
+    command: ["python", "scripts/backfill_telegram_history.py", "--days", "30"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    profiles:
+      - tools
+
   discord-bot:
     build: .
     command: ["python", "-m", "dkcapital.discord_bot"]
