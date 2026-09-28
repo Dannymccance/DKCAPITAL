@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.session
+*.session-journal
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+data/*
+!data/.gitkeep
+.DS_Store
