@@ -18,6 +18,14 @@ services:
     profiles:
       - tools
 
+  telegram-dialogs:
+    build: .
+    command: ["python", "scripts/list_telegram_dialogs.py"]
+    env_file:
+      - .env
+    profiles:
+      - tools
+
   discord-bot:
     build: .
     command: ["python", "-m", "dkcapital.discord_bot"]
