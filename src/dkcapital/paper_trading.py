@@ -79,6 +79,8 @@ class PaperPosition:
     eligible_tp_indices: list[int] = field(default_factory=list)
     tp_hits: list[int] = field(default_factory=list)
     be_trigger_tp_index: int | None = None
+    temporary_stop_active: bool = False
+    stop_source: str = "PROVIDER"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -427,6 +429,8 @@ class PaperAccount:
         tp_close_quantities_oz: dict[str, float] | None = None,
         eligible_tp_indices: list[int] | None = None,
         be_trigger_tp_index: int | None = None,
+        temporary_stop_active: bool = False,
+        stop_source: str = "PROVIDER",
     ) -> PaperPosition:
         if self.strategy_mode == "observe_only":
             raise RuntimeError("paper strategy is observe_only; execution is disabled")
@@ -460,6 +464,8 @@ class PaperAccount:
             tp_close_quantities_oz=dict(tp_close_quantities_oz or {}),
             eligible_tp_indices=list(eligible_tp_indices or []),
             be_trigger_tp_index=be_trigger_tp_index,
+            temporary_stop_active=bool(temporary_stop_active),
+            stop_source=str(stop_source),
             last_mark_price=self.last_mark_price,
             history=[
                 {
@@ -469,6 +475,8 @@ class PaperAccount:
                     "quantity_oz": float(quantity_oz),
                     "lot_size": float(lot_size),
                     "risk_usd": float(initial_risk_usd),
+                    "stop_loss": float(stop_loss) if stop_loss is not None else None,
+                    "stop_source": str(stop_source),
                 }
             ],
         )
@@ -542,12 +550,19 @@ class PaperAccount:
         stop_loss: float,
         reason: str,
         timestamp: str | None = None,
+        stop_source: str | None = None,
+        temporary_stop_active: bool | None = None,
     ) -> None:
         position = self.positions[position_id]
         if position.status not in OPEN_POSITION_STATUSES:
             return
         previous = position.stop_loss
+        previous_source = position.stop_source
         position.stop_loss = float(stop_loss)
+        if stop_source is not None:
+            position.stop_source = str(stop_source)
+        if temporary_stop_active is not None:
+            position.temporary_stop_active = bool(temporary_stop_active)
         position.history.append(
             {
                 "timestamp": timestamp or utc_now(),
@@ -555,6 +570,9 @@ class PaperAccount:
                 "reason": reason,
                 "before": previous,
                 "after": float(stop_loss),
+                "source_before": previous_source,
+                "source_after": position.stop_source,
+                "temporary_stop_active": position.temporary_stop_active,
             }
         )
         self._audit(
@@ -563,6 +581,8 @@ class PaperAccount:
             before=previous,
             after=float(stop_loss),
             reason=reason,
+            stop_source=position.stop_source,
+            temporary_stop_active=position.temporary_stop_active,
         )
 
     def close_quantity(
