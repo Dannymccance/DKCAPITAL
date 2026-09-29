@@ -45,6 +45,13 @@ class Settings:
     gold_spot_url: str
     gold_spot_refresh_seconds: int
 
+    paper_state_path: Path
+    paper_event_log_path: Path
+    paper_starting_balance_usd: float
+    paper_symbol: str
+    paper_strategy_mode: str
+    paper_mark_refresh_seconds: int
+
     @classmethod
     def from_env(cls) -> "Settings":
         api_id_raw = os.getenv("TELEGRAM_API_ID", "").strip()
@@ -93,6 +100,30 @@ class Settings:
             gold_spot_refresh_seconds=max(
                 15,
                 int(os.getenv("GOLD_SPOT_REFRESH_SECONDS", "60").strip()),
+            ),
+            paper_state_path=Path(
+                os.getenv(
+                    "PAPER_STATE_PATH",
+                    "/app/data/paper-trading.json",
+                )
+            ),
+            paper_event_log_path=Path(
+                os.getenv(
+                    "PAPER_EVENT_LOG_PATH",
+                    "/app/data/paper-trade-events.jsonl",
+                )
+            ),
+            paper_starting_balance_usd=float(
+                os.getenv("PAPER_STARTING_BALANCE_USD", "100000").strip()
+            ),
+            paper_symbol=os.getenv("PAPER_SYMBOL", "XAUUSD").strip().upper() or "XAUUSD",
+            paper_strategy_mode=(
+                os.getenv("PAPER_STRATEGY_MODE", "observe_only").strip().lower()
+                or "observe_only"
+            ),
+            paper_mark_refresh_seconds=max(
+                5,
+                int(os.getenv("PAPER_MARK_REFRESH_SECONDS", "15").strip()),
             ),
         )
 
