@@ -11,13 +11,14 @@ def event(
     text: str,
     *,
     minute: int,
+    second: int = 0,
     reply_to: int | None = None,
 ) -> dict:
     return {
         "event_type": "new_message",
         "chat_id": 1,
         "message_id": message_id,
-        "date": f"2026-09-28T08:{minute:02d}:00+00:00",
+        "date": f"2026-09-28T08:{minute:02d}:{second:02d}+00:00",
         "reply_to_message_id": reply_to,
         "text": text,
     }
@@ -40,6 +41,79 @@ class ParserTests(unittest.TestCase):
             {1: 4385, 2: 4389.5, 3: 4394, 4: 4472},
         )
         self.assertEqual(action.sl, 4333)
+
+    def test_signal_within_30_seconds_amends_existing_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                90,
+                "SELL XAUUSD AT 4168 - 4171\n"
+                "TP1 4164\nTP2 4161.50\nTP3 4141\nSL 4377",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            event(
+                91,
+                "SELL XAUUSD AT 4169.50 - 4172.50\n"
+                "TP1 4165\nTP2 4162.50\nTP3 4141\nSL 4378",
+                minute=0,
+                second=30,
+            )
+        )
+
+        self.assertEqual(list(state.signals), ["1:90"])
+        signal = state.signals["1:90"]
+        self.assertEqual(signal.entry_low, 4169.5)
+        self.assertEqual(signal.entry_high, 4172.5)
+        self.assertEqual(signal.tps, {1: 4165.0, 2: 4162.5, 3: 4141.0})
+        self.assertEqual(signal.current_sl, 4378.0)
+        self.assertEqual(signal.source_message_ids, [90, 91])
+        self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
+        self.assertEqual(state.message_targets[(1, 91)], ["1:90"])
+
+    def test_signal_after_30_seconds_remains_separate_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                92,
+                "SELL XAUUSD AT 4168 - 4171\nTP1 4164\nSL 4177",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            event(
+                93,
+                "SELL XAUUSD AT 4169.50 - 4172.50\nTP1 4165\nSL 4178",
+                minute=0,
+                second=31,
+            )
+        )
+
+        self.assertEqual(set(state.signals), {"1:92", "1:93"})
+
+    def test_opposite_direction_within_30_seconds_is_not_amendment(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                94,
+                "BUY XAUUSD AT 4168 - 4171\nTP1 4180\nSL 4160",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            event(
+                95,
+                "SELL XAUUSD AT 4169.50 - 4172.50\nTP1 4165\nSL 4178",
+                minute=0,
+                second=10,
+            )
+        )
+
+        self.assertEqual(set(state.signals), {"1:94", "1:95"})
 
     def test_correction_reply_updates_targets_and_sl(self) -> None:
         state = SignalState()
