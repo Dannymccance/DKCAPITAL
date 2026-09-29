@@ -73,6 +73,74 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
         self.assertEqual(state.message_targets[(1, 91)], ["1:90"])
 
+    def test_deleted_signal_repost_within_30_seconds_amends_original_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                96,
+                "SELL XAUUSD AT 4168 - 4171\n"
+                "TP1 4164\nTP2 4161.50\nTP3 4141\nSL 4377",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            {
+                "event_type": "message_deleted",
+                "chat_id": 1,
+                "message_ids": [96],
+                "observed_at": "2026-09-28T08:00:10+00:00",
+            }
+        )
+        state.ingest_event(
+            event(
+                97,
+                "SELL XAUUSD AT 4169.50 - 4172.50\n"
+                "TP1 4165\nTP2 4162.50\nTP3 4141\nSL 4378",
+                minute=0,
+                second=20,
+            )
+        )
+
+        self.assertEqual(list(state.signals), ["1:96"])
+        signal = state.signals["1:96"]
+        self.assertEqual(signal.entry_low, 4169.5)
+        self.assertEqual(signal.entry_high, 4172.5)
+        self.assertEqual(signal.current_sl, 4378.0)
+        self.assertEqual(signal.source_message_ids, [96, 97])
+        self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
+        self.assertEqual(state.message_targets[(1, 97)], ["1:96"])
+
+    def test_deleted_repost_amendment_survives_event_log_rebuild(self) -> None:
+        state = SignalState()
+        events = [
+            event(
+                98,
+                "SELL XAUUSD AT 4168 - 4171\nTP1 4164\nSL 4377",
+                minute=0,
+                second=0,
+            ),
+            {
+                "event_type": "message_deleted",
+                "chat_id": 1,
+                "message_ids": [98],
+                "observed_at": "2026-09-28T08:00:05+00:00",
+            },
+            event(
+                99,
+                "SELL XAUUSD AT 4169.50 - 4172.50\nTP1 4165\nSL 4378",
+                minute=0,
+                second=25,
+            ),
+        ]
+        for item in events:
+            state.ingest_event(item, rebuild=False)
+        state.rebuild()
+
+        self.assertEqual(list(state.signals), ["1:98"])
+        self.assertEqual(state.signals["1:98"].source_message_ids, [98, 99])
+        self.assertEqual(state.signals["1:98"].current_sl, 4378.0)
+
     def test_signal_after_30_seconds_remains_separate_trade(self) -> None:
         state = SignalState()
         state.ingest_event(
