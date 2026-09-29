@@ -566,7 +566,22 @@ class XauSignalFollowingStrategy:
                         str(k): float(v)
                         for k, v in dict(item["tps"]).items()
                     }
-                    self._rebuild_remaining_targets(position, candidate)
+                    current_exit = self._exit_fill(position.direction, event_quote)
+                    future = self._future_tp_indices(
+                        position.direction,
+                        current_exit,
+                        candidate.tps,
+                    )
+                    position.eligible_tp_indices = sorted(
+                        set(position.tp_hits).union(future)
+                    )
+                    if not position.tp_hits and future:
+                        position.be_trigger_tp_index = future[0]
+                    self._build_tp_schedule(
+                        position=position,
+                        candidate=candidate,
+                        indices=future,
+                    )
                     changed = True
 
                 for raw_tp in item.get("tp_hits") or []:
