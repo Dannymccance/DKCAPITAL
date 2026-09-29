@@ -768,15 +768,16 @@ def build_bot(settings: Settings) -> commands.Bot:
             )
             return
 
-        now = datetime.now(UTC).isoformat()
+        opened_at = datetime.now(UTC).isoformat()
         test = {
-            "signal_id": "test:elite",
+            "signal_id": "test:elite:6256",
             "source_style": "elite",
-            "direction": "BUY",
+            "direction": "SELL",
             "symbol": "XAUUSD",
-            "entry_low": 4300,
-            "entry_high": 4300,
-            "current_sl": 4294,
+            "entry_low": 4157,
+            "entry_high": 4157,
+            "original_sl": 4164,
+            "current_sl": 4164,
             "sl_mode": "PRICE",
             "tps": {},
             "tp_hits": [],
@@ -786,13 +787,23 @@ def build_bot(settings: Settings) -> commands.Bot:
             "remaining_fraction": 1.0,
             "partial_close_count": 0,
             "status": "ACTIVE",
-            "opened_at": now,
-            "root_message_id": "TEST",
+            "opened_at": opened_at,
+            "root_message_id": "6256 TEST REPLAY",
             "is_test": True,
+            "history": [
+                {
+                    "timestamp": opened_at,
+                    "message_id": 6256,
+                    "kind": "opened",
+                    "entry_low": 4157,
+                    "entry_high": 4157,
+                    "sl": 4164,
+                }
+            ],
         }
 
         try:
-            test_spot = await gold_spot.quote()
+            test_spot = await gold_spot.quote(force=True)
             message = await channel.send(
                 embed=_signal_embed(
                     test,
@@ -802,14 +813,70 @@ def build_bot(settings: Settings) -> commands.Bot:
             )
             await asyncio.sleep(2)
 
-            test["current_sl"] = 4300
+            first_partial_at = datetime.now(UTC).isoformat()
+            first_partial_spot = await gold_spot.quote(force=True)
+            test["current_sl"] = 4157
             test["partial_close_count"] = 1
             test["remaining_fraction"] = 0.5
-            test["last_update_at"] = datetime.now(UTC).isoformat()
+            test["last_update_at"] = first_partial_at
+            test["history"].extend(
+                [
+                    {
+                        "timestamp": first_partial_at,
+                        "message_id": 6257,
+                        "kind": "partial_close",
+                        "partial_percent": 50.0,
+                        "remaining_fraction": 0.5,
+                        "market": first_partial_spot,
+                    },
+                    {
+                        "timestamp": first_partial_at,
+                        "message_id": 6257,
+                        "kind": "trade_update",
+                        "sl_before": 4164,
+                        "sl_after": 4157,
+                        "market": first_partial_spot,
+                    },
+                ]
+            )
             await message.edit(
                 embed=_signal_embed(
                     test,
-                    spot_quote=test_spot,
+                    spot_quote=first_partial_spot,
+                    timezone_name=settings.display_timezone,
+                )
+            )
+            await asyncio.sleep(2)
+
+            second_partial_at = datetime.now(UTC).isoformat()
+            second_partial_spot = await gold_spot.quote(force=True)
+            test["partial_close_count"] = 2
+            test["remaining_fraction"] = 0.25
+            test["last_update_at"] = second_partial_at
+            test["history"].extend(
+                [
+                    {
+                        "timestamp": second_partial_at,
+                        "message_id": 6259,
+                        "kind": "partial_close",
+                        "partial_percent": 50.0,
+                        "remaining_fraction": 0.25,
+                        "market": second_partial_spot,
+                    },
+                    {
+                        "timestamp": second_partial_at,
+                        "message_id": 6259,
+                        "kind": "trade_update",
+                        "sl_before": 4157,
+                        "sl_after": 4157,
+                        "market": second_partial_spot,
+                    },
+                ]
+            )
+            await message.edit(
+                embed=_signal_embed(
+                    test,
+                    spot_quote=second_partial_spot,
                     timezone_name=settings.display_timezone,
                 )
             )
@@ -822,7 +889,11 @@ def build_bot(settings: Settings) -> commands.Bot:
             return
 
         await interaction.followup.send(
-            f"Test signal sent and management update applied in <#{channel_id}>.",
+            (
+                f"Elite 6256 test replay completed in <#{channel_id}>. "
+                "It includes both partials, SL-to-entry, live XAU/USD spot, "
+                "realised/open/total PnL, trade history, and local time."
+            ),
             ephemeral=True,
         )
 
