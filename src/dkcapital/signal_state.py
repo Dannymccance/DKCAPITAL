@@ -227,6 +227,9 @@ class SignalState:
             return True
 
         if action.scope == "reply" and action.reply_to_message_id is not None:
+            # A Telegram reply is an explicit target. Do not let descriptive
+            # words in the management message (for example "cancel mubarak long")
+            # override or filter the replied-to signal.
             return [
                 signal_id
                 for signal_id in inherited_targets
