@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 
-PAPER_ENGINE_VERSION = 1
+PAPER_ENGINE_VERSION = 2
 OPEN_POSITION_STATUSES = {"OPEN"}
 
 
@@ -44,6 +44,8 @@ class PaperCandidate:
     signal_history: list[dict[str, Any]] = field(default_factory=list)
     fingerprint: str = ""
     execution_status: str = "OBSERVED"
+    execution_note: str = ""
+    processed_history_fingerprints: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -67,6 +69,17 @@ class PaperPosition:
     closed_at: str | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
 
+    # Strategy/accounting metadata.
+    initial_stop_loss: float | None = None
+    initial_risk_usd: float = 0.0
+    lot_size: float = 0.0
+    breakeven_locked: bool = False
+    tp_prices: dict[str, float] = field(default_factory=dict)
+    tp_close_quantities_oz: dict[str, float] = field(default_factory=dict)
+    eligible_tp_indices: list[int] = field(default_factory=list)
+    tp_hits: list[int] = field(default_factory=list)
+    be_trigger_tp_index: int | None = None
+
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -74,9 +87,9 @@ class PaperPosition:
 class PaperAccount:
     """Durable accounting core for the XAUUSD paper engine.
 
-    Quantity is stored in troy ounces, which makes PnL broker-independent:
-    for XAUUSD a $1 move produces $1 PnL per ounce. A future execution
-    strategy can convert lots/contracts into ounces explicitly.
+    Quantity is stored in troy ounces. For XAUUSD, a $1 price move produces
+    $1 PnL per ounce, which keeps the ledger independent from a broker's lot
+    representation. The strategy layer converts lots into ounces explicitly.
     """
 
     def __init__(
@@ -94,18 +107,31 @@ class PaperAccount:
         self.symbol = symbol.upper()
         self.strategy_mode = strategy_mode
         self.entry_policy = entry_policy
+        self.strategy_activated_at: str | None = None
+
         self.starting_balance_usd = float(starting_balance_usd)
         self.balance_usd = float(starting_balance_usd)
         self.equity_usd = float(starting_balance_usd)
         self.realized_pnl_usd = 0.0
         self.unrealized_pnl_usd = 0.0
+
         self.peak_equity_usd = float(starting_balance_usd)
         self.max_drawdown_usd = 0.0
         self.max_drawdown_pct = 0.0
+
+        self.trading_day: str | None = None
+        self.day_start_balance_usd = float(starting_balance_usd)
+        self.daily_equity_floor_usd = float(starting_balance_usd)
+        self.daily_stop_triggered = False
+        self.daily_stop_triggered_at: str | None = None
+
         self.last_mark_price: float | None = None
+        self.last_bid: float | None = None
+        self.last_ask: float | None = None
         self.last_mark_at: str | None = None
         self.created_at = utc_now()
         self.updated_at = self.created_at
+
         self.candidates: dict[str, PaperCandidate] = {}
         self.positions: dict[str, PaperPosition] = {}
         self.audit: list[dict[str, Any]] = []
@@ -119,6 +145,8 @@ class PaperAccount:
             entry_policy=str(payload.get("entry_policy") or "all_parsed"),
         )
         account.version = int(payload.get("version", PAPER_ENGINE_VERSION))
+        account.strategy_activated_at = payload.get("strategy_activated_at")
+
         account.balance_usd = float(payload.get("balance_usd", account.starting_balance_usd))
         account.equity_usd = float(payload.get("equity_usd", account.balance_usd))
         account.realized_pnl_usd = float(payload.get("realized_pnl_usd", 0.0))
@@ -131,10 +159,31 @@ class PaperAccount:
         )
         account.max_drawdown_usd = float(payload.get("max_drawdown_usd", 0.0))
         account.max_drawdown_pct = float(payload.get("max_drawdown_pct", 0.0))
+
+        account.trading_day = payload.get("trading_day")
+        account.day_start_balance_usd = float(
+            payload.get("day_start_balance_usd", account.balance_usd)
+        )
+        account.daily_equity_floor_usd = float(
+            payload.get("daily_equity_floor_usd", account.day_start_balance_usd)
+        )
+        account.daily_stop_triggered = bool(payload.get("daily_stop_triggered", False))
+        account.daily_stop_triggered_at = payload.get("daily_stop_triggered_at")
+
         account.last_mark_price = (
             float(payload["last_mark_price"])
             if payload.get("last_mark_price") is not None
             else None
+        )
+        account.last_bid = (
+            float(payload["last_bid"])
+            if payload.get("last_bid") is not None
+            else account.last_mark_price
+        )
+        account.last_ask = (
+            float(payload["last_ask"])
+            if payload.get("last_ask") is not None
+            else account.last_mark_price
         )
         account.last_mark_at = payload.get("last_mark_at")
         account.created_at = str(payload.get("created_at") or account.created_at)
@@ -159,9 +208,53 @@ class PaperAccount:
 
     def _audit(self, kind: str, **data: Any) -> None:
         self.audit.append({"timestamp": utc_now(), "kind": kind, **data})
-        # Keep the snapshot bounded. The full service event log remains durable.
-        self.audit = self.audit[-500:]
+        self.audit = self.audit[-1000:]
         self.updated_at = utc_now()
+
+    def activate_strategy(self, mode: str, *, activated_at: str | None = None) -> None:
+        self.strategy_mode = mode
+        if mode != "observe_only" and self.strategy_activated_at is None:
+            self.strategy_activated_at = activated_at or utc_now()
+            self._audit(
+                "strategy_activated",
+                strategy_mode=mode,
+                strategy_activated_at=self.strategy_activated_at,
+            )
+
+    def ensure_trading_day(
+        self,
+        local_date: str,
+        *,
+        daily_loss_pct: float,
+    ) -> None:
+        if self.trading_day == local_date:
+            return
+        self.trading_day = local_date
+        self.day_start_balance_usd = self.balance_usd
+        self.daily_equity_floor_usd = self.day_start_balance_usd * (
+            1.0 - daily_loss_pct
+        )
+        self.daily_stop_triggered = False
+        self.daily_stop_triggered_at = None
+        self._audit(
+            "trading_day_started",
+            trading_day=local_date,
+            day_start_balance_usd=self.day_start_balance_usd,
+            daily_equity_floor_usd=self.daily_equity_floor_usd,
+        )
+
+    def check_daily_stop(self, *, timestamp: str | None = None) -> bool:
+        if self.daily_stop_triggered:
+            return True
+        if self.equity_usd <= self.daily_equity_floor_usd:
+            self.daily_stop_triggered = True
+            self.daily_stop_triggered_at = timestamp or utc_now()
+            self._audit(
+                "daily_stop_triggered",
+                equity_usd=self.equity_usd,
+                daily_equity_floor_usd=self.daily_equity_floor_usd,
+            )
+        return self.daily_stop_triggered
 
     def sync_signal(
         self,
@@ -294,6 +387,12 @@ class PaperAccount:
         quantity_oz: float,
         stop_loss: float | None = None,
         opened_at: str | None = None,
+        initial_risk_usd: float = 0.0,
+        lot_size: float = 0.0,
+        tp_prices: dict[str, float] | None = None,
+        tp_close_quantities_oz: dict[str, float] | None = None,
+        eligible_tp_indices: list[int] | None = None,
+        be_trigger_tp_index: int | None = None,
     ) -> PaperPosition:
         if self.strategy_mode == "observe_only":
             raise RuntimeError("paper strategy is observe_only; execution is disabled")
@@ -320,6 +419,13 @@ class PaperAccount:
             initial_quantity_oz=float(quantity_oz),
             remaining_quantity_oz=float(quantity_oz),
             stop_loss=float(stop_loss) if stop_loss is not None else None,
+            initial_stop_loss=float(stop_loss) if stop_loss is not None else None,
+            initial_risk_usd=float(initial_risk_usd),
+            lot_size=float(lot_size),
+            tp_prices=dict(tp_prices or {}),
+            tp_close_quantities_oz=dict(tp_close_quantities_oz or {}),
+            eligible_tp_indices=list(eligible_tp_indices or []),
+            be_trigger_tp_index=be_trigger_tp_index,
             last_mark_price=self.last_mark_price,
             history=[
                 {
@@ -327,20 +433,103 @@ class PaperAccount:
                     "kind": "fill",
                     "price": float(fill_price),
                     "quantity_oz": float(quantity_oz),
+                    "lot_size": float(lot_size),
+                    "risk_usd": float(initial_risk_usd),
                 }
             ],
         )
         self.positions[position_id] = position
         candidate.execution_status = "OPEN"
+        candidate.execution_note = ""
         self._audit(
             "position_opened",
             position_id=position_id,
             signal_id=signal_id,
             fill_price=float(fill_price),
             quantity_oz=float(quantity_oz),
+            lot_size=float(lot_size),
+            risk_usd=float(initial_risk_usd),
         )
         self._revalue()
         return position
+
+    def add_quantity(
+        self,
+        *,
+        position_id: str,
+        fill_price: float,
+        quantity_oz: float,
+        lot_size: float,
+        risk_usd: float,
+        reason: str,
+        timestamp: str | None = None,
+    ) -> None:
+        position = self.positions[position_id]
+        if position.status not in OPEN_POSITION_STATUSES:
+            raise ValueError("paper position is not open")
+        if fill_price <= 0 or quantity_oz <= 0:
+            raise ValueError("fill_price and quantity_oz must be positive")
+
+        old_remaining = position.remaining_quantity_oz
+        new_remaining = old_remaining + float(quantity_oz)
+        position.entry_price = (
+            (position.entry_price * old_remaining)
+            + (float(fill_price) * float(quantity_oz))
+        ) / new_remaining
+        position.remaining_quantity_oz = new_remaining
+        position.initial_quantity_oz += float(quantity_oz)
+        position.lot_size += float(lot_size)
+        position.initial_risk_usd += float(risk_usd)
+        position.history.append(
+            {
+                "timestamp": timestamp or utc_now(),
+                "kind": "add_fill",
+                "reason": reason,
+                "price": float(fill_price),
+                "quantity_oz": float(quantity_oz),
+                "lot_size": float(lot_size),
+                "risk_usd": float(risk_usd),
+            }
+        )
+        self._audit(
+            "position_layer_added",
+            position_id=position_id,
+            fill_price=float(fill_price),
+            quantity_oz=float(quantity_oz),
+            risk_usd=float(risk_usd),
+            reason=reason,
+        )
+        self._revalue()
+
+    def set_stop(
+        self,
+        *,
+        position_id: str,
+        stop_loss: float,
+        reason: str,
+        timestamp: str | None = None,
+    ) -> None:
+        position = self.positions[position_id]
+        if position.status not in OPEN_POSITION_STATUSES:
+            return
+        previous = position.stop_loss
+        position.stop_loss = float(stop_loss)
+        position.history.append(
+            {
+                "timestamp": timestamp or utc_now(),
+                "kind": "stop_update",
+                "reason": reason,
+                "before": previous,
+                "after": float(stop_loss),
+            }
+        )
+        self._audit(
+            "position_stop_updated",
+            position_id=position_id,
+            before=previous,
+            after=float(stop_loss),
+            reason=reason,
+        )
 
     def close_quantity(
         self,
@@ -402,11 +591,47 @@ class PaperAccount:
         return realized
 
     def mark(self, price: float, *, marked_at: str | None = None) -> None:
-        if price <= 0:
-            raise ValueError("mark price must be positive")
-        self.last_mark_price = float(price)
+        self.mark_quote(
+            bid=float(price),
+            ask=float(price),
+            price=float(price),
+            marked_at=marked_at,
+        )
+
+    def mark_quote(
+        self,
+        *,
+        bid: float,
+        ask: float,
+        price: float | None = None,
+        marked_at: str | None = None,
+    ) -> None:
+        if bid <= 0 or ask <= 0:
+            raise ValueError("bid and ask must be positive")
+        self.last_bid = float(bid)
+        self.last_ask = float(ask)
+        self.last_mark_price = (
+            float(price) if price is not None and price > 0 else (bid + ask) / 2.0
+        )
         self.last_mark_at = marked_at or utc_now()
         self._revalue()
+
+    def current_directional_risk_usd(self, direction: str) -> float:
+        direction = direction.upper()
+        total = 0.0
+        for position in self.positions.values():
+            if position.status not in OPEN_POSITION_STATUSES:
+                continue
+            if position.direction.upper() != direction:
+                continue
+            if position.stop_loss is None:
+                continue
+            if direction == "BUY":
+                risk_per_oz = max(0.0, position.entry_price - position.stop_loss)
+            else:
+                risk_per_oz = max(0.0, position.stop_loss - position.entry_price)
+            total += risk_per_oz * position.remaining_quantity_oz
+        return total
 
     def _revalue(self) -> None:
         total_unrealized = 0.0
@@ -418,11 +643,18 @@ class PaperAccount:
                 position.unrealized_pnl_usd = 0.0
                 continue
 
-            position.last_mark_price = self.last_mark_price
-            move = (
-                self.last_mark_price - position.entry_price
+            exit_mark = (
+                self.last_bid
                 if position.direction == "BUY"
-                else position.entry_price - self.last_mark_price
+                else self.last_ask
+            )
+            if exit_mark is None:
+                exit_mark = self.last_mark_price
+            position.last_mark_price = exit_mark
+            move = (
+                exit_mark - position.entry_price
+                if position.direction == "BUY"
+                else position.entry_price - exit_mark
             )
             position.unrealized_pnl_usd = move * position.remaining_quantity_oz
             total_unrealized += position.unrealized_pnl_usd
@@ -430,6 +662,7 @@ class PaperAccount:
         self.unrealized_pnl_usd = total_unrealized
         self.balance_usd = self.starting_balance_usd + self.realized_pnl_usd
         self.equity_usd = self.balance_usd + self.unrealized_pnl_usd
+
         if self.equity_usd > self.peak_equity_usd:
             self.peak_equity_usd = self.equity_usd
 
@@ -451,6 +684,7 @@ class PaperAccount:
             "version": self.version,
             "engine": "xauusd_paper",
             "strategy_mode": self.strategy_mode,
+            "strategy_activated_at": self.strategy_activated_at,
             "entry_policy": self.entry_policy,
             "symbol": self.symbol,
             "starting_balance_usd": self.starting_balance_usd,
@@ -472,7 +706,18 @@ class PaperAccount:
             ),
             "max_drawdown_usd": self.max_drawdown_usd,
             "max_drawdown_pct": self.max_drawdown_pct,
+            "trading_day": self.trading_day,
+            "day_start_balance_usd": self.day_start_balance_usd,
+            "daily_equity_floor_usd": self.daily_equity_floor_usd,
+            "daily_stop_triggered": self.daily_stop_triggered,
+            "daily_stop_triggered_at": self.daily_stop_triggered_at,
+            "directional_risk_usd": {
+                "BUY": self.current_directional_risk_usd("BUY"),
+                "SELL": self.current_directional_risk_usd("SELL"),
+            },
             "last_mark_price": self.last_mark_price,
+            "last_bid": self.last_bid,
+            "last_ask": self.last_ask,
             "last_mark_at": self.last_mark_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,

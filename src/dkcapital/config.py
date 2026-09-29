@@ -56,6 +56,13 @@ class Settings:
     paper_dashboard_channel_id: int
     paper_dashboard_state_path: Path
 
+    paper_risk_pct: float
+    paper_direction_risk_cap_pct: float
+    paper_min_trade_risk_pct: float
+    paper_daily_loss_pct: float
+    paper_xau_contract_oz_per_lot: float
+    paper_xau_lot_step: float
+
     @classmethod
     def from_env(cls) -> "Settings":
         api_id_raw = os.getenv("TELEGRAM_API_ID", "").strip()
@@ -126,8 +133,8 @@ class Settings:
             ),
             paper_symbol=os.getenv("PAPER_SYMBOL", "XAUUSD").strip().upper() or "XAUUSD",
             paper_strategy_mode=(
-                os.getenv("PAPER_STRATEGY_MODE", "observe_only").strip().lower()
-                or "observe_only"
+                os.getenv("PAPER_STRATEGY_MODE", "signal_follow_v1").strip().lower()
+                or "signal_follow_v1"
             ),
             paper_mark_refresh_seconds=max(
                 5,
@@ -146,6 +153,24 @@ class Settings:
                     "PAPER_DASHBOARD_STATE_PATH",
                     "/app/data/paper-dashboard.json",
                 )
+            ),
+            paper_risk_pct=float(
+                os.getenv("PAPER_RISK_PCT", "0.005").strip()
+            ),
+            paper_direction_risk_cap_pct=float(
+                os.getenv("PAPER_DIRECTION_RISK_CAP_PCT", "0.008").strip()
+            ),
+            paper_min_trade_risk_pct=float(
+                os.getenv("PAPER_MIN_TRADE_RISK_PCT", "0.001").strip()
+            ),
+            paper_daily_loss_pct=float(
+                os.getenv("PAPER_DAILY_LOSS_PCT", "0.02").strip()
+            ),
+            paper_xau_contract_oz_per_lot=float(
+                os.getenv("PAPER_XAU_CONTRACT_OZ_PER_LOT", "100").strip()
+            ),
+            paper_xau_lot_step=float(
+                os.getenv("PAPER_XAU_LOT_STEP", "0.01").strip()
             ),
         )
 
