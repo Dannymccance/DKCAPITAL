@@ -753,19 +753,39 @@ class XauSignalFollowingStrategy:
                 activated is not None
                 and opened is not None
                 and opened < activated
-                and candidate.execution_status in {"PENDING_STRATEGY", "PENDING_SL"}
+                and candidate.execution_status in {
+                    "PENDING_STRATEGY",
+                    "PENDING_SL",
+                    "PENDING_INVALID_SL",
+                }
             ):
                 candidate.execution_status = "SKIPPED_PRE_STRATEGY"
                 candidate.execution_note = "Signal predates paper-strategy activation."
                 changed = True
                 continue
 
-            if candidate.execution_status in {"PENDING_STRATEGY", "PENDING_SL"}:
+            if (
+                candidate.execution_status == "REJECTED_INVALIDATED"
+                and self._structural_stop_wrong_side(candidate)
+            ):
+                candidate.execution_status = "PENDING_INVALID_SL"
+                candidate.execution_note = "Waiting for provider correction to malformed SL."
+                changed = True
+
+            if candidate.execution_status in {
+                "PENDING_STRATEGY",
+                "PENDING_SL",
+                "PENDING_INVALID_SL",
+            }:
                 self._cancel_older_pending(account, candidate)
 
             position = self._position_for(account, candidate.signal_id)
             if position is None:
-                if candidate.execution_status in {"PENDING_STRATEGY", "PENDING_SL"}:
+                if candidate.execution_status in {
+                    "PENDING_STRATEGY",
+                    "PENDING_SL",
+                    "PENDING_INVALID_SL",
+                }:
                     changed = self._enter_candidate(
                         account,
                         candidate,
