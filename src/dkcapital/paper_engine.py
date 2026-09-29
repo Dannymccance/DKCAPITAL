@@ -12,6 +12,7 @@ from dkcapital.event_store import JsonlEventStore
 from dkcapital.logging_setup import configure_logging
 from dkcapital.market_data import GoldSpotClient
 from dkcapital.paper_trading import PaperAccount
+from dkcapital.xau_strategy import XauSignalFollowingStrategy, XauStrategyConfig
 
 logger = logging.getLogger("dkcapital.paper_engine")
 
@@ -44,17 +45,18 @@ def _load_account(settings: Settings) -> tuple[PaperAccount, bool]:
                 account.starting_balance_usd,
                 settings.paper_starting_balance_usd,
             )
+        account.entry_policy = settings.paper_entry_policy
+        account.activate_strategy(settings.paper_strategy_mode)
         return account, False
 
-    return (
-        PaperAccount(
-            starting_balance_usd=settings.paper_starting_balance_usd,
-            symbol=settings.paper_symbol,
-            strategy_mode=settings.paper_strategy_mode,
-            entry_policy=settings.paper_entry_policy,
-        ),
-        True,
+    account = PaperAccount(
+        starting_balance_usd=settings.paper_starting_balance_usd,
+        symbol=settings.paper_symbol,
+        strategy_mode=settings.paper_strategy_mode,
+        entry_policy=settings.paper_entry_policy,
     )
+    account.activate_strategy(settings.paper_strategy_mode)
+    return account, True
 
 
 def _append_audit(
@@ -98,9 +100,21 @@ def _sync_signals(
                 "result": result,
                 "initial_snapshot": initial_snapshot,
                 "strategy_mode": account.strategy_mode,
+                "entry_policy": account.entry_policy,
             },
         )
     return changed_count
+
+
+def _quote_key(quote: dict[str, Any] | None) -> tuple[Any, ...] | None:
+    if quote is None:
+        return None
+    return (
+        quote.get("bid"),
+        quote.get("ask"),
+        quote.get("price"),
+        quote.get("computed_at"),
+    )
 
 
 async def run() -> None:
@@ -113,6 +127,17 @@ async def run() -> None:
         settings.gold_spot_url,
         settings.paper_mark_refresh_seconds,
     )
+    strategy = XauSignalFollowingStrategy(
+        XauStrategyConfig(
+            risk_pct=settings.paper_risk_pct,
+            direction_risk_cap_pct=settings.paper_direction_risk_cap_pct,
+            min_trade_risk_pct=settings.paper_min_trade_risk_pct,
+            daily_loss_pct=settings.paper_daily_loss_pct,
+            contract_oz_per_lot=settings.paper_xau_contract_oz_per_lot,
+            lot_step=settings.paper_xau_lot_step,
+            timezone_name=settings.display_timezone,
+        )
+    )
 
     signal_state = _load_json(settings.signal_state_path)
     synced = _sync_signals(
@@ -121,14 +146,34 @@ async def run() -> None:
         initial_snapshot=first_start,
         event_store=event_store,
     )
+
+    # Force one fresh quote on boot. Existing signals that predate strategy
+    # activation are recorded but intentionally not opened as stale trades.
+    quote = await gold_spot.quote(force=True)
+    if quote is not None and account.strategy_mode != "observe_only":
+        strategy.process(account, quote)
+    elif quote is not None and quote.get("price") is not None:
+        price = float(quote["price"])
+        account.mark_quote(
+            bid=float(quote.get("bid") or price),
+            ask=float(quote.get("ask") or price),
+            price=price,
+            marked_at=str(quote.get("computed_at") or datetime.now(UTC).isoformat()),
+        )
+
     _write_json(settings.paper_state_path, account.snapshot())
 
     logger.info(
-        "Paper engine ready balance=%.2f symbol=%s mode=%s candidates=%s "
+        "Paper engine ready balance=%.2f symbol=%s mode=%s entry_policy=%s "
+        "risk=%.2f%% direction_cap=%.2f%% daily_stop=%.2f%% candidates=%s "
         "positions=%s initial_sync=%s",
         account.balance_usd,
         account.symbol,
         account.strategy_mode,
+        account.entry_policy,
+        settings.paper_risk_pct * 100.0,
+        settings.paper_direction_risk_cap_pct * 100.0,
+        settings.paper_daily_loss_pct * 100.0,
         len(account.candidates),
         len(account.positions),
         synced,
@@ -139,9 +184,11 @@ async def run() -> None:
         if settings.signal_state_path.exists()
         else 0
     )
+    last_quote_key = _quote_key(quote)
 
     while True:
         state_changed = False
+        signal_changed = False
 
         if settings.signal_state_path.exists():
             current_mtime_ns = settings.signal_state_path.stat().st_mtime_ns
@@ -160,17 +207,30 @@ async def run() -> None:
                         len(account.candidates),
                     )
                     state_changed = True
+                    signal_changed = True
                 last_signal_mtime_ns = current_mtime_ns
 
-        quote = await gold_spot.quote()
-        if quote is not None and quote.get("price") is not None:
-            price = float(quote["price"])
-            if account.last_mark_price != price:
-                account.mark(
-                    price,
-                    marked_at=str(quote.get("computed_at") or datetime.now(UTC).isoformat()),
+        # A new Telegram signal/update gets a fresh quote immediately. Between
+        # signal events the quote client uses its configured cache interval.
+        quote = await gold_spot.quote(force=signal_changed)
+        current_quote_key = _quote_key(quote)
+        if current_quote_key != last_quote_key:
+            state_changed = True
+            last_quote_key = current_quote_key
+
+        if quote is not None:
+            if account.strategy_mode != "observe_only":
+                state_changed = strategy.process(account, quote) or state_changed
+            elif quote.get("price") is not None:
+                price = float(quote["price"])
+                account.mark_quote(
+                    bid=float(quote.get("bid") or price),
+                    ask=float(quote.get("ask") or price),
+                    price=price,
+                    marked_at=str(
+                        quote.get("computed_at") or datetime.now(UTC).isoformat()
+                    ),
                 )
-                state_changed = True
 
         if state_changed:
             _write_json(settings.paper_state_path, account.snapshot())
