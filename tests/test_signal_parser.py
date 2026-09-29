@@ -259,6 +259,25 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(state.signals["1:30"].status, "STOPPED")
         self.assertEqual(state.signals["1:31"].status, "STOPPED")
 
+    def test_long_and_short_are_direction_aliases(self) -> None:
+        self.assertEqual(parse_actions("cancel mubarak long", reply_to_message_id=40)[0].direction, "BUY")
+        self.assertEqual(parse_actions("cancel mubarak short", reply_to_message_id=40)[0].direction, "SELL")
+
+    def test_reply_cancel_mubarak_long_cancels_exact_replied_signal(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(80, "BUY XAUUSD AT 4143 - 4140\\nTP1 4147\\nSL 4134", minute=0)
+        )
+        state.ingest_event(
+            event(81, "BUY BTCUSDT AT 82000 - 81900\\nTP1 83000\\nSL 81000", minute=1)
+        )
+        state.ingest_event(
+            event(82, "cancel mubarak long", minute=2, reply_to=80)
+        )
+        self.assertEqual(state.signals["1:80"].status, "CANCELLED")
+        self.assertEqual(state.signals["1:81"].status, "ACTIVE")
+        self.assertEqual(state.message_targets[(1, 82)], ["1:80"])
+
     def test_reply_cancel_closes_only_referenced_signal(self) -> None:
         state = SignalState()
         state.ingest_event(
