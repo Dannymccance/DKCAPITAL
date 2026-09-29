@@ -51,6 +51,10 @@ class Settings:
     paper_symbol: str
     paper_strategy_mode: str
     paper_mark_refresh_seconds: int
+    paper_entry_policy: str
+    paper_xau_pip_size: float
+    paper_dashboard_channel_id: int
+    paper_dashboard_state_path: Path
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -59,6 +63,10 @@ class Settings:
         internal_signals_channel_raw = os.getenv(
             "DISCORD_INTERNAL_SIGNALS_CHANNEL_ID",
             "1554231371013169235",
+        ).strip()
+        paper_dashboard_channel_raw = os.getenv(
+            "PAPER_DASHBOARD_CHANNEL_ID",
+            "1554479167024926820",
         ).strip()
 
         return cls(
@@ -124,6 +132,20 @@ class Settings:
             paper_mark_refresh_seconds=max(
                 5,
                 int(os.getenv("PAPER_MARK_REFRESH_SECONDS", "15").strip()),
+            ),
+            paper_entry_policy=(
+                os.getenv("PAPER_ENTRY_POLICY", "all_parsed").strip().lower()
+                or "all_parsed"
+            ),
+            paper_xau_pip_size=float(
+                os.getenv("PAPER_XAU_PIP_SIZE", "0.01").strip()
+            ),
+            paper_dashboard_channel_id=int(paper_dashboard_channel_raw),
+            paper_dashboard_state_path=Path(
+                os.getenv(
+                    "PAPER_DASHBOARD_STATE_PATH",
+                    "/app/data/paper-dashboard.json",
+                )
             ),
         )
 
