@@ -7,6 +7,7 @@ Current services:
 - Telegram listener using a Telegram user session
 - Deterministic signal parser and live state processor
 - Discord bot with an auto-updating live trade dashboard
+- Dedicated XAUUSD paper-trading engine with a durable $100,000 virtual account
 - Docker Compose deployment
 - Structured logging and durable local JSON/JSONL state
 
@@ -71,8 +72,8 @@ Telegram
   -> /app/data/telegram-events.jsonl
   -> signal-processor
   -> /app/data/signal-state.json
-  -> discord-bot
-  -> live Discord dashboard
+       -> discord-bot -> live Discord dashboard
+       -> paper-engine -> /app/data/paper-trading.json
 ```
 
 The state processor rebuilds from the latest version of every Telegram message, so edits are reflected deterministically. Replies resolve back through the message chain. Explicit `ALL GOLD` and `BOTH` instructions can target multiple open trades.
@@ -105,3 +106,37 @@ python -m unittest discover -s tests -v
 ## Security
 
 Never commit `.env`, Telegram session strings, Discord tokens, API hashes, or session files. A Telegram StringSession and a Discord bot token must both be treated like passwords.
+
+
+## XAUUSD paper engine
+
+The paper engine is a separate service downstream of the parsed signal state. It
+does not parse Telegram itself. Every parsed XAUUSD signal from every configured
+provider is mirrored into a durable paper candidate record, including later
+signal-management updates.
+
+The default account is:
+
+```text
+Starting balance: $100,000
+Symbol: XAUUSD
+Strategy mode: observe_only
+```
+
+`observe_only` is intentional. Until an execution strategy is configured, the
+engine records every signal but cannot create a paper fill. This prevents entry,
+sizing, stop, leverage, or exit assumptions from being silently invented.
+
+Durable paper files:
+
+```text
+/app/data/paper-trading.json
+/app/data/paper-trade-events.jsonl
+```
+
+The accounting core supports paper fills, partial closes, realised USD PnL,
+unrealised USD PnL, balance and equity. XAUUSD position quantity is stored in
+troy ounces, so PnL is independent of any future broker-specific lot convention.
+
+The strategy layer can be added without changing the Telegram parser or paper
+accounting ledger.

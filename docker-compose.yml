@@ -17,6 +17,15 @@ services:
       - dkcapital-data:/app/data
     restart: unless-stopped
 
+  paper-engine:
+    build: .
+    command: ["python", "-m", "dkcapital.paper_engine"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    restart: unless-stopped
+
   telegram-session:
     build: .
     command: ["python", "scripts/generate_telegram_session.py"]
