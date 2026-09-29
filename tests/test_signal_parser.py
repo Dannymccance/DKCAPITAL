@@ -42,7 +42,7 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(action.sl, 4333)
 
-    def test_signal_within_30_seconds_amends_existing_trade(self) -> None:
+    def test_rapid_same_direction_signal_without_correction_evidence_is_separate(self) -> None:
         state = SignalState()
         state.ingest_event(
             event(
@@ -59,19 +59,68 @@ class ParserTests(unittest.TestCase):
                 "SELL XAUUSD AT 4169.50 - 4172.50\n"
                 "TP1 4165\nTP2 4162.50\nTP3 4141\nSL 4378",
                 minute=0,
-                second=30,
+                second=20,
             )
         )
 
-        self.assertEqual(list(state.signals), ["1:90"])
-        signal = state.signals["1:90"]
+        self.assertEqual(set(state.signals), {"1:90", "1:91"})
+
+    def test_explicit_correction_within_30_seconds_amends_existing_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                100,
+                "SELL XAUUSD AT 4168 - 4171\nTP1 4164\nSL 4177",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            event(
+                101,
+                "UPDATED SELL XAUUSD AT 4169.50 - 4172.50\nTP1 4165\nSL 4178",
+                minute=0,
+                second=20,
+            )
+        )
+
+        self.assertEqual(list(state.signals), ["1:100"])
+        signal = state.signals["1:100"]
         self.assertEqual(signal.entry_low, 4169.5)
         self.assertEqual(signal.entry_high, 4172.5)
-        self.assertEqual(signal.tps, {1: 4165.0, 2: 4162.5, 3: 4141.0})
-        self.assertEqual(signal.current_sl, 4378.0)
-        self.assertEqual(signal.source_message_ids, [90, 91])
+        self.assertEqual(signal.current_sl, 4178.0)
+        self.assertEqual(signal.source_message_ids, [100, 101])
         self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
-        self.assertEqual(state.message_targets[(1, 91)], ["1:90"])
+
+    def test_exact_duplicate_within_30_seconds_is_deduplicated(self) -> None:
+        state = SignalState()
+        text = "SELL XAUUSD AT 4168 - 4171\nTP1 4164\nSL 4177"
+        state.ingest_event(event(102, text, minute=0, second=0))
+        state.ingest_event(event(103, text, minute=0, second=10))
+
+        self.assertEqual(list(state.signals), ["1:102"])
+        self.assertEqual(state.signals["1:102"].source_message_ids, [102, 103])
+
+    def test_explicit_buy_more_full_signal_is_separate_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                104,
+                "BUY XAUUSD AT 4160 - 4162\nTP1 4170\nSL 4152",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            event(
+                105,
+                "BUY MORE XAUUSD AT 4155 - 4157\nTP1 4165\nSL 4148",
+                minute=0,
+                second=15,
+            )
+        )
+
+        self.assertEqual(set(state.signals), {"1:104", "1:105"})
 
     def test_deleted_signal_repost_within_30_seconds_amends_original_trade(self) -> None:
         state = SignalState()
@@ -300,7 +349,18 @@ class ParserTests(unittest.TestCase):
     def test_add_and_reenter_language(self) -> None:
         self.assertEqual(parse_actions("ADDING NOW SAME SL")[0].kind, "add_layer")
         self.assertEqual(parse_actions("ASDING")[0].kind, "add_layer")
+        self.assertEqual(parse_actions("BUY MORE AT BETTER ENTRY")[0].kind, "add_layer")
+        self.assertEqual(parse_actions("SELL MORE AT BETTER ENTRY")[0].kind, "add_layer")
         self.assertEqual(parse_actions("WE RE-ENTER SAME")[0].kind, "reenter")
+
+    def test_buy_more_full_signal_parses_as_new_signal(self) -> None:
+        action = parse_actions(
+            "BUY MORE XAUUSD AT 4155 - 4157\nTP1 4165\nSL 4148"
+        )[0]
+        self.assertEqual(action.kind, "new_signal")
+        self.assertEqual(action.direction, "BUY")
+        self.assertEqual(action.entry_low, 4155.0)
+        self.assertEqual(action.entry_high, 4157.0)
 
     def test_sl_results(self) -> None:
         cases = [
