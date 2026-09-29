@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import re
 from typing import Any
 
 from dkcapital.signal_parser import ParsedAction, parse_actions
@@ -121,9 +122,11 @@ class SignalState:
 
                     amendment_target = self._amendment_target(
                         chat_id=chat_id,
+                        message_id=message_id,
                         timestamp=timestamp,
                         symbol=action.symbol,
                         direction=action.direction,
+                        text=text,
                     )
                     if amendment_target is not None:
                         self._apply_signal_amendment(
@@ -297,10 +300,16 @@ class SignalState:
         self,
         *,
         chat_id: int,
+        message_id: int,
         timestamp: str,
         symbol: str,
         direction: str,
+        text: str,
     ) -> Signal | None:
+        # Never collapse an explicitly stated scale-in/re-entry into an amendment.
+        if self._is_scale_in_text(text):
+            return None
+
         compatible = [
             signal
             for signal in self.signals.values()
@@ -314,13 +323,60 @@ class SignalState:
 
         latest = compatible[-1]
         comparison_time = latest.last_update_at or latest.opened_at
-        if self._within_seconds(
+        if not self._within_seconds(
             comparison_time,
             timestamp,
             AMENDMENT_WINDOW_SECONDS,
         ):
+            return None
+
+        # Strong evidence only. A rapid same-direction signal can be a genuine
+        # scale-in, so time proximity by itself is not enough to merge trades.
+        latest_source_message_id = (
+            latest.source_message_ids[-1]
+            if latest.source_message_ids
+            else latest.root_message_id
+        )
+        previous_was_deleted = (
+            (chat_id, int(latest_source_message_id)) in self.deleted_messages
+        )
+        explicit_correction = self._is_correction_text(text)
+        exact_duplicate = self._same_signal_text(latest.last_update_text, text)
+
+        if previous_was_deleted or explicit_correction or exact_duplicate:
             return latest
         return None
+
+    @staticmethod
+    def _is_scale_in_text(text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", text.upper()).strip()
+        return bool(
+            re.search(
+                r"\b(?:BUY\s+MORE|SELL\s+MORE|MORE\s+BUYS?|MORE\s+SELLS?|"
+                r"ADD(?:ING|ED|S)?|ANOTHER\s+ENTRY|SECOND\s+ENTRY|EXTRA\s+ENTRY|"
+                r"LAYER(?:ING|S)?|SCALE\s*-?\s*IN|RE-?ENTER(?:ING)?|REENTRY)\b",
+                normalized,
+            )
+        )
+
+    @staticmethod
+    def _is_correction_text(text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", text.upper()).strip()
+        return bool(
+            re.search(
+                r"\b(?:UPDATE(?:D)?|CORRECT(?:ED|ION)?|AMEND(?:ED|MENT)?|"
+                r"REVIS(?:ED|ION)|TYPO|REPOST(?:ED)?|REPLACE(?:D|MENT)?|"
+                r"IGNORE\s+(?:THE\s+)?PREVIOUS)\b",
+                normalized,
+            )
+        )
+
+    @staticmethod
+    def _same_signal_text(previous: str, current: str) -> bool:
+        def normalize(value: str) -> str:
+            return re.sub(r"\s+", " ", value.upper()).strip()
+
+        return bool(previous and current and normalize(previous) == normalize(current))
 
     def _apply_signal_amendment(
         self,
