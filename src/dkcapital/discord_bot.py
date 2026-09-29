@@ -424,7 +424,7 @@ def _paper_dashboard_embed(
         value=(
             f"Parsed XAUUSD: **{len(candidates)}**\n"
             f"Queued for strategy: **{queued}**\n"
-            f"Pip size: **{pip_size:g}** (\$1.00 = {1.0 / pip_size:,.0f} pips)"
+            f"Pip size: **{pip_size:g}** ($1.00 = {1.0 / pip_size:,.0f} pips)"
         ),
         inline=True,
     )
