@@ -14,7 +14,6 @@ from discord.ext import commands, tasks
 
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
-from dkcapital.market_data import GoldSpotClient
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -31,6 +30,23 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     temp.replace(path)
+
+
+def _paper_market_quote(state: dict[str, Any]) -> dict[str, Any] | None:
+    price = state.get("last_mark_price")
+    if price is None:
+        return None
+    bid = state.get("last_bid")
+    ask = state.get("last_ask")
+    return {
+        "symbol": "XAUUSD",
+        "price": float(price),
+        "bid": float(bid) if bid is not None else float(price),
+        "ask": float(ask) if ask is not None else float(price),
+        "computed_at": state.get("last_mark_at"),
+        "is_stale": False,
+        "source": "paper-engine",
+    }
 
 
 def _price(value: Any) -> str:
@@ -811,10 +827,6 @@ def _signal_embed(
 def build_bot(settings: Settings) -> commands.Bot:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
-    gold_spot = GoldSpotClient(
-        settings.gold_spot_url,
-        settings.gold_spot_refresh_seconds,
-    )
 
     async def update_paper_dashboard() -> bool:
         state = _load_json(settings.paper_state_path)
@@ -924,7 +936,12 @@ def build_bot(settings: Settings) -> commands.Bot:
             and str(signal.get("status") or "") == "ACTIVE"
             for signal in signals
         )
-        spot_quote = await gold_spot.quote() if active_gold else None
+        paper_state = _load_json(settings.paper_state_path)
+        spot_quote = (
+            _paper_market_quote(paper_state)
+            if active_gold
+            else None
+        )
         registry = _load_json(settings.discord_internal_signals_state_path)
 
         if not registry.get("initialized"):
@@ -1315,7 +1332,9 @@ def build_bot(settings: Settings) -> commands.Bot:
         }
 
         try:
-            test_spot = await gold_spot.quote(force=True)
+            test_spot = _paper_market_quote(
+                _load_json(settings.paper_state_path)
+            )
             message = await channel.send(
                 embed=_signal_embed(
                     test,
@@ -1326,7 +1345,9 @@ def build_bot(settings: Settings) -> commands.Bot:
             await asyncio.sleep(2)
 
             first_partial_at = datetime.now(UTC).isoformat()
-            first_partial_spot = await gold_spot.quote(force=True)
+            first_partial_spot = _paper_market_quote(
+                _load_json(settings.paper_state_path)
+            )
             test["current_sl"] = 4157
             test["partial_close_count"] = 1
             test["remaining_fraction"] = 0.5
@@ -1361,7 +1382,9 @@ def build_bot(settings: Settings) -> commands.Bot:
             await asyncio.sleep(2)
 
             second_partial_at = datetime.now(UTC).isoformat()
-            second_partial_spot = await gold_spot.quote(force=True)
+            second_partial_spot = _paper_market_quote(
+                _load_json(settings.paper_state_path)
+            )
             test["partial_close_count"] = 2
             test["remaining_fraction"] = 0.25
             test["last_update_at"] = second_partial_at
