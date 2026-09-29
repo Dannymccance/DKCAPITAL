@@ -8,6 +8,7 @@ from dkcapital.discord_bot import (
     _paper_dashboard_embed,
     _paper_pips,
     _paper_realised_pips,
+    _signal_embed,
     _signal_pnl_text,
 )
 
@@ -99,6 +100,108 @@ class DiscordSignalDisplayTests(unittest.TestCase):
         self.assertIn("+1,200.0 pips", rendered)
         self.assertIn("+350.0 pips", rendered)
         self.assertIn("$+600.00", rendered)
+
+    def test_signal_card_shows_actual_paper_usd_pips_and_r(self) -> None:
+        signal = {
+            "signal_id": "gws:1",
+            "direction": "BUY",
+            "symbol": "XAUUSD",
+            "source_style": "gws",
+            "entry_low": 4147.0,
+            "entry_high": 4150.0,
+            "original_sl": 4342.0,
+            "current_sl": 4148.5,
+            "sl_mode": "BREAKEVEN",
+            "tps": {"1": 4155.0, "2": 4157.5, "3": 4203.0},
+            "tp_hits": [1, 2],
+            "remaining_fraction": 0.7,
+            "partial_close_count": 1,
+            "status": "ACTIVE",
+            "history": [],
+            "opened_at": "2026-09-29T15:28:32+00:00",
+            "root_message_id": 6786,
+        }
+        position = {
+            "signal_id": "gws:1",
+            "direction": "BUY",
+            "entry_price": 4150.0,
+            "initial_quantity_oz": 100.0,
+            "remaining_quantity_oz": 70.0,
+            "lot_size": 1.0,
+            "stop_loss": 4150.0,
+            "stop_source": "BREAKEVEN",
+            "temporary_stop_active": False,
+            "last_mark_price": 4155.0,
+            "realized_pnl_usd": 90.0,
+            "unrealized_pnl_usd": 350.0,
+            "initial_risk_usd": 500.0,
+            "status": "OPEN",
+            "history": [
+                {
+                    "kind": "close",
+                    "price": 4153.0,
+                    "quantity_oz": 30.0,
+                    "realized_pnl_usd": 90.0,
+                }
+            ],
+        }
+
+        embed = _signal_embed(
+            signal,
+            spot_quote={
+                "price": 4155.0,
+                "computed_at": "2026-09-29T15:35:00+00:00",
+            },
+            paper_position=position,
+            pip_size=0.01,
+            timezone_name="Europe/Isle_of_Man",
+        )
+        fields = {field.name: str(field.value) for field in embed.fields}
+
+        self.assertIn("Fill **4150**", fields["Paper Execution"])
+        self.assertIn("BE 4150", fields["Paper Execution"])
+        self.assertIn("$+90.00", fields["Realised PnL"])
+        self.assertIn("+90.0 pips", fields["Realised PnL"])
+        self.assertIn("+0.18R", fields["Realised PnL"])
+        self.assertIn("$+350.00", fields["Open PnL"])
+        self.assertIn("+500.0 pips", fields["Open PnL"])
+        self.assertIn("$+440.00", fields["Total PnL"])
+        self.assertIn("+440.0 weighted pips", fields["Total PnL"])
+        self.assertIn("+0.88R", fields["Total PnL"])
+
+    def test_signal_card_without_paper_position_still_shows_live_pip_move(self) -> None:
+        signal = {
+            "signal_id": "gws:6786",
+            "direction": "BUY",
+            "symbol": "XAUUSD",
+            "source_style": "gws",
+            "entry_low": 4147.0,
+            "entry_high": 4150.0,
+            "original_sl": 4342.0,
+            "current_sl": 4148.5,
+            "sl_mode": "BREAKEVEN",
+            "tps": {"1": 4155.0, "2": 4157.5, "3": 4203.0},
+            "tp_hits": [1, 2],
+            "remaining_fraction": 1.0,
+            "partial_close_count": 0,
+            "status": "ACTIVE",
+            "history": [],
+            "opened_at": "2026-09-29T15:28:32+00:00",
+            "root_message_id": 6786,
+        }
+
+        embed = _signal_embed(
+            signal,
+            spot_quote={
+                "price": 4158.73,
+                "computed_at": "2026-09-29T15:55:00+00:00",
+            },
+            paper_position=None,
+            pip_size=0.01,
+            timezone_name="Europe/Isle_of_Man",
+        )
+        fields = {field.name: str(field.value) for field in embed.fields}
+        self.assertIn("+1,023.0 pips", fields["Open PnL"])
 
     def test_isle_of_man_footer_uses_bst_in_september(self) -> None:
         rendered = _local_timestamp(
