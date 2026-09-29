@@ -131,28 +131,20 @@ class XauStrategyTests(unittest.TestCase):
         self.assertGreater(account.current_directional_risk_usd("BUY"), 0.0)
         self.assertGreater(account.current_directional_risk_usd("SELL"), 0.0)
 
-    def test_missing_sl_waits_and_newer_signal_cancels_pending_setup(self) -> None:
+    def test_missing_sl_enters_with_temporary_protective_stop(self) -> None:
         account = self.account()
         account.sync_signal(sig("buy:1", sl=None))
         self.strategy.process(account, quote(4160.0))
-        self.assertEqual(
-            account.candidates["buy:1"].execution_status,
-            "PENDING_SL",
-        )
 
-        account.sync_signal(
-            sig(
-                "buy:2",
-                sl=4150.0,
-                opened_at="2026-09-29T13:32:00+00:00",
-            )
-        )
-        self.strategy.process(account, quote(4160.0))
+        position = account.positions["paper:buy:1"]
+        self.assertTrue(position.temporary_stop_active)
+        self.assertEqual(position.stop_source, "TEMPORARY")
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4153.0)
+        self.assertLessEqual(position.initial_risk_usd, 500.0)
         self.assertEqual(
             account.candidates["buy:1"].execution_status,
-            "CANCELLED_BY_NEW_SIGNAL",
+            "OPEN",
         )
-        self.assertIn("paper:buy:2", account.positions)
 
     def test_valid_structural_stop_already_crossed_is_rejected(self) -> None:
         account = self.account()
@@ -164,7 +156,7 @@ class XauStrategyTests(unittest.TestCase):
             "REJECTED_INVALIDATED",
         )
 
-    def test_wrong_side_provider_sl_waits_for_same_message_correction(self) -> None:
+    def test_wrong_side_provider_sl_enters_with_temp_then_corrects(self) -> None:
         account = self.account()
         malformed = sig(
             "gws:6786",
@@ -178,9 +170,14 @@ class XauStrategyTests(unittest.TestCase):
         self.strategy.process(account, quote(4158.73))
 
         candidate = account.candidates["gws:6786"]
-        self.assertNotIn("paper:gws:6786", account.positions)
-        self.assertEqual(candidate.execution_status, "PENDING_INVALID_SL")
-        self.assertIn("wrong side", candidate.execution_note)
+        position = account.positions["paper:gws:6786"]
+        initial_qty = position.remaining_quantity_oz
+
+        self.assertEqual(candidate.execution_status, "OPEN")
+        self.assertTrue(position.temporary_stop_active)
+        self.assertEqual(position.stop_source, "TEMPORARY")
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4142.0)
+        self.assertAlmostEqual(float(position.last_provider_stop_seen or 0.0), 4342.0)
 
         corrected = sig(
             "gws:6786",
@@ -190,8 +187,6 @@ class XauStrategyTests(unittest.TestCase):
         )
         corrected["entry_low"] = 4147.0
         corrected["entry_high"] = 4150.0
-        corrected["original_sl"] = 4142.0
-        corrected["current_sl"] = 4142.0
         corrected["history"][0]["entry_low"] = 4147.0
         corrected["history"][0]["entry_high"] = 4150.0
         corrected["history"][0]["sl"] = 4142.0
@@ -199,16 +194,87 @@ class XauStrategyTests(unittest.TestCase):
         account.sync_signal(corrected)
         self.strategy.process(account, quote(4158.73))
 
-        candidate = account.candidates["gws:6786"]
-        self.assertEqual(candidate.entry_low, 4147.0)
-        self.assertEqual(candidate.entry_high, 4150.0)
-        self.assertEqual(candidate.current_sl, 4142.0)
-        self.assertIn("paper:gws:6786", account.positions)
-        self.assertEqual(candidate.execution_status, "OPEN")
+        position = account.positions["paper:gws:6786"]
+        self.assertFalse(position.temporary_stop_active)
+        self.assertEqual(position.stop_source, "PROVIDER")
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4142.0)
+        # A closer provider stop never increases the position.
+        self.assertLessEqual(position.remaining_quantity_oz, initial_qty)
 
-    def test_legacy_wrong_side_rejection_migrates_to_waiting_state(self) -> None:
+    def test_entry_zone_edit_recalculates_temp_stop_and_trims_risk(self) -> None:
         account = self.account()
-        malformed = sig("gws:6786", sl=4342.0)
+        malformed = sig(
+            "gws:6786",
+            sl=4342.0,
+            tps={"3": 4203.0},
+            opened_at="2026-09-29T15:28:32+00:00",
+        )
+        malformed["entry_low"] = 4148.0
+        malformed["entry_high"] = 4151.0
+        account.sync_signal(malformed)
+        self.strategy.process(account, quote(4158.73))
+
+        position = account.positions["paper:gws:6786"]
+        before_qty = position.remaining_quantity_oz
+        before_risk_cap = position.initial_risk_usd
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4142.0)
+
+        edited = dict(malformed)
+        edited["entry_low"] = 4147.0
+        edited["entry_high"] = 4150.0
+        edited["history"] = [
+            {
+                "timestamp": "2026-09-29T15:28:32+00:00",
+                "message_id": 1,
+                "kind": "opened",
+                "entry_low": 4147.0,
+                "entry_high": 4150.0,
+                "sl": 4342.0,
+            }
+        ]
+        account.sync_signal(edited)
+        self.strategy.process(account, quote(4158.73))
+
+        position = account.positions["paper:gws:6786"]
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4141.0)
+        self.assertLess(position.remaining_quantity_oz, before_qty)
+        current_risk = (
+            position.entry_price - float(position.stop_loss or 0.0)
+        ) * position.remaining_quantity_oz
+        self.assertLessEqual(current_risk, before_risk_cap + 1e-6)
+
+    def test_farther_corrected_sl_reduces_size_but_never_exceeds_risk_cap(self) -> None:
+        account = self.account()
+        malformed = sig("buy:1", sl=None, tps={"3": 4200.0})
+        account.sync_signal(malformed)
+        self.strategy.process(account, quote(4160.0))
+
+        position = account.positions["paper:buy:1"]
+        original_qty = position.remaining_quantity_oz
+        original_risk = position.initial_risk_usd
+        self.assertTrue(position.temporary_stop_active)
+
+        corrected = sig("buy:1", sl=4145.0, tps={"3": 4200.0})
+        account.sync_signal(corrected)
+        self.strategy.process(account, quote(4160.0))
+
+        position = account.positions["paper:buy:1"]
+        self.assertFalse(position.temporary_stop_active)
+        self.assertEqual(position.stop_source, "PROVIDER")
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4145.0)
+        self.assertLess(position.remaining_quantity_oz, original_qty)
+        current_risk = (
+            position.entry_price - float(position.stop_loss or 0.0)
+        ) * position.remaining_quantity_oz
+        self.assertLessEqual(current_risk, original_risk + 1e-6)
+        self.assertLessEqual(
+            account.current_directional_risk_usd("BUY"),
+            account.balance_usd * 0.008 + 1e-6,
+        )
+
+    def test_legacy_wrong_side_rejection_now_enters_with_temp_stop(self) -> None:
+        account = self.account()
+        malformed = sig("gws:6786", sl=4342.0, tps={"3": 4203.0})
         malformed["entry_low"] = 4148.0
         malformed["entry_high"] = 4151.0
         account.sync_signal(malformed)
@@ -217,8 +283,10 @@ class XauStrategyTests(unittest.TestCase):
         candidate.execution_note = "Old engine rejection"
 
         self.strategy.process(account, quote(4158.73))
-        self.assertEqual(candidate.execution_status, "PENDING_INVALID_SL")
-        self.assertNotIn("paper:gws:6786", account.positions)
+        position = account.positions["paper:gws:6786"]
+        self.assertEqual(candidate.execution_status, "OPEN")
+        self.assertTrue(position.temporary_stop_active)
+        self.assertAlmostEqual(float(position.stop_loss or 0.0), 4142.0)
 
     def test_all_targets_already_passed_are_not_chased(self) -> None:
         account = self.account()
