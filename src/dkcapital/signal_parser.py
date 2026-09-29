@@ -210,7 +210,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
 
     # GWS-style one-line/range signal.
     entry = re.search(
-        r"\b(?:BUY|SELL)\s+"
+        r"\b(?:BUY|SELL)\s+(?:MORE\s+)?"
         r"(?:XAU\s*/?\s*USD|XAUUSD|XAUUSDT|XAU|GOLD|BTC(?:USD|USDT)?|BITCOIN|[A-Z]{3,10}USDT?)"
         r"\s+(?:AT|@)\s*(\d+(?:\.\d+)?)"
         r"(?:\s*-\s*(\d+(?:\.\d+)?))?",
@@ -441,7 +441,9 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
             )
 
     if re.search(
-        r"^(?:\+?LAYERS?|ADD(?:ING|S)?|ASDING)(?:\s+NOW)?(?:\s+SAME\s+SL)?[.! ]*$",
+        r"^(?:\+?LAYERS?|ADD(?:ING|ED|S)?|ASDING)(?:\s+NOW)?(?:\s+SAME\s+SL)?[.! ]*$"
+        r"|\b(?:BUY\s+MORE|SELL\s+MORE|MORE\s+BUYS?|MORE\s+SELLS?|"
+        r"ANOTHER\s+ENTRY|SECOND\s+ENTRY|EXTRA\s+ENTRY|SCALE\s*-?\s*IN)\b",
         normalized,
     ):
         actions.append(
