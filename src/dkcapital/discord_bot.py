@@ -334,6 +334,9 @@ def _paper_dashboard_embed(
     *,
     timezone_name: str = "Europe/Isle_of_Man",
     pip_size: float = 0.01,
+    risk_pct: float = 0.005,
+    direction_risk_cap_pct: float = 0.008,
+    daily_loss_pct: float = 0.02,
 ) -> discord.Embed:
     starting = float(state.get("starting_balance_usd", 100000.0) or 0.0)
     balance = float(state.get("balance_usd", starting) or 0.0)
@@ -357,13 +360,21 @@ def _paper_dashboard_embed(
     queued = sum(
         1
         for candidate in candidates
-        if str(candidate.get("execution_status") or "") == "PENDING_STRATEGY"
+        if str(candidate.get("execution_status") or "")
+        in {"PENDING_STRATEGY", "PENDING_SL"}
     )
     stats = _paper_trade_stats(state, pip_size)
 
     mode = str(state.get("strategy_mode") or "observe_only")
     entry_policy = str(state.get("entry_policy") or "all_parsed")
     mark = state.get("last_mark_price")
+    directional_risk = state.get("directional_risk_usd") or {}
+    buy_risk = float(directional_risk.get("BUY", 0.0) or 0.0)
+    sell_risk = float(directional_risk.get("SELL", 0.0) or 0.0)
+    day_start = float(state.get("day_start_balance_usd", balance) or balance)
+    daily_floor = float(state.get("daily_equity_floor_usd", day_start) or day_start)
+    daily_stop = bool(state.get("daily_stop_triggered", False))
+    floor_buffer = equity - daily_floor
 
     embed = discord.Embed(
         title="DK Capital | XAUUSD Paper Trading",
@@ -411,6 +422,35 @@ def _paper_dashboard_embed(
     embed.add_field(name="XAU/USD Live Mark", value=mark_text, inline=True)
 
     embed.add_field(
+        name="Risk Controls",
+        value=(
+            f"Per trade: **{risk_pct * 100:.2f}%**\n"
+            f"Per direction: **{direction_risk_cap_pct * 100:.2f}%**\n"
+            f"Daily stop: **{daily_loss_pct * 100:.2f}%**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Daily Risk",
+        value=(
+            f"Day start: **${day_start:,.2f}**\n"
+            f"Equity floor: **${daily_floor:,.2f}**\n"
+            f"Buffer: **{_paper_signed_usd(floor_buffer)}** | "
+            f"{'STOPPED' if daily_stop else 'ACTIVE'}"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Directional Risk",
+        value=(
+            f"BUY book: **${buy_risk:,.2f}**\n"
+            f"SELL book: **${sell_risk:,.2f}**\n"
+            f"Cap/book: **${balance * direction_risk_cap_pct:,.2f}**"
+        ),
+        inline=True,
+    )
+
+    embed.add_field(
         name="Trade Stats",
         value=(
             f"Open: **{len(open_positions)}** | Closed: **{stats['closed']}**\n"
@@ -452,6 +492,14 @@ def _paper_dashboard_embed(
             )
             stop = position.get("stop_loss")
             stop_text = "None" if stop is None else _price(stop)
+            lots = float(position.get("lot_size") or 0.0)
+            initial_risk = float(position.get("initial_risk_usd") or 0.0)
+            if stop is None:
+                current_risk = 0.0
+            elif direction == "BUY":
+                current_risk = max(0.0, entry - float(stop)) * remaining_qty
+            else:
+                current_risk = max(0.0, float(stop) - entry) * remaining_qty
             signal_id = str(position.get("signal_id") or "")
             candidate = next(
                 (
@@ -468,7 +516,9 @@ def _paper_dashboard_embed(
                 f"Open **{_paper_signed_usd(open_pnl)} / {current_pips:+,.1f} pips** | "
                 f"Realised **{_paper_signed_usd(realised_trade)} / "
                 f"{realised_trade_pips:+,.1f} pips**\n"
-                f"Size {remaining_qty:,.2f}/{initial_qty:,.2f} oz ({remaining_pct:.1f}% remaining)"
+                f"Size **{lots:.2f} lots** | {remaining_qty:,.2f}/{initial_qty:,.2f} oz "
+                f"({remaining_pct:.1f}% remaining)\n"
+                f"Initial risk **${initial_risk:,.2f}** | Current risk **${current_risk:,.2f}**"
             )
 
         if len(open_positions) > 10:
@@ -481,8 +531,8 @@ def _paper_dashboard_embed(
         embed.add_field(
             name="Current Trades",
             value=(
-                "No open paper trades yet. Every parsed XAUUSD signal is selected; "
-                "fills begin when the sizing/risk strategy is configured."
+                "No open paper trades. Every new valid parsed XAUUSD signal is "
+                "eligible for immediate strategy execution."
             ),
             inline=False,
         )
@@ -518,11 +568,17 @@ def _paper_status_embed(
     *,
     timezone_name: str = "Europe/Isle_of_Man",
     pip_size: float = 0.01,
+    risk_pct: float = 0.005,
+    direction_risk_cap_pct: float = 0.008,
+    daily_loss_pct: float = 0.02,
 ) -> discord.Embed:
     return _paper_dashboard_embed(
         state,
         timezone_name=timezone_name,
         pip_size=pip_size,
+        risk_pct=risk_pct,
+        direction_risk_cap_pct=direction_risk_cap_pct,
+        daily_loss_pct=daily_loss_pct,
     )
 
 def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
@@ -789,6 +845,9 @@ def build_bot(settings: Settings) -> commands.Bot:
             state,
             timezone_name=settings.display_timezone,
             pip_size=settings.paper_xau_pip_size,
+            risk_pct=settings.paper_risk_pct,
+            direction_risk_cap_pct=settings.paper_direction_risk_cap_pct,
+            daily_loss_pct=settings.paper_daily_loss_pct,
         )
 
         try:
@@ -1155,6 +1214,9 @@ def build_bot(settings: Settings) -> commands.Bot:
                 state,
                 timezone_name=settings.display_timezone,
                 pip_size=settings.paper_xau_pip_size,
+                risk_pct=settings.paper_risk_pct,
+                direction_risk_cap_pct=settings.paper_direction_risk_cap_pct,
+                daily_loss_pct=settings.paper_daily_loss_pct,
             ),
             ephemeral=True,
         )
