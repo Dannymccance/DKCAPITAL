@@ -39,6 +39,7 @@ class Signal:
     status: str = "ACTIVE"
     last_update_at: str | None = None
     last_update_text: str = ""
+    history: list[dict[str, Any]] = field(default_factory=list)
     source_message_ids: list[int] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -142,6 +143,16 @@ class SignalState:
                         source_style=action.source_style,
                         last_update_at=timestamp,
                         last_update_text=text,
+                        history=[
+                            {
+                                "timestamp": timestamp,
+                                "message_id": message_id,
+                                "kind": "opened",
+                                "entry_low": action.entry_low,
+                                "entry_high": action.entry_high,
+                                "sl": action.sl,
+                            }
+                        ],
                         source_message_ids=[message_id],
                     )
                     self.signals[signal_id] = signal
@@ -306,8 +317,17 @@ class SignalState:
         if message_id not in signal.source_message_ids:
             signal.source_message_ids.append(message_id)
 
+        history_event: dict[str, Any] = {
+            "timestamp": timestamp,
+            "message_id": message_id,
+            "kind": action.kind,
+        }
+
         if action.kind == "trade_update":
+            history_event["sl_before"] = signal.current_sl
+            history_event["sl_mode_before"] = signal.sl_mode
             if action.tps:
+                history_event["tps"] = dict(action.tps)
                 signal.tps = self._validated_tps(
                     action.tps,
                     signal.direction,
@@ -315,6 +335,8 @@ class SignalState:
                     signal.entry_high,
                 )
 
+            if action.tp_hits:
+                history_event["tp_hits"] = list(action.tp_hits)
             for tp in action.tp_hits:
                 if tp not in signal.tp_hits:
                     signal.tp_hits.append(tp)
@@ -323,46 +345,59 @@ class SignalState:
             if action.move_sl_to_be:
                 signal.sl_mode = "BREAKEVEN"
                 signal.current_sl = None
+                history_event["move_sl_to_be"] = True
             elif action.sl is not None:
                 signal.sl_mode = "PRICE"
                 signal.current_sl = action.sl
+                history_event["sl_after"] = action.sl
 
             if action.layer_max is not None:
                 signal.layer_max = action.layer_max
+                history_event["layer_max"] = action.layer_max
 
             if signal.tps and set(signal.tps).issubset(set(signal.tp_hits)):
                 signal.status = "COMPLETED"
 
         elif action.kind == "partial_close":
             if action.partial_percent is not None:
+                history_event["partial_percent"] = action.partial_percent
                 fraction = max(0.0, min(1.0, action.partial_percent / 100.0))
                 signal.remaining_fraction *= 1.0 - fraction
                 signal.partial_close_count += 1
                 if signal.remaining_fraction <= 1e-9:
                     signal.remaining_fraction = 0.0
                     signal.status = "CLOSED"
+                history_event["remaining_fraction"] = signal.remaining_fraction
 
         elif action.kind == "add_layer":
             signal.layers += 1
+            history_event["layers"] = signal.layers
 
         elif action.kind == "reenter":
             signal.reentries += 1
+            history_event["reentries"] = signal.reentries
 
         elif action.kind == "cancel":
             signal.status = "CANCELLED"
+            history_event["status"] = signal.status
 
         elif action.kind == "close":
             signal.status = "CLOSED"
+            history_event["status"] = signal.status
 
         elif action.kind == "stop_loss":
             signal.status = "STOPPED"
+            history_event["status"] = signal.status
 
         elif action.kind == "setup_failed":
             signal.status = "FAILED"
+            history_event["status"] = signal.status
 
         elif action.kind == "breakeven_close":
             signal.status = "BREAKEVEN"
+            history_event["status"] = signal.status
 
+        signal.history.append(history_event)
         signal.last_update_at = timestamp
         signal.last_update_text = text
 
