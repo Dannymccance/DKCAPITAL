@@ -8,6 +8,7 @@ from dkcapital.signal_parser import ParsedAction, parse_actions
 
 OPEN_STATUSES = {"ACTIVE"}
 GROUP_WINDOW_MINUTES = 180
+AMENDMENT_WINDOW_SECONDS = 30
 
 
 def _timestamp(event: dict[str, Any]) -> str:
@@ -112,6 +113,24 @@ class SignalState:
                     assert action.entry_low is not None
                     assert action.entry_high is not None
 
+                    amendment_target = self._amendment_target(
+                        chat_id=chat_id,
+                        timestamp=timestamp,
+                        symbol=action.symbol,
+                        direction=action.direction,
+                    )
+                    if amendment_target is not None:
+                        self._apply_signal_amendment(
+                            amendment_target,
+                            action,
+                            message_id,
+                            timestamp,
+                            text,
+                            market,
+                        )
+                        message_targets = [amendment_target.signal_id]
+                        continue
+
                     signal_id = f"{chat_id}:{message_id}"
                     group_id = self._group_for_new_signal(
                         chat_id=chat_id,
@@ -198,6 +217,81 @@ class SignalState:
             elif inherited_targets:
                 self.message_targets[(chat_id, message_id)] = inherited_targets
 
+    def _amendment_target(
+        self,
+        *,
+        chat_id: int,
+        timestamp: str,
+        symbol: str,
+        direction: str,
+    ) -> Signal | None:
+        compatible = [
+            signal
+            for signal in self.signals.values()
+            if signal.chat_id == chat_id
+            and signal.status in OPEN_STATUSES
+            and signal.symbol == symbol
+            and signal.direction == direction
+        ]
+        if not compatible:
+            return None
+
+        latest = compatible[-1]
+        comparison_time = latest.last_update_at or latest.opened_at
+        if self._within_seconds(
+            comparison_time,
+            timestamp,
+            AMENDMENT_WINDOW_SECONDS,
+        ):
+            return latest
+        return None
+
+    def _apply_signal_amendment(
+        self,
+        signal: Signal,
+        action: ParsedAction,
+        message_id: int,
+        timestamp: str,
+        text: str,
+        market: dict[str, Any] | None,
+    ) -> None:
+        if message_id not in signal.source_message_ids:
+            signal.source_message_ids.append(message_id)
+
+        history_event: dict[str, Any] = {
+            "timestamp": timestamp,
+            "message_id": message_id,
+            "kind": "signal_amendment",
+            "previous_entry_low": signal.entry_low,
+            "previous_entry_high": signal.entry_high,
+            "previous_sl": signal.current_sl,
+            "previous_tps": dict(signal.tps),
+            "entry_low": action.entry_low,
+            "entry_high": action.entry_high,
+            "sl": action.sl,
+            "tps": dict(action.tps),
+        }
+        if market is not None:
+            history_event["market"] = market
+
+        signal.entry_low = float(action.entry_low)
+        signal.entry_high = float(action.entry_high)
+        signal.tps = self._validated_tps(
+            action.tps,
+            signal.direction,
+            signal.entry_low,
+            signal.entry_high,
+        )
+        signal.original_sl = action.sl
+        signal.current_sl = action.sl
+        signal.sl_mode = "PRICE" if action.sl is not None else "UNSET"
+        signal.layer_max = action.layer_max
+        if action.source_style is not None:
+            signal.source_style = action.source_style
+        signal.last_update_at = timestamp
+        signal.last_update_text = text
+        signal.history.append(history_event)
+
     def _group_for_new_signal(
         self,
         *,
@@ -281,13 +375,17 @@ class SignalState:
         return []
 
     @staticmethod
-    def _within_minutes(earlier: str, later: str, minutes: int) -> bool:
+    def _within_seconds(earlier: str, later: str, seconds: int) -> bool:
         try:
             a = datetime.fromisoformat(earlier.replace("Z", "+00:00"))
             b = datetime.fromisoformat(later.replace("Z", "+00:00"))
-            return 0 <= (b - a).total_seconds() <= minutes * 60
+            return 0 <= (b - a).total_seconds() <= seconds
         except (TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _within_minutes(earlier: str, later: str, minutes: int) -> bool:
+        return SignalState._within_seconds(earlier, later, minutes * 60)
 
     @staticmethod
     def _validated_tps(
