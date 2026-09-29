@@ -553,6 +553,17 @@ class XauSignalFollowingStrategy:
         )
         return True
 
+    def _provider_stop_actionable(
+        self,
+        direction: str,
+        stop_loss: float,
+        quote: dict[str, Any],
+    ) -> bool:
+        bid, ask, _ = self._quote_prices(quote)
+        if direction == "BUY":
+            return float(stop_loss) < bid
+        return float(stop_loss) > ask
+
     def _reconcile_temporary_stop(
         self,
         account: PaperAccount,
@@ -565,35 +576,62 @@ class XauSignalFollowingStrategy:
         if position.status != "OPEN" or not position.temporary_stop_active:
             return False
 
-        provider_valid = (
-            candidate.current_sl is not None
-            and not self._structural_stop_wrong_side(candidate)
+        changed = False
+        provider_stop = (
+            float(candidate.current_sl)
+            if candidate.current_sl is not None
+            else None
         )
-        if provider_valid:
-            provider_stop = float(candidate.current_sl)
-            changed = self._apply_protective_stop(
-                account,
-                position,
+        provider_stop_changed = (
+            provider_stop is not None
+            and (
+                position.last_provider_stop_seen is None
+                or abs(provider_stop - position.last_provider_stop_seen) > 1e-9
+            )
+        )
+
+        if provider_stop_changed:
+            position.last_provider_stop_seen = provider_stop
+            if self._provider_stop_actionable(
+                position.direction,
                 provider_stop,
                 quote,
-                timestamp=timestamp,
-                reason="provider_corrected_temporary_sl",
-                stop_source="PROVIDER",
-                temporary=False,
-            )
+            ):
+                changed = self._apply_protective_stop(
+                    account,
+                    position,
+                    provider_stop,
+                    quote,
+                    timestamp=timestamp,
+                    reason="provider_corrected_temporary_sl",
+                    stop_source="PROVIDER",
+                    temporary=False,
+                )
+                candidate.execution_note = (
+                    f"Provider SL corrected to {provider_stop:.2f}; "
+                    "temporary protection removed."
+                )
+                account._audit(
+                    "temporary_stop_replaced",
+                    signal_id=candidate.signal_id,
+                    position_id=position.position_id,
+                    provider_stop_loss=provider_stop,
+                )
+                return changed
+
             candidate.execution_note = (
-                f"Provider SL corrected to {provider_stop:.2f}; "
-                "temporary protection removed."
+                f"Provider SL update {provider_stop:.2f} is still not protective "
+                "at the live market; TEMP SL remains active."
             )
             account._audit(
-                "temporary_stop_replaced",
+                "provider_stop_correction_still_invalid",
                 signal_id=candidate.signal_id,
                 position_id=position.position_id,
                 provider_stop_loss=provider_stop,
             )
-            return changed
+            changed = True
 
-        desired_temp = self._temporary_stop(candidate)
+        desired_temp = self._temporary_stop(candidate, position.entry_price)
         if position.stop_loss is None or abs(float(position.stop_loss) - desired_temp) > 1e-9:
             changed = self._apply_protective_stop(
                 account,
@@ -604,14 +642,13 @@ class XauSignalFollowingStrategy:
                 reason="temporary_sl_recalculated",
                 stop_source="TEMPORARY",
                 temporary=True,
-            )
+            ) or changed
             candidate.execution_note = (
                 f"TEMP SL recalculated to {desired_temp:.2f} from latest entry zone; "
                 "waiting for provider SL correction."
             )
-            return changed
 
-        return False
+        return changed
 
     def _provider_stop(
         self,
@@ -623,10 +660,23 @@ class XauSignalFollowingStrategy:
         timestamp: str,
         reason: str,
     ) -> bool:
+        requested = float(requested_stop)
+        position.last_provider_stop_seen = requested
+
+        if (
+            position.temporary_stop_active
+            and not self._provider_stop_actionable(
+                position.direction,
+                requested,
+                quote,
+            )
+        ):
+            return False
+
         return self._apply_protective_stop(
             account,
             position,
-            float(requested_stop),
+            requested,
             quote,
             timestamp=timestamp,
             reason=reason,
