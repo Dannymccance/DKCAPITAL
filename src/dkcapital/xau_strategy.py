@@ -118,6 +118,17 @@ class XauSignalFollowingStrategy:
         return stepped_lots, quantity_oz, actual_risk
 
     @staticmethod
+    def _structural_stop_wrong_side(candidate: PaperCandidate) -> bool:
+        if candidate.current_sl is None:
+            return False
+        low = min(candidate.entry_low, candidate.entry_high)
+        high = max(candidate.entry_low, candidate.entry_high)
+        stop = float(candidate.current_sl)
+        if candidate.direction == "BUY":
+            return stop >= low
+        return stop <= high
+
+    @staticmethod
     def _stop_invalid(direction: str, fill_price: float, stop_loss: float) -> bool:
         if direction == "BUY":
             return fill_price <= stop_loss
@@ -207,7 +218,11 @@ class XauSignalFollowingStrategy:
         for candidate in account.candidates.values():
             if candidate.signal_id == new_candidate.signal_id:
                 continue
-            if candidate.execution_status not in {"PENDING_SL", "PENDING_STRATEGY"}:
+            if candidate.execution_status not in {
+                "PENDING_SL",
+                "PENDING_STRATEGY",
+                "PENDING_INVALID_SL",
+            }:
                 continue
             opened = self._iso(candidate.opened_at)
             if opened is None or opened >= new_opened:
@@ -284,12 +299,29 @@ class XauSignalFollowingStrategy:
         fill = self._entry_fill(direction, quote)
         stop = float(candidate.current_sl)
 
+        if self._structural_stop_wrong_side(candidate):
+            candidate.execution_status = "PENDING_INVALID_SL"
+            candidate.execution_note = (
+                f"Waiting for provider SL correction: {direction} setup has "
+                f"SL {stop:.2f} on the wrong side of entry "
+                f"{candidate.entry_low:.2f}-{candidate.entry_high:.2f}."
+            )
+            account._audit(
+                "paper_entry_waiting_invalid_sl",
+                signal_id=candidate.signal_id,
+                direction=direction,
+                entry_low=candidate.entry_low,
+                entry_high=candidate.entry_high,
+                stop_loss=stop,
+            )
+            return False
+
         if self._stop_invalid(direction, fill, stop):
             self._reject(
                 account,
                 candidate,
                 "REJECTED_INVALIDATED",
-                "Live market has already traded beyond the provider structural stop.",
+                "Live market has already traded beyond the valid provider structural stop.",
             )
             return False
 
@@ -721,19 +753,39 @@ class XauSignalFollowingStrategy:
                 activated is not None
                 and opened is not None
                 and opened < activated
-                and candidate.execution_status in {"PENDING_STRATEGY", "PENDING_SL"}
+                and candidate.execution_status in {
+                    "PENDING_STRATEGY",
+                    "PENDING_SL",
+                    "PENDING_INVALID_SL",
+                }
             ):
                 candidate.execution_status = "SKIPPED_PRE_STRATEGY"
                 candidate.execution_note = "Signal predates paper-strategy activation."
                 changed = True
                 continue
 
-            if candidate.execution_status in {"PENDING_STRATEGY", "PENDING_SL"}:
+            if (
+                candidate.execution_status == "REJECTED_INVALIDATED"
+                and self._structural_stop_wrong_side(candidate)
+            ):
+                candidate.execution_status = "PENDING_INVALID_SL"
+                candidate.execution_note = "Waiting for provider correction to malformed SL."
+                changed = True
+
+            if candidate.execution_status in {
+                "PENDING_STRATEGY",
+                "PENDING_SL",
+                "PENDING_INVALID_SL",
+            }:
                 self._cancel_older_pending(account, candidate)
 
             position = self._position_for(account, candidate.signal_id)
             if position is None:
-                if candidate.execution_status in {"PENDING_STRATEGY", "PENDING_SL"}:
+                if candidate.execution_status in {
+                    "PENDING_STRATEGY",
+                    "PENDING_SL",
+                    "PENDING_INVALID_SL",
+                }:
                     changed = self._enter_candidate(
                         account,
                         candidate,
