@@ -40,9 +40,9 @@ def _symbol(text: str) -> str | None:
 
 
 def _direction(text: str) -> str | None:
-    if re.search(r"\bBUY(?:ER|ERS)?\b", text):
+    if re.search(r"\b(?:BUY(?:ER|ERS)?|LONGS?)\b", text):
         return "BUY"
-    if re.search(r"\bSELL(?:ER|ERS)?\b", text):
+    if re.search(r"\b(?:SELL(?:ER|ERS)?|SHORTS?)\b", text):
         return "SELL"
     return None
 
