@@ -294,8 +294,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     # These deliberately do not require a ticker or reply target. The state
     # resolver still scopes them to the originating Telegram chat/provider.
     side_close = re.search(
-        r"\\b(?:TAKE\\s+PROFITS?|CLOSE|EXIT|SECURE\\s+PROFITS?)\\s+"
-        r"(?:ON\\s+)?ALL\\s+(LONGS?|SHORTS?|BUYS?|SELLS?)\\b",
+        r"\b(?:TAKE\s+PROFITS?|CLOSE|EXIT|SECURE\s+PROFITS?)\s+"
+        r"(?:ON\s+)?ALL\s+(LONGS?|SHORTS?|BUYS?|SELLS?)\b",
         normalized,
     )
     if side_close:
