@@ -52,6 +52,7 @@ class Signal:
 class SignalState:
     def __init__(self) -> None:
         self.messages: dict[tuple[int, int], dict[str, Any]] = {}
+        self.deleted_messages: dict[tuple[int, int], dict[str, Any]] = {}
         self.signals: dict[str, Signal] = {}
         self.message_targets: dict[tuple[int, int], list[str]] = {}
         self.unresolved_actions: list[dict[str, Any]] = []
@@ -65,10 +66,15 @@ class SignalState:
         if event_type in {"new_message", "historical_message", "message_edited"}:
             message_id = event.get("message_id")
             if message_id is not None:
-                self.messages[(int(chat_id), int(message_id))] = event
+                key = (int(chat_id), int(message_id))
+                self.messages[key] = event
+                self.deleted_messages.pop(key, None)
         elif event_type == "message_deleted":
             for message_id in event.get("message_ids", []):
-                self.messages.pop((int(chat_id), int(message_id)), None)
+                key = (int(chat_id), int(message_id))
+                removed = self.messages.pop(key, None)
+                if removed is not None:
+                    self.deleted_messages[key] = removed
 
         if rebuild:
             self.rebuild()
@@ -79,7 +85,7 @@ class SignalState:
         self.unresolved_actions = []
 
         ordered = sorted(
-            self.messages.values(),
+            self._events_with_deleted_amendment_predecessors(),
             key=lambda event: (
                 _timestamp(event),
                 int(event.get("chat_id") or 0),
@@ -216,6 +222,76 @@ class SignalState:
                 self.message_targets[(chat_id, message_id)] = message_targets
             elif inherited_targets:
                 self.message_targets[(chat_id, message_id)] = inherited_targets
+
+    def _events_with_deleted_amendment_predecessors(
+        self,
+    ) -> list[dict[str, Any]]:
+        selected = list(self.messages.values())
+        remaining = list(self.deleted_messages.values())
+
+        # A deleted provider post can still be the root of a correction chain.
+        # Re-introduce only deleted full signals that are followed by a matching
+        # same-source/symbol/direction signal within the amendment window.
+        changed = True
+        while changed and remaining:
+            changed = False
+            still_remaining: list[dict[str, Any]] = []
+            for deleted in remaining:
+                deleted_identity = self._new_signal_identity(deleted)
+                if deleted_identity is None:
+                    still_remaining.append(deleted)
+                    continue
+
+                deleted_chat, deleted_symbol, deleted_direction = deleted_identity
+                matched = False
+                for later in selected:
+                    later_identity = self._new_signal_identity(later)
+                    if later_identity is None:
+                        continue
+                    later_chat, later_symbol, later_direction = later_identity
+                    if (
+                        deleted_chat == later_chat
+                        and deleted_symbol == later_symbol
+                        and deleted_direction == later_direction
+                        and self._within_seconds(
+                            _timestamp(deleted),
+                            _timestamp(later),
+                            AMENDMENT_WINDOW_SECONDS,
+                        )
+                    ):
+                        selected.append(deleted)
+                        matched = True
+                        changed = True
+                        break
+
+                if not matched:
+                    still_remaining.append(deleted)
+            remaining = still_remaining
+
+        return selected
+
+    @staticmethod
+    def _new_signal_identity(
+        event: dict[str, Any],
+    ) -> tuple[int, str, str] | None:
+        chat_id = event.get("chat_id")
+        message_id = event.get("message_id")
+        if chat_id is None or message_id is None:
+            return None
+
+        reply_to = event.get("reply_to_message_id")
+        actions = parse_actions(
+            str(event.get("text") or ""),
+            int(reply_to) if reply_to is not None else None,
+        )
+        for action in actions:
+            if (
+                action.kind == "new_signal"
+                and action.symbol is not None
+                and action.direction is not None
+            ):
+                return int(chat_id), action.symbol, action.direction
+        return None
 
     def _amendment_target(
         self,
