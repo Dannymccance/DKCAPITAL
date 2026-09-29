@@ -1113,7 +1113,7 @@ def build_bot(settings: Settings) -> commands.Bot:
         if changed:
             _write_json(settings.discord_internal_signals_state_path, registry)
 
-    @tasks.loop(seconds=2)
+    @tasks.loop(minutes=1)
     async def internal_signal_loop() -> None:
         await sync_internal_signals()
 
@@ -1121,7 +1121,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def before_internal_signal_loop() -> None:
         await bot.wait_until_ready()
 
-    @tasks.loop(seconds=5)
+    @tasks.loop(minutes=1)
     async def paper_dashboard_loop() -> None:
         await update_paper_dashboard()
 
@@ -1129,7 +1129,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def before_paper_dashboard_loop() -> None:
         await bot.wait_until_ready()
 
-    @tasks.loop(seconds=5)
+    @tasks.loop(minutes=1)
     async def dashboard_loop() -> None:
         await update_dashboard()
 
