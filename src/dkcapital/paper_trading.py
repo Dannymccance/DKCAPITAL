@@ -81,6 +81,7 @@ class PaperPosition:
     be_trigger_tp_index: int | None = None
     temporary_stop_active: bool = False
     stop_source: str = "PROVIDER"
+    last_provider_stop_seen: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -431,6 +432,7 @@ class PaperAccount:
         be_trigger_tp_index: int | None = None,
         temporary_stop_active: bool = False,
         stop_source: str = "PROVIDER",
+        last_provider_stop_seen: float | None = None,
     ) -> PaperPosition:
         if self.strategy_mode == "observe_only":
             raise RuntimeError("paper strategy is observe_only; execution is disabled")
@@ -466,6 +468,11 @@ class PaperAccount:
             be_trigger_tp_index=be_trigger_tp_index,
             temporary_stop_active=bool(temporary_stop_active),
             stop_source=str(stop_source),
+            last_provider_stop_seen=(
+                float(last_provider_stop_seen)
+                if last_provider_stop_seen is not None
+                else None
+            ),
             last_mark_price=self.last_mark_price,
             history=[
                 {
