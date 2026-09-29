@@ -689,7 +689,9 @@ class XauSignalFollowingStrategy:
             self._local_date(timestamp),
             daily_loss_pct=self.config.daily_loss_pct,
         )
-        changed = account.check_daily_stop(timestamp=timestamp)
+        daily_stop_before = account.daily_stop_triggered
+        account.check_daily_stop(timestamp=timestamp)
+        changed = account.daily_stop_triggered != daily_stop_before
 
         activated = self._iso(account.strategy_activated_at)
         candidates = sorted(
@@ -746,5 +748,8 @@ class XauSignalFollowingStrategy:
                     timestamp=timestamp,
                 ) or changed
 
+        daily_stop_before = account.daily_stop_triggered
         account.check_daily_stop(timestamp=timestamp)
+        if account.daily_stop_triggered != daily_stop_before:
+            changed = True
         return changed
