@@ -256,6 +256,7 @@ class SignalState:
                         deleted_chat == later_chat
                         and deleted_symbol == later_symbol
                         and deleted_direction == later_direction
+                        and not self._is_scale_in_text(str(later.get("text") or ""))
                         and self._within_seconds(
                             _timestamp(deleted),
                             _timestamp(later),
