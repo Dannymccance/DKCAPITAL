@@ -19,6 +19,8 @@ class XauStrategyConfig:
     daily_loss_pct: float = 0.02
     contract_oz_per_lot: float = 100.0
     lot_step: float = 0.01
+    temporary_sl_min_buffer_points: float = 6.0
+    temporary_sl_zone_width_multiple: float = 2.0
     timezone_name: str = "Europe/Isle_of_Man"
 
 
@@ -116,6 +118,29 @@ class XauSignalFollowingStrategy:
         quantity_oz = stepped_lots * self.config.contract_oz_per_lot
         actual_risk = quantity_oz * stop_distance
         return stepped_lots, quantity_oz, actual_risk
+
+    def _temporary_stop(
+        self,
+        candidate: PaperCandidate,
+        fill_price: float | None = None,
+    ) -> float:
+        low = min(candidate.entry_low, candidate.entry_high)
+        high = max(candidate.entry_low, candidate.entry_high)
+        zone_width = max(0.0, high - low)
+        buffer = max(
+            self.config.temporary_sl_min_buffer_points,
+            zone_width * self.config.temporary_sl_zone_width_multiple,
+        )
+        if candidate.direction == "BUY":
+            stop = low - buffer
+            if fill_price is not None:
+                stop = min(stop, float(fill_price) - buffer)
+            return stop
+
+        stop = high + buffer
+        if fill_price is not None:
+            stop = max(stop, float(fill_price) + buffer)
+        return stop
 
     @staticmethod
     def _structural_stop_wrong_side(candidate: PaperCandidate) -> bool:
@@ -281,11 +306,6 @@ class XauSignalFollowingStrategy:
             )
             return False
 
-        if candidate.current_sl is None:
-            candidate.execution_status = "PENDING_SL"
-            candidate.execution_note = "Waiting for provider structural stop loss."
-            return False
-
         if account.daily_stop_triggered:
             self._reject(
                 account,
@@ -297,33 +317,28 @@ class XauSignalFollowingStrategy:
 
         direction = candidate.direction
         fill = self._entry_fill(direction, quote)
-        stop = float(candidate.current_sl)
 
-        if self._structural_stop_wrong_side(candidate):
-            candidate.execution_status = "PENDING_INVALID_SL"
-            candidate.execution_note = (
-                f"Waiting for provider SL correction: {direction} setup has "
-                f"SL {stop:.2f} on the wrong side of entry "
-                f"{candidate.entry_low:.2f}-{candidate.entry_high:.2f}."
-            )
-            account._audit(
-                "paper_entry_waiting_invalid_sl",
-                signal_id=candidate.signal_id,
-                direction=direction,
-                entry_low=candidate.entry_low,
-                entry_high=candidate.entry_high,
-                stop_loss=stop,
-            )
-            return False
+        provider_stop_missing = candidate.current_sl is None
+        provider_stop_wrong_side = (
+            not provider_stop_missing
+            and self._structural_stop_wrong_side(candidate)
+        )
+        temporary_stop = provider_stop_missing or provider_stop_wrong_side
 
-        if self._stop_invalid(direction, fill, stop):
-            self._reject(
-                account,
-                candidate,
-                "REJECTED_INVALIDATED",
-                "Live market has already traded beyond the valid provider structural stop.",
-            )
-            return False
+        if temporary_stop:
+            stop = self._temporary_stop(candidate, fill)
+            stop_source = "TEMPORARY"
+        else:
+            stop = float(candidate.current_sl)
+            stop_source = "PROVIDER"
+            if self._stop_invalid(direction, fill, stop):
+                self._reject(
+                    account,
+                    candidate,
+                    "REJECTED_INVALIDATED",
+                    "Live market has already traded beyond the valid provider structural stop.",
+                )
+                return False
 
         all_tps = dict(candidate.tps)
         eligible_tps = self._future_tp_indices(direction, fill, all_tps)
@@ -370,6 +385,13 @@ class XauSignalFollowingStrategy:
             lot_size=lots,
             eligible_tp_indices=eligible_tps,
             be_trigger_tp_index=(eligible_tps[0] if eligible_tps else None),
+            temporary_stop_active=temporary_stop,
+            stop_source=stop_source,
+            last_provider_stop_seen=(
+                float(candidate.current_sl)
+                if candidate.current_sl is not None
+                else None
+            ),
         )
         self._build_tp_schedule(
             position=position,
@@ -378,32 +400,288 @@ class XauSignalFollowingStrategy:
         )
         self._mark_existing_history_processed(candidate)
         candidate.execution_status = "OPEN"
-        candidate.execution_note = (
-            f"Market filled {lots:.2f} lots at {fill:.2f}; "
-            f"initial risk ${actual_risk:,.2f}."
+        if temporary_stop:
+            candidate.execution_note = (
+                f"Market filled {lots:.2f} lots at {fill:.2f}; "
+                f"TEMP SL {stop:.2f}; initial risk ${actual_risk:,.2f}. "
+                "Waiting for provider SL correction."
+            )
+            account._audit(
+                "temporary_stop_created",
+                signal_id=candidate.signal_id,
+                position_id=position.position_id,
+                temporary_stop_loss=stop,
+                provider_stop=candidate.current_sl,
+            )
+        else:
+            candidate.execution_note = (
+                f"Market filled {lots:.2f} lots at {fill:.2f}; "
+                f"initial risk ${actual_risk:,.2f}."
+            )
+        return True
+
+    def _position_risk_at_stop(
+        self,
+        position: PaperPosition,
+        stop_loss: float,
+    ) -> float:
+        if position.direction == "BUY":
+            distance = max(0.0, position.entry_price - float(stop_loss))
+        else:
+            distance = max(0.0, float(stop_loss) - position.entry_price)
+        return distance * position.remaining_quantity_oz
+
+    def _allowed_position_risk(
+        self,
+        account: PaperAccount,
+        position: PaperPosition,
+    ) -> float:
+        current_position_risk = (
+            self._position_risk_at_stop(position, float(position.stop_loss))
+            if position.stop_loss is not None
+            else 0.0
+        )
+        total_directional = account.current_directional_risk_usd(position.direction)
+        other_directional = max(0.0, total_directional - current_position_risk)
+        direction_capacity = max(
+            0.0,
+            account.balance_usd * self.config.direction_risk_cap_pct
+            - other_directional,
+        )
+        trade_cap = account.balance_usd * self.config.risk_pct
+        original_cap = (
+            position.initial_risk_usd
+            if position.initial_risk_usd > 0
+            else trade_cap
+        )
+        return max(0.0, min(original_cap, trade_cap, direction_capacity))
+
+    def _resize_for_stop(
+        self,
+        account: PaperAccount,
+        position: PaperPosition,
+        new_stop: float,
+        quote: dict[str, Any],
+        *,
+        timestamp: str,
+        reason: str,
+    ) -> bool:
+        if position.status != "OPEN":
+            return False
+
+        if position.direction == "BUY":
+            distance = max(0.0, position.entry_price - float(new_stop))
+        else:
+            distance = max(0.0, float(new_stop) - position.entry_price)
+        if distance <= 0:
+            return False
+
+        allowed_risk = self._allowed_position_risk(account, position)
+        quantity_step_oz = self.config.contract_oz_per_lot * self.config.lot_step
+        raw_allowed_qty = allowed_risk / distance if allowed_risk > 0 else 0.0
+        allowed_qty = (
+            math.floor((raw_allowed_qty + 1e-12) / quantity_step_oz)
+            * quantity_step_oz
+            if quantity_step_oz > 0
+            else raw_allowed_qty
+        )
+        allowed_qty = max(0.0, allowed_qty)
+
+        if allowed_qty + 1e-9 >= position.remaining_quantity_oz:
+            return False
+
+        quantity_to_close = position.remaining_quantity_oz - allowed_qty
+        account.close_quantity(
+            position_id=position.position_id,
+            quantity_oz=quantity_to_close,
+            fill_price=self._exit_fill(position.direction, quote),
+            reason=reason,
+            closed_at=timestamp,
         )
         return True
+
+    def _apply_protective_stop(
+        self,
+        account: PaperAccount,
+        position: PaperPosition,
+        stop: float,
+        quote: dict[str, Any],
+        *,
+        timestamp: str,
+        reason: str,
+        stop_source: str,
+        temporary: bool,
+    ) -> bool:
+        if position.status != "OPEN":
+            return False
+
+        requested = float(stop)
+        if position.breakeven_locked:
+            if position.direction == "BUY":
+                requested = max(requested, position.entry_price)
+            else:
+                requested = min(requested, position.entry_price)
+            stop_source = "BREAKEVEN"
+            temporary = False
+
+        resized = self._resize_for_stop(
+            account,
+            position,
+            requested,
+            quote,
+            timestamp=timestamp,
+            reason=f"{reason}_risk_resize",
+        )
+        if position.status != "OPEN":
+            return True
+
+        if (
+            position.stop_loss is not None
+            and abs(float(position.stop_loss) - requested) <= 1e-9
+            and position.stop_source == stop_source
+            and position.temporary_stop_active == temporary
+        ):
+            return resized
+
+        account.set_stop(
+            position_id=position.position_id,
+            stop_loss=requested,
+            reason=reason,
+            timestamp=timestamp,
+            stop_source=stop_source,
+            temporary_stop_active=temporary,
+        )
+        return True
+
+    def _provider_stop_actionable(
+        self,
+        direction: str,
+        stop_loss: float,
+        quote: dict[str, Any],
+    ) -> bool:
+        bid, ask, _ = self._quote_prices(quote)
+        if direction == "BUY":
+            return float(stop_loss) < bid
+        return float(stop_loss) > ask
+
+    def _reconcile_temporary_stop(
+        self,
+        account: PaperAccount,
+        candidate: PaperCandidate,
+        position: PaperPosition,
+        quote: dict[str, Any],
+        *,
+        timestamp: str,
+    ) -> bool:
+        if position.status != "OPEN" or not position.temporary_stop_active:
+            return False
+
+        changed = False
+        provider_stop = (
+            float(candidate.current_sl)
+            if candidate.current_sl is not None
+            else None
+        )
+        provider_stop_changed = (
+            provider_stop is not None
+            and (
+                position.last_provider_stop_seen is None
+                or abs(provider_stop - position.last_provider_stop_seen) > 1e-9
+            )
+        )
+
+        if provider_stop_changed:
+            position.last_provider_stop_seen = provider_stop
+            if self._provider_stop_actionable(
+                position.direction,
+                provider_stop,
+                quote,
+            ):
+                changed = self._apply_protective_stop(
+                    account,
+                    position,
+                    provider_stop,
+                    quote,
+                    timestamp=timestamp,
+                    reason="provider_corrected_temporary_sl",
+                    stop_source="PROVIDER",
+                    temporary=False,
+                )
+                candidate.execution_note = (
+                    f"Provider SL corrected to {provider_stop:.2f}; "
+                    "temporary protection removed."
+                )
+                account._audit(
+                    "temporary_stop_replaced",
+                    signal_id=candidate.signal_id,
+                    position_id=position.position_id,
+                    provider_stop_loss=provider_stop,
+                )
+                return changed
+
+            candidate.execution_note = (
+                f"Provider SL update {provider_stop:.2f} is still not protective "
+                "at the live market; TEMP SL remains active."
+            )
+            account._audit(
+                "provider_stop_correction_still_invalid",
+                signal_id=candidate.signal_id,
+                position_id=position.position_id,
+                provider_stop_loss=provider_stop,
+            )
+            changed = True
+
+        desired_temp = self._temporary_stop(candidate, position.entry_price)
+        if position.stop_loss is None or abs(float(position.stop_loss) - desired_temp) > 1e-9:
+            changed = self._apply_protective_stop(
+                account,
+                position,
+                desired_temp,
+                quote,
+                timestamp=timestamp,
+                reason="temporary_sl_recalculated",
+                stop_source="TEMPORARY",
+                temporary=True,
+            ) or changed
+            candidate.execution_note = (
+                f"TEMP SL recalculated to {desired_temp:.2f} from latest entry zone; "
+                "waiting for provider SL correction."
+            )
+
+        return changed
 
     def _provider_stop(
         self,
         account: PaperAccount,
         position: PaperPosition,
         requested_stop: float,
+        quote: dict[str, Any],
         *,
         timestamp: str,
         reason: str,
-    ) -> None:
-        stop = float(requested_stop)
-        if position.breakeven_locked:
-            if position.direction == "BUY":
-                stop = max(stop, position.entry_price)
-            else:
-                stop = min(stop, position.entry_price)
-        account.set_stop(
-            position_id=position.position_id,
-            stop_loss=stop,
-            reason=reason,
+    ) -> bool:
+        requested = float(requested_stop)
+        position.last_provider_stop_seen = requested
+
+        if (
+            position.temporary_stop_active
+            and not self._provider_stop_actionable(
+                position.direction,
+                requested,
+                quote,
+            )
+        ):
+            return False
+
+        return self._apply_protective_stop(
+            account,
+            position,
+            requested,
+            quote,
             timestamp=timestamp,
+            reason=reason,
+            stop_source="PROVIDER",
+            temporary=False,
         )
 
     def _rebuild_remaining_targets(
@@ -482,6 +760,8 @@ class XauSignalFollowingStrategy:
                 stop_loss=position.entry_price,
                 reason=f"{reason_prefix}_tp{tp_index}_breakeven",
                 timestamp=timestamp,
+                stop_source="BREAKEVEN",
+                temporary_stop_active=False,
             )
         return True
 
@@ -530,6 +810,8 @@ class XauSignalFollowingStrategy:
                 stop_loss=position.entry_price,
                 reason="maintain_weighted_breakeven_after_layer",
                 timestamp=timestamp,
+                stop_source="BREAKEVEN",
+                temporary_stop_active=False,
             )
         self._rebuild_remaining_targets(position, candidate)
         return True
@@ -581,17 +863,19 @@ class XauSignalFollowingStrategy:
                         stop_loss=position.entry_price,
                         reason="provider_breakeven",
                         timestamp=timestamp,
+                        stop_source="BREAKEVEN",
+                        temporary_stop_active=False,
                     )
                     changed = True
                 elif item.get("sl_after") is not None:
-                    self._provider_stop(
+                    changed = self._provider_stop(
                         account,
                         position,
                         float(item["sl_after"]),
+                        event_quote,
                         timestamp=timestamp,
                         reason="provider_sl_update",
-                    )
-                    changed = True
+                    ) or changed
 
                 if item.get("tps"):
                     candidate.tps = {
@@ -683,7 +967,11 @@ class XauSignalFollowingStrategy:
                     position_id=position.position_id,
                     quantity_oz=position.remaining_quantity_oz,
                     fill_price=exit_price,
-                    reason="strategy_stop",
+                    reason=(
+                        "temporary_stop"
+                        if position.temporary_stop_active
+                        else "strategy_stop"
+                    ),
                     closed_at=timestamp,
                 )
                 return True
@@ -798,6 +1086,15 @@ class XauSignalFollowingStrategy:
 
             if position is None:
                 continue
+
+            if position.temporary_stop_active:
+                changed = self._reconcile_temporary_stop(
+                    account,
+                    candidate,
+                    position,
+                    quote,
+                    timestamp=timestamp,
+                ) or changed
 
             changed = self._process_provider_history(
                 account,

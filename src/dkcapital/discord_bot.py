@@ -537,6 +537,10 @@ def _paper_dashboard_embed(
             )
             stop = position.get("stop_loss")
             stop_text = "None" if stop is None else _price(stop)
+            if bool(position.get("temporary_stop_active")) and stop is not None:
+                stop_text = f"TEMP {stop_text}"
+            elif str(position.get("stop_source") or "") == "BREAKEVEN":
+                stop_text = f"BE {stop_text}"
             lots = float(position.get("lot_size") or 0.0)
             initial_risk = float(position.get("initial_risk_usd") or 0.0)
             if stop is None:
@@ -1109,7 +1113,7 @@ def build_bot(settings: Settings) -> commands.Bot:
         if changed:
             _write_json(settings.discord_internal_signals_state_path, registry)
 
-    @tasks.loop(seconds=2)
+    @tasks.loop(minutes=1)
     async def internal_signal_loop() -> None:
         await sync_internal_signals()
 
@@ -1117,7 +1121,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def before_internal_signal_loop() -> None:
         await bot.wait_until_ready()
 
-    @tasks.loop(seconds=5)
+    @tasks.loop(minutes=1)
     async def paper_dashboard_loop() -> None:
         await update_paper_dashboard()
 
@@ -1125,7 +1129,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def before_paper_dashboard_loop() -> None:
         await bot.wait_until_ready()
 
-    @tasks.loop(seconds=5)
+    @tasks.loop(minutes=1)
     async def dashboard_loop() -> None:
         await update_dashboard()
 
