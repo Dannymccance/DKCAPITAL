@@ -143,6 +143,11 @@ class PaperAccount:
 
         for raw in payload.get("candidates") or []:
             candidate = PaperCandidate(**raw)
+            if (
+                account.entry_policy == "all_parsed"
+                and candidate.execution_status == "OBSERVED"
+            ):
+                candidate.execution_status = "PENDING_STRATEGY"
             account.candidates[candidate.signal_id] = candidate
 
         for raw in payload.get("positions") or []:
