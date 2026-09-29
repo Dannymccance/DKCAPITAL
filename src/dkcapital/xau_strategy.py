@@ -967,7 +967,11 @@ class XauSignalFollowingStrategy:
                     position_id=position.position_id,
                     quantity_oz=position.remaining_quantity_oz,
                     fill_price=exit_price,
-                    reason="strategy_stop",
+                    reason=(
+                        "temporary_stop"
+                        if position.temporary_stop_active
+                        else "strategy_stop"
+                    ),
                     closed_at=timestamp,
                 )
                 return True
@@ -1082,6 +1086,15 @@ class XauSignalFollowingStrategy:
 
             if position is None:
                 continue
+
+            if position.temporary_stop_active:
+                changed = self._reconcile_temporary_stop(
+                    account,
+                    candidate,
+                    position,
+                    quote,
+                    timestamp=timestamp,
+                ) or changed
 
             changed = self._process_provider_history(
                 account,
