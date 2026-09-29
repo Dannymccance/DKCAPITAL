@@ -78,6 +78,105 @@ This is not financial advice"""
         self.assertEqual(action.entry_low, 81700)
         self.assertEqual(action.sl, 82370)
 
+    def test_structured_gold_signal_without_space_after_entry_price(self) -> None:
+        text = """I am personally entering
+
+Gold  sell  lower lot  half lots
+
+high risk
+
+Sell I’ve gone lower lot high risk
+
+Entry: 4157low lot
+
+Stop loss: 4164
+
+Take profit:   Open
+
+This is not financial advice
+
+DISCLAIMER"""
+        action = parse_actions(text)[0]
+        self.assertEqual(action.kind, "new_signal")
+        self.assertEqual(action.source_style, "elite")
+        self.assertEqual(action.symbol, "XAUUSD")
+        self.assertEqual(action.direction, "SELL")
+        self.assertEqual(action.entry_low, 4157)
+        self.assertEqual(action.entry_high, 4157)
+        self.assertEqual(action.sl, 4164)
+
+    def test_elite_labelled_price_separator_variants(self) -> None:
+        variants = (
+            ("Entry 4157", "Stop loss 4164"),
+            ("Entry - 4157", "Stop loss - 4164"),
+            ("Entry @ 4157", "SL @ 4164"),
+            ("Entry: 4,157low lot", "SL: 4,164"),
+        )
+        for entry_line, sl_line in variants:
+            with self.subTest(entry_line=entry_line, sl_line=sl_line):
+                text = f"""I am personally entering
+
+Gold sell lower lot
+
+Sell
+
+{entry_line}
+
+{sl_line}
+
+Take profit: Open"""
+                action = parse_actions(text)[0]
+                self.assertEqual(action.kind, "new_signal")
+                self.assertEqual(action.entry_low, 4157)
+                self.assertEqual(action.sl, 4164)
+
+    def test_elite_signal_can_open_before_sl_arrives(self) -> None:
+        text = """I am personally entering
+
+Gold buy lower lot
+
+Buy
+
+Entry: 4157low lot
+
+Take profit: Open"""
+        action = parse_actions(text)[0]
+        self.assertEqual(action.kind, "new_signal")
+        self.assertEqual(action.entry_low, 4157)
+        self.assertIsNone(action.sl)
+
+    def test_malformed_elite_new_signal_cannot_update_older_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(30, GOLD_4281, minute=0))
+
+        malformed = """I am personally entering
+
+Gold sell lower lot
+
+Sell
+
+Entry: pending
+
+Stop loss: 4164
+
+Take profit: Open"""
+        state.ingest_event(event(31, malformed, minute=5))
+
+        existing = state.signals["200:30"]
+        self.assertEqual(existing.current_sl, 4275)
+        self.assertNotIn("200:31", state.signals)
+
+        unresolved = [
+            item
+            for item in state.unresolved_actions
+            if item["message_id"] == 31
+        ]
+        self.assertEqual(len(unresolved), 1)
+        self.assertEqual(
+            unresolved[0]["action"]["kind"],
+            "unparsed_new_signal",
+        )
+
     def test_partial_and_stop_update_are_two_actions(self) -> None:
         actions = parse_actions(
             "Being cautious Take 50% partial on gold now and set stop loss to this 4281"
