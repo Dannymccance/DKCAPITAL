@@ -154,15 +154,71 @@ class XauStrategyTests(unittest.TestCase):
         )
         self.assertIn("paper:buy:2", account.positions)
 
-    def test_invalidated_trade_is_not_entered(self) -> None:
+    def test_valid_structural_stop_already_crossed_is_rejected(self) -> None:
         account = self.account()
-        account.sync_signal(sig("buy:1", sl=4161.0))
-        self.strategy.process(account, quote(4160.0))
+        account.sync_signal(sig("buy:1", sl=4150.0))
+        self.strategy.process(account, quote(4145.0))
         self.assertNotIn("paper:buy:1", account.positions)
         self.assertEqual(
             account.candidates["buy:1"].execution_status,
             "REJECTED_INVALIDATED",
         )
+
+    def test_wrong_side_provider_sl_waits_for_same_message_correction(self) -> None:
+        account = self.account()
+        malformed = sig(
+            "gws:6786",
+            sl=4342.0,
+            tps={"1": 4155.0, "2": 4157.5, "3": 4203.0},
+            opened_at="2026-09-29T15:28:32+00:00",
+        )
+        malformed["entry_low"] = 4148.0
+        malformed["entry_high"] = 4151.0
+        account.sync_signal(malformed)
+        self.strategy.process(account, quote(4158.73))
+
+        candidate = account.candidates["gws:6786"]
+        self.assertNotIn("paper:gws:6786", account.positions)
+        self.assertEqual(candidate.execution_status, "PENDING_INVALID_SL")
+        self.assertIn("wrong side", candidate.execution_note)
+
+        corrected = sig(
+            "gws:6786",
+            sl=4142.0,
+            tps={"1": 4155.0, "2": 4157.5, "3": 4203.0},
+            opened_at="2026-09-29T15:28:32+00:00",
+        )
+        corrected["entry_low"] = 4147.0
+        corrected["entry_high"] = 4150.0
+        corrected["original_sl"] = 4142.0
+        corrected["current_sl"] = 4142.0
+        corrected["history"][0]["entry_low"] = 4147.0
+        corrected["history"][0]["entry_high"] = 4150.0
+        corrected["history"][0]["sl"] = 4142.0
+
+        account.sync_signal(corrected)
+        self.strategy.process(account, quote(4158.73))
+
+        candidate = account.candidates["gws:6786"]
+        self.assertEqual(candidate.entry_low, 4147.0)
+        self.assertEqual(candidate.entry_high, 4150.0)
+        self.assertEqual(candidate.current_sl, 4142.0)
+        self.assertIn("paper:gws:6786", account.positions)
+        self.assertEqual(candidate.execution_status, "OPEN")
+
+    def test_legacy_wrong_side_rejection_migrates_to_waiting_state(self) -> None:
+        account = self.account()
+        malformed = sig("gws:6786", sl=4342.0)
+        malformed["entry_low"] = 4148.0
+        malformed["entry_high"] = 4151.0
+        account.sync_signal(malformed)
+        candidate = account.candidates["gws:6786"]
+        candidate.execution_status = "REJECTED_INVALIDATED"
+        candidate.execution_note = "Old engine rejection"
+
+        self.strategy.process(account, quote(4158.73))
+        self.assertEqual(candidate.execution_status, "PENDING_INVALID_SL")
+        self.assertNotIn("paper:gws:6786", account.positions)
 
     def test_all_targets_already_passed_are_not_chased(self) -> None:
         account = self.account()
