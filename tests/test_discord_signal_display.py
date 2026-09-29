@@ -97,7 +97,7 @@ class DiscordSignalDisplayTests(unittest.TestCase):
         self.assertIn("Live equity", rendered)
         self.assertIn("Maximum", rendered)
         self.assertIn("+1,200.0 pips", rendered)
-        self.assertIn("+600.0 pips", rendered)
+        self.assertIn("+350.0 pips", rendered)
         self.assertIn("$+600.00", rendered)
 
     def test_isle_of_man_footer_uses_bst_in_september(self) -> None:
