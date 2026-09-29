@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,6 +13,7 @@ from telethon.sessions import StringSession
 from dkcapital.config import ChatRef, Settings
 from dkcapital.event_store import JsonlEventStore
 from dkcapital.logging_setup import configure_logging
+from dkcapital.market_data import GoldSpotClient
 
 logger = logging.getLogger("dkcapital.telegram")
 
@@ -27,6 +29,10 @@ def _iso(value: Any) -> str | None:
 def _reply_to_message_id(message: Any) -> int | None:
     reply_to = getattr(message, "reply_to", None)
     return getattr(reply_to, "reply_to_msg_id", None) if reply_to else None
+
+
+def _is_gold_message(text: str) -> bool:
+    return bool(re.search(r"\b(?:GOLD|XAU(?:USD)?)\b", text, re.IGNORECASE))
 
 
 def _message_payload(event_type: str, message: Any) -> dict[str, Any]:
@@ -97,6 +103,10 @@ async def run() -> None:
     configure_logging(settings.log_level)
 
     store = JsonlEventStore(settings.telegram_event_log_path)
+    gold_spot = GoldSpotClient(
+        settings.gold_spot_url,
+        settings.gold_spot_refresh_seconds,
+    )
 
     client = TelegramClient(
         StringSession(settings.telegram_session_string),
@@ -122,6 +132,11 @@ async def run() -> None:
     chat_ids = await _resolve_chat_ids(client, settings.telegram_source_chats)
 
     async def record(payload: dict[str, Any]) -> None:
+        text = str(payload.get("text") or "")
+        if _is_gold_message(text):
+            quote = await gold_spot.quote()
+            if quote is not None:
+                payload["market"] = quote
         store.append(payload)
         logger.info("telegram_event %s", json.dumps(payload, ensure_ascii=False))
 

@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -13,6 +14,7 @@ from discord.ext import commands, tasks
 
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
+from dkcapital.market_data import GoldSpotClient
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -38,6 +40,228 @@ def _price(value: Any) -> str:
     if number.is_integer():
         return str(int(number))
     return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def _local_datetime(value: Any, timezone_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(ZoneInfo(timezone_name))
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _local_time(value: Any, timezone_name: str) -> str:
+    parsed = _local_datetime(value, timezone_name)
+    if parsed is None:
+        return "Unknown time"
+    return parsed.strftime("%H:%M %Z")
+
+
+def _local_timestamp(value: Any, timezone_name: str) -> str:
+    parsed = _local_datetime(value, timezone_name)
+    if parsed is None:
+        return str(value or "")
+    return parsed.strftime("%d %b %Y %H:%M:%S %Z")
+
+
+def _entry_anchor(signal: dict[str, Any]) -> float:
+    low = float(signal.get("entry_low") or 0.0)
+    high = float(signal.get("entry_high") or low)
+    return (low + high) / 2.0
+
+
+def _move_points(signal: dict[str, Any], price: float) -> float:
+    entry = _entry_anchor(signal)
+    if str(signal.get("direction") or "").upper() == "SELL":
+        return entry - price
+    return price - entry
+
+
+def _risk_points(signal: dict[str, Any]) -> float | None:
+    original_sl = signal.get("original_sl")
+    if original_sl is None:
+        return None
+    risk = abs(_entry_anchor(signal) - float(original_sl))
+    return risk if risk > 0 else None
+
+
+def _signed(value: float, suffix: str = "") -> str:
+    return f"{value:+.2f}{suffix}"
+
+
+def _history_summary(
+    signal: dict[str, Any],
+    timezone_name: str,
+) -> tuple[list[str], float, float | None, bool]:
+    history = list(signal.get("history") or [])
+    if not history:
+        return [], 0.0, None, False
+
+    risk = _risk_points(signal)
+    remaining = 1.0
+    realised_weighted_points = 0.0
+    realised_r = 0.0 if risk is not None else None
+    missing_realised_price = False
+    grouped: list[dict[str, Any]] = []
+    index: dict[tuple[str, Any], dict[str, Any]] = {}
+
+    for item in history:
+        timestamp = str(item.get("timestamp") or "")
+        message_id = item.get("message_id")
+        key = (timestamp, message_id)
+        group = index.get(key)
+        if group is None:
+            group = {
+                "timestamp": timestamp,
+                "message_id": message_id,
+                "parts": [],
+                "market_price": None,
+                "realised_r": 0.0,
+                "has_realised": False,
+            }
+            index[key] = group
+            grouped.append(group)
+
+        market = item.get("market") if isinstance(item.get("market"), dict) else None
+        market_price = None
+        if market and market.get("price") is not None:
+            market_price = float(market["price"])
+            group["market_price"] = market_price
+
+        kind = str(item.get("kind") or "")
+        if kind == "opened":
+            sl = item.get("sl")
+            text = f"Opened {signal.get('direction')} @ {_price(signal.get('entry_low'))}"
+            if sl is not None:
+                text += f" | SL {_price(sl)}"
+            group["parts"].append(text)
+            continue
+
+        if kind == "partial_close":
+            partial_percent = float(item.get("partial_percent") or 0.0)
+            close_fraction = remaining * max(0.0, min(1.0, partial_percent / 100.0))
+            if market_price is not None and close_fraction > 0:
+                weighted_points = _move_points(signal, market_price) * close_fraction
+                realised_weighted_points += weighted_points
+                if risk is not None:
+                    event_r = weighted_points / risk
+                    realised_r = float(realised_r or 0.0) + event_r
+                    group["realised_r"] += event_r
+                    group["has_realised"] = True
+            elif close_fraction > 0:
+                missing_realised_price = True
+
+            remaining *= 1.0 - max(0.0, min(1.0, partial_percent / 100.0))
+            group["parts"].append(
+                f"Closed {partial_percent:g}% of remainder | Remaining {remaining * 100:.2f}%"
+            )
+            continue
+
+        if kind == "trade_update":
+            if item.get("move_sl_to_be"):
+                group["parts"].append("SL -> BE")
+            elif item.get("sl_after") is not None:
+                before = item.get("sl_before")
+                after = item.get("sl_after")
+                if before is None or float(before) != float(after):
+                    group["parts"].append(f"SL -> {_price(after)}")
+            if item.get("tp_hits"):
+                hits = ", ".join(f"TP{int(v)}" for v in item["tp_hits"])
+                group["parts"].append(f"Hit {hits}")
+            continue
+
+        if kind in {"close", "stop_loss", "setup_failed", "breakeven_close", "cancel"}:
+            if kind != "cancel" and remaining > 0:
+                if market_price is not None:
+                    weighted_points = _move_points(signal, market_price) * remaining
+                    realised_weighted_points += weighted_points
+                    if risk is not None:
+                        event_r = weighted_points / risk
+                        realised_r = float(realised_r or 0.0) + event_r
+                        group["realised_r"] += event_r
+                        group["has_realised"] = True
+                else:
+                    missing_realised_price = True
+            remaining = 0.0
+            label = {
+                "close": "Closed",
+                "stop_loss": "Stopped",
+                "setup_failed": "Setup failed",
+                "breakeven_close": "Closed at BE",
+                "cancel": "Cancelled",
+            }[kind]
+            group["parts"].append(label)
+            continue
+
+        if kind == "add_layer":
+            group["parts"].append("Layer added")
+        elif kind == "reenter":
+            group["parts"].append("Re-entry")
+
+    lines: list[str] = []
+    for group in grouped:
+        parts = list(group["parts"])
+        if not parts:
+            continue
+        prefix = _local_time(group["timestamp"], timezone_name)
+        price_text = (
+            f" @ {_price(group['market_price'])}"
+            if group.get("market_price") is not None
+            and not any(part.startswith("Opened ") for part in parts)
+            else ""
+        )
+        realised_text = (
+            f" | Realised {_signed(float(group['realised_r']), 'R')}"
+            if group.get("has_realised")
+            else ""
+        )
+        lines.append(
+            f"**{prefix}** | " + " | ".join(parts) + price_text + realised_text
+        )
+
+    return lines[-8:], realised_weighted_points, realised_r, missing_realised_price
+
+
+def _signal_pnl_text(
+    signal: dict[str, Any],
+    spot_quote: dict[str, Any] | None,
+    timezone_name: str,
+) -> tuple[str, str, str]:
+    _, _, realised_r, missing_realised = _history_summary(signal, timezone_name)
+    risk = _risk_points(signal)
+
+    if realised_r is None:
+        realised_text = "Not available - original risk is not set"
+    else:
+        realised_text = _signed(realised_r, "R")
+        if missing_realised:
+            realised_text += " + unpriced legacy exits"
+
+    if (
+        spot_quote is None
+        or spot_quote.get("price") is None
+        or str(signal.get("status") or "") != "ACTIVE"
+        or risk is None
+    ):
+        floating_text = "Not available"
+        total_text = realised_text
+    else:
+        spot = float(spot_quote["price"])
+        remaining = float(signal.get("remaining_fraction", 1.0) or 0.0)
+        floating_r = (_move_points(signal, spot) * remaining) / risk
+        floating_text = _signed(floating_r, "R")
+        if realised_r is None:
+            total_text = floating_text
+        else:
+            total_text = _signed(realised_r + floating_r, "R")
+            if missing_realised:
+                total_text += " + unpriced legacy exits"
+
+    return realised_text, floating_text, total_text
 
 
 def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
@@ -126,7 +350,10 @@ def _provider_name(signal: dict[str, Any]) -> str:
     return "Telegram Provider"
 
 
-def _signal_fingerprint(signal: dict[str, Any]) -> str:
+def _signal_fingerprint(
+    signal: dict[str, Any],
+    spot_quote: dict[str, Any] | None = None,
+) -> str:
     relevant = {
         "direction": signal.get("direction"),
         "symbol": signal.get("symbol"),
@@ -143,11 +370,19 @@ def _signal_fingerprint(signal: dict[str, Any]) -> str:
         "partial_close_count": signal.get("partial_close_count"),
         "status": signal.get("status"),
         "last_update_at": signal.get("last_update_at"),
+        "history": signal.get("history"),
+        "spot_price": None if spot_quote is None else spot_quote.get("price"),
+        "spot_computed_at": None if spot_quote is None else spot_quote.get("computed_at"),
     }
     return json.dumps(relevant, sort_keys=True, separators=(",", ":"))
 
 
-def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
+def _signal_embed(
+    signal: dict[str, Any],
+    *,
+    spot_quote: dict[str, Any] | None = None,
+    timezone_name: str = "Europe/Isle_of_Man",
+) -> discord.Embed:
     direction = str(signal.get("direction") or "?")
     symbol = str(signal.get("symbol") or "?")
     provider = _provider_name(signal)
@@ -177,6 +412,27 @@ def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
     embed.add_field(name="Stop Loss", value=sl_text, inline=True)
     embed.add_field(name="Status", value=status, inline=True)
 
+    if symbol == "XAUUSD":
+        if spot_quote is not None and spot_quote.get("price") is not None:
+            spot_value = f"**{_price(spot_quote['price'])}** USD/oz"
+            observed = spot_quote.get("computed_at")
+            if observed:
+                spot_value += f"\nObserved {_local_time(observed, timezone_name)}"
+            if spot_quote.get("is_stale"):
+                spot_value += "\nStale quote"
+        else:
+            spot_value = "Temporarily unavailable"
+        embed.add_field(name="XAU/USD Spot", value=spot_value, inline=False)
+
+        realised_text, floating_text, total_text = _signal_pnl_text(
+            signal,
+            spot_quote,
+            timezone_name,
+        )
+        embed.add_field(name="Realised PnL", value=realised_text, inline=True)
+        embed.add_field(name="Open PnL", value=floating_text, inline=True)
+        embed.add_field(name="Total PnL", value=total_text, inline=True)
+
     tps = signal.get("tps") or {}
     hits = {int(value) for value in signal.get("tp_hits") or []}
     if tps:
@@ -198,6 +454,20 @@ def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
             inline=False,
         )
 
+    history_lines, _, _, _ = _history_summary(signal, timezone_name)
+    if history_lines:
+        history_text = "\n".join(history_lines)
+        if len(history_text) > 1024:
+            history_text = history_text[-1024:]
+            newline = history_text.find("\n")
+            if newline >= 0:
+                history_text = history_text[newline + 1 :]
+        embed.add_field(
+            name="Trade History",
+            value=history_text,
+            inline=False,
+        )
+
     extra: list[str] = []
     layers = int(signal.get("layers", 1) or 1)
     reentries = int(signal.get("reentries", 0) or 0)
@@ -216,7 +486,7 @@ def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
     if root_message_id is not None:
         footer += f" | Telegram message {root_message_id}"
     if opened_at:
-        footer += f" | {opened_at}"
+        footer += f" | Opened {_local_timestamp(opened_at, timezone_name)}"
     embed.set_footer(text=footer)
     return embed
 
@@ -224,6 +494,10 @@ def _signal_embed(signal: dict[str, Any]) -> discord.Embed:
 def build_bot(settings: Settings) -> commands.Bot:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
+    gold_spot = GoldSpotClient(
+        settings.gold_spot_url,
+        settings.gold_spot_refresh_seconds,
+    )
 
     async def update_dashboard() -> bool:
         config = _load_json(settings.discord_dashboard_config_path)
@@ -252,6 +526,12 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def sync_internal_signals() -> None:
         state = _load_json(settings.signal_state_path)
         signals = list(state.get("signals") or [])
+        active_gold = any(
+            str(signal.get("symbol") or "") == "XAUUSD"
+            and str(signal.get("status") or "") == "ACTIVE"
+            for signal in signals
+        )
+        spot_quote = await gold_spot.quote() if active_gold else None
         registry = _load_json(settings.discord_internal_signals_state_path)
 
         if not registry.get("initialized"):
@@ -296,23 +576,47 @@ def build_bot(settings: Settings) -> commands.Bot:
                 record = {}
 
             message_id = record.get("message_id")
-            fingerprint = _signal_fingerprint(signal)
+            signal_spot = (
+                spot_quote
+                if str(signal.get("symbol") or "") == "XAUUSD"
+                and str(signal.get("status") or "") == "ACTIVE"
+                else None
+            )
+            fingerprint = _signal_fingerprint(signal, signal_spot)
             if message_id and record.get("fingerprint") == fingerprint:
                 continue
 
             try:
                 if message_id:
                     message = await channel.fetch_message(int(message_id))
-                    await message.edit(embed=_signal_embed(signal))
+                    await message.edit(
+                        embed=_signal_embed(
+                            signal,
+                            spot_quote=signal_spot,
+                            timezone_name=settings.display_timezone,
+                        )
+                    )
                 else:
-                    message = await channel.send(embed=_signal_embed(signal))
+                    message = await channel.send(
+                        embed=_signal_embed(
+                            signal,
+                            spot_quote=signal_spot,
+                            timezone_name=settings.display_timezone,
+                        )
+                    )
                 messages[signal_id] = {
                     "message_id": message.id,
                     "fingerprint": fingerprint,
                 }
                 changed = True
             except discord.NotFound:
-                message = await channel.send(embed=_signal_embed(signal))
+                message = await channel.send(
+                    embed=_signal_embed(
+                        signal,
+                        spot_quote=signal_spot,
+                        timezone_name=settings.display_timezone,
+                    )
+                )
                 messages[signal_id] = {
                     "message_id": message.id,
                     "fingerprint": fingerprint,
@@ -331,15 +635,27 @@ def build_bot(settings: Settings) -> commands.Bot:
             if not opened_at or (watermark and opened_at <= watermark):
                 continue
 
+            signal_spot = (
+                spot_quote
+                if str(signal.get("symbol") or "") == "XAUUSD"
+                and str(signal.get("status") or "") == "ACTIVE"
+                else None
+            )
             try:
-                message = await channel.send(embed=_signal_embed(signal))
+                message = await channel.send(
+                    embed=_signal_embed(
+                        signal,
+                        spot_quote=signal_spot,
+                        timezone_name=settings.display_timezone,
+                    )
+                )
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception("Failed publishing internal signal %s", signal_id)
                 break
 
             messages[signal_id] = {
                 "message_id": message.id,
-                "fingerprint": _signal_fingerprint(signal),
+                "fingerprint": _signal_fingerprint(signal, signal_spot),
             }
             watermark = opened_at
             registry["watermark"] = watermark
@@ -476,14 +792,27 @@ def build_bot(settings: Settings) -> commands.Bot:
         }
 
         try:
-            message = await channel.send(embed=_signal_embed(test))
+            test_spot = await gold_spot.quote()
+            message = await channel.send(
+                embed=_signal_embed(
+                    test,
+                    spot_quote=test_spot,
+                    timezone_name=settings.display_timezone,
+                )
+            )
             await asyncio.sleep(2)
 
             test["current_sl"] = 4300
             test["partial_close_count"] = 1
             test["remaining_fraction"] = 0.5
             test["last_update_at"] = datetime.now(UTC).isoformat()
-            await message.edit(embed=_signal_embed(test))
+            await message.edit(
+                embed=_signal_embed(
+                    test,
+                    spot_quote=test_spot,
+                    timezone_name=settings.display_timezone,
+                )
+            )
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Failed sending internal test signal")
             await interaction.followup.send(

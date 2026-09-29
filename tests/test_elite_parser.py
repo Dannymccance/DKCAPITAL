@@ -246,6 +246,59 @@ Take profit: Open"""
         self.assertEqual(second.partial_close_count, 1)
         self.assertEqual(second.current_sl, 4261)
 
+    def test_elite_trade_history_rebuilds_management_timeline(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                40,
+                """I am personally entering
+
+Gold sell lower lot half lots
+
+Sell
+
+Entry: 4157low lot
+
+Stop loss: 4164
+
+Take profit: Open""",
+                minute=0,
+            )
+        )
+        state.ingest_event(
+            event(
+                41,
+                "Being cautious Take 50% partial on gold now and set stop loss to this 4157",
+                minute=5,
+            )
+        )
+        state.ingest_event(
+            event(
+                42,
+                "Being cautious Take FURTHER 50% partial on gold now and set stop loss to this 4157",
+                minute=8,
+            )
+        )
+
+        signal = state.signals["200:40"]
+        self.assertEqual(signal.current_sl, 4157)
+        self.assertAlmostEqual(signal.remaining_fraction, 0.25)
+        self.assertEqual(
+            [item["kind"] for item in signal.history],
+            [
+                "opened",
+                "partial_close",
+                "trade_update",
+                "partial_close",
+                "trade_update",
+            ],
+        )
+        self.assertEqual(signal.history[1]["partial_percent"], 50)
+        self.assertAlmostEqual(signal.history[1]["remaining_fraction"], 0.5)
+        self.assertEqual(signal.history[2]["sl_before"], 4164)
+        self.assertEqual(signal.history[2]["sl_after"], 4157)
+        self.assertAlmostEqual(signal.history[3]["remaining_fraction"], 0.25)
+
     def test_tp_half_and_sl_example(self) -> None:
         actions = parse_actions("Gold TP half and set SL to 4292")
         partial = next(action for action in actions if action.kind == "partial_close")

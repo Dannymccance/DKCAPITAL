@@ -41,6 +41,9 @@ class Settings:
     discord_dashboard_config_path: Path
     discord_internal_signals_channel_id: int
     discord_internal_signals_state_path: Path
+    display_timezone: str
+    gold_spot_url: str
+    gold_spot_refresh_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -78,6 +81,18 @@ class Settings:
                     "DISCORD_INTERNAL_SIGNALS_STATE_PATH",
                     "/app/data/discord-internal-signals.json",
                 )
+            ),
+            display_timezone=os.getenv(
+                "DISPLAY_TIMEZONE",
+                "Europe/Isle_of_Man",
+            ).strip() or "Europe/Isle_of_Man",
+            gold_spot_url=os.getenv(
+                "GOLD_SPOT_URL",
+                "https://api.goldprice.dev/v1/prices?symbol=XAU-USD-SPOT",
+            ).strip(),
+            gold_spot_refresh_seconds=max(
+                15,
+                int(os.getenv("GOLD_SPOT_REFRESH_SECONDS", "60").strip()),
             ),
         )
 
