@@ -126,6 +126,8 @@ class PaperAccount:
         self.daily_stop_triggered_at: str | None = None
 
         self.last_mark_price: float | None = None
+        self.last_bid: float | None = None
+        self.last_ask: float | None = None
         self.last_mark_at: str | None = None
         self.created_at = utc_now()
         self.updated_at = self.created_at
@@ -172,6 +174,16 @@ class PaperAccount:
             float(payload["last_mark_price"])
             if payload.get("last_mark_price") is not None
             else None
+        )
+        account.last_bid = (
+            float(payload["last_bid"])
+            if payload.get("last_bid") is not None
+            else account.last_mark_price
+        )
+        account.last_ask = (
+            float(payload["last_ask"])
+            if payload.get("last_ask") is not None
+            else account.last_mark_price
         )
         account.last_mark_at = payload.get("last_mark_at")
         account.created_at = str(payload.get("created_at") or account.created_at)
@@ -579,9 +591,28 @@ class PaperAccount:
         return realized
 
     def mark(self, price: float, *, marked_at: str | None = None) -> None:
-        if price <= 0:
-            raise ValueError("mark price must be positive")
-        self.last_mark_price = float(price)
+        self.mark_quote(
+            bid=float(price),
+            ask=float(price),
+            price=float(price),
+            marked_at=marked_at,
+        )
+
+    def mark_quote(
+        self,
+        *,
+        bid: float,
+        ask: float,
+        price: float | None = None,
+        marked_at: str | None = None,
+    ) -> None:
+        if bid <= 0 or ask <= 0:
+            raise ValueError("bid and ask must be positive")
+        self.last_bid = float(bid)
+        self.last_ask = float(ask)
+        self.last_mark_price = (
+            float(price) if price is not None and price > 0 else (bid + ask) / 2.0
+        )
         self.last_mark_at = marked_at or utc_now()
         self._revalue()
 
@@ -612,11 +643,18 @@ class PaperAccount:
                 position.unrealized_pnl_usd = 0.0
                 continue
 
-            position.last_mark_price = self.last_mark_price
-            move = (
-                self.last_mark_price - position.entry_price
+            exit_mark = (
+                self.last_bid
                 if position.direction == "BUY"
-                else position.entry_price - self.last_mark_price
+                else self.last_ask
+            )
+            if exit_mark is None:
+                exit_mark = self.last_mark_price
+            position.last_mark_price = exit_mark
+            move = (
+                exit_mark - position.entry_price
+                if position.direction == "BUY"
+                else position.entry_price - exit_mark
             )
             position.unrealized_pnl_usd = move * position.remaining_quantity_oz
             total_unrealized += position.unrealized_pnl_usd
@@ -678,6 +716,8 @@ class PaperAccount:
                 "SELL": self.current_directional_risk_usd("SELL"),
             },
             "last_mark_price": self.last_mark_price,
+            "last_bid": self.last_bid,
+            "last_ask": self.last_ask,
             "last_mark_at": self.last_mark_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
