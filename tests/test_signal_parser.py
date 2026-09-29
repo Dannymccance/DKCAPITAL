@@ -160,6 +160,35 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
         self.assertEqual(state.message_targets[(1, 97)], ["1:96"])
 
+    def test_deleted_signal_followed_by_explicit_scale_in_is_not_amendment(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                106,
+                "BUY XAUUSD AT 4160 - 4162\nTP1 4170\nSL 4152",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            {
+                "event_type": "message_deleted",
+                "chat_id": 1,
+                "message_ids": [106],
+                "observed_at": "2026-09-28T08:00:05+00:00",
+            }
+        )
+        state.ingest_event(
+            event(
+                107,
+                "BUY MORE XAUUSD AT 4155 - 4157\nTP1 4165\nSL 4148",
+                minute=0,
+                second=15,
+            )
+        )
+
+        self.assertEqual(list(state.signals), ["1:107"])
+
     def test_deleted_repost_amendment_survives_event_log_rebuild(self) -> None:
         state = SignalState()
         events = [
