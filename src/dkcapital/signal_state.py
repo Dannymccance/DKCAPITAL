@@ -238,7 +238,7 @@ class SignalState:
         if not matching:
             return []
 
-        if action.scope == "all_symbol":
+        if action.scope in {"all_symbol", "all_direction"}:
             return [signal.signal_id for signal in matching]
 
         if action.scope == "latest_symbol":
