@@ -119,7 +119,11 @@ class XauSignalFollowingStrategy:
         actual_risk = quantity_oz * stop_distance
         return stepped_lots, quantity_oz, actual_risk
 
-    def _temporary_stop(self, candidate: PaperCandidate) -> float:
+    def _temporary_stop(
+        self,
+        candidate: PaperCandidate,
+        fill_price: float | None = None,
+    ) -> float:
         low = min(candidate.entry_low, candidate.entry_high)
         high = max(candidate.entry_low, candidate.entry_high)
         zone_width = max(0.0, high - low)
@@ -128,8 +132,15 @@ class XauSignalFollowingStrategy:
             zone_width * self.config.temporary_sl_zone_width_multiple,
         )
         if candidate.direction == "BUY":
-            return low - buffer
-        return high + buffer
+            stop = low - buffer
+            if fill_price is not None:
+                stop = min(stop, float(fill_price) - buffer)
+            return stop
+
+        stop = high + buffer
+        if fill_price is not None:
+            stop = max(stop, float(fill_price) + buffer)
+        return stop
 
     @staticmethod
     def _structural_stop_wrong_side(candidate: PaperCandidate) -> bool:
@@ -315,7 +326,7 @@ class XauSignalFollowingStrategy:
         temporary_stop = provider_stop_missing or provider_stop_wrong_side
 
         if temporary_stop:
-            stop = self._temporary_stop(candidate)
+            stop = self._temporary_stop(candidate, fill)
             stop_source = "TEMPORARY"
         else:
             stop = float(candidate.current_sl)
@@ -376,6 +387,11 @@ class XauSignalFollowingStrategy:
             be_trigger_tp_index=(eligible_tps[0] if eligible_tps else None),
             temporary_stop_active=temporary_stop,
             stop_source=stop_source,
+            last_provider_stop_seen=(
+                float(candidate.current_sl)
+                if candidate.current_sl is not None
+                else None
+            ),
         )
         self._build_tp_schedule(
             position=position,
