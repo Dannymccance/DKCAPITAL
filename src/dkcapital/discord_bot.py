@@ -537,6 +537,10 @@ def _paper_dashboard_embed(
             )
             stop = position.get("stop_loss")
             stop_text = "None" if stop is None else _price(stop)
+            if bool(position.get("temporary_stop_active")) and stop is not None:
+                stop_text = f"TEMP {stop_text}"
+            elif str(position.get("stop_source") or "") == "BREAKEVEN":
+                stop_text = f"BE {stop_text}"
             lots = float(position.get("lot_size") or 0.0)
             initial_risk = float(position.get("initial_risk_usd") or 0.0)
             if stop is None:
