@@ -1189,7 +1189,15 @@ def build_bot(settings: Settings) -> commands.Bot:
                 and str(signal.get("status") or "") == "ACTIVE"
                 else None
             )
-            fingerprint = _signal_fingerprint(signal, signal_spot)
+            paper_position = _paper_position_for_signal(
+                paper_state,
+                signal_id,
+            )
+            fingerprint = _signal_fingerprint(
+                signal,
+                signal_spot,
+                paper_position,
+            )
             if message_id and record.get("fingerprint") == fingerprint:
                 continue
 
@@ -1200,6 +1208,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                         embed=_signal_embed(
                             signal,
                             spot_quote=signal_spot,
+                            paper_position=paper_position,
+                            pip_size=settings.paper_xau_pip_size,
                             timezone_name=settings.display_timezone,
                         )
                     )
@@ -1208,6 +1218,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                         embed=_signal_embed(
                             signal,
                             spot_quote=signal_spot,
+                            paper_position=paper_position,
+                            pip_size=settings.paper_xau_pip_size,
                             timezone_name=settings.display_timezone,
                         )
                     )
@@ -1221,6 +1233,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                     embed=_signal_embed(
                         signal,
                         spot_quote=signal_spot,
+                        paper_position=paper_position,
+                        pip_size=settings.paper_xau_pip_size,
                         timezone_name=settings.display_timezone,
                     )
                 )
@@ -1248,11 +1262,17 @@ def build_bot(settings: Settings) -> commands.Bot:
                 and str(signal.get("status") or "") == "ACTIVE"
                 else None
             )
+            paper_position = _paper_position_for_signal(
+                paper_state,
+                signal_id,
+            )
             try:
                 message = await channel.send(
                     embed=_signal_embed(
                         signal,
                         spot_quote=signal_spot,
+                        paper_position=paper_position,
+                        pip_size=settings.paper_xau_pip_size,
                         timezone_name=settings.display_timezone,
                     )
                 )
@@ -1262,7 +1282,11 @@ def build_bot(settings: Settings) -> commands.Bot:
 
             messages[signal_id] = {
                 "message_id": message.id,
-                "fingerprint": _signal_fingerprint(signal, signal_spot),
+                "fingerprint": _signal_fingerprint(
+                    signal,
+                    signal_spot,
+                    paper_position,
+                ),
             }
             watermark = opened_at
             registry["watermark"] = watermark
