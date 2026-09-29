@@ -19,6 +19,8 @@ class XauStrategyConfig:
     daily_loss_pct: float = 0.02
     contract_oz_per_lot: float = 100.0
     lot_step: float = 0.01
+    temporary_sl_min_buffer_points: float = 6.0
+    temporary_sl_zone_width_multiple: float = 2.0
     timezone_name: str = "Europe/Isle_of_Man"
 
 
@@ -116,6 +118,18 @@ class XauSignalFollowingStrategy:
         quantity_oz = stepped_lots * self.config.contract_oz_per_lot
         actual_risk = quantity_oz * stop_distance
         return stepped_lots, quantity_oz, actual_risk
+
+    def _temporary_stop(self, candidate: PaperCandidate) -> float:
+        low = min(candidate.entry_low, candidate.entry_high)
+        high = max(candidate.entry_low, candidate.entry_high)
+        zone_width = max(0.0, high - low)
+        buffer = max(
+            self.config.temporary_sl_min_buffer_points,
+            zone_width * self.config.temporary_sl_zone_width_multiple,
+        )
+        if candidate.direction == "BUY":
+            return low - buffer
+        return high + buffer
 
     @staticmethod
     def _structural_stop_wrong_side(candidate: PaperCandidate) -> bool:
@@ -281,11 +295,6 @@ class XauSignalFollowingStrategy:
             )
             return False
 
-        if candidate.current_sl is None:
-            candidate.execution_status = "PENDING_SL"
-            candidate.execution_note = "Waiting for provider structural stop loss."
-            return False
-
         if account.daily_stop_triggered:
             self._reject(
                 account,
@@ -297,33 +306,28 @@ class XauSignalFollowingStrategy:
 
         direction = candidate.direction
         fill = self._entry_fill(direction, quote)
-        stop = float(candidate.current_sl)
 
-        if self._structural_stop_wrong_side(candidate):
-            candidate.execution_status = "PENDING_INVALID_SL"
-            candidate.execution_note = (
-                f"Waiting for provider SL correction: {direction} setup has "
-                f"SL {stop:.2f} on the wrong side of entry "
-                f"{candidate.entry_low:.2f}-{candidate.entry_high:.2f}."
-            )
-            account._audit(
-                "paper_entry_waiting_invalid_sl",
-                signal_id=candidate.signal_id,
-                direction=direction,
-                entry_low=candidate.entry_low,
-                entry_high=candidate.entry_high,
-                stop_loss=stop,
-            )
-            return False
+        provider_stop_missing = candidate.current_sl is None
+        provider_stop_wrong_side = (
+            not provider_stop_missing
+            and self._structural_stop_wrong_side(candidate)
+        )
+        temporary_stop = provider_stop_missing or provider_stop_wrong_side
 
-        if self._stop_invalid(direction, fill, stop):
-            self._reject(
-                account,
-                candidate,
-                "REJECTED_INVALIDATED",
-                "Live market has already traded beyond the valid provider structural stop.",
-            )
-            return False
+        if temporary_stop:
+            stop = self._temporary_stop(candidate)
+            stop_source = "TEMPORARY"
+        else:
+            stop = float(candidate.current_sl)
+            stop_source = "PROVIDER"
+            if self._stop_invalid(direction, fill, stop):
+                self._reject(
+                    account,
+                    candidate,
+                    "REJECTED_INVALIDATED",
+                    "Live market has already traded beyond the valid provider structural stop.",
+                )
+                return False
 
         all_tps = dict(candidate.tps)
         eligible_tps = self._future_tp_indices(direction, fill, all_tps)
@@ -370,6 +374,8 @@ class XauSignalFollowingStrategy:
             lot_size=lots,
             eligible_tp_indices=eligible_tps,
             be_trigger_tp_index=(eligible_tps[0] if eligible_tps else None),
+            temporary_stop_active=temporary_stop,
+            stop_source=stop_source,
         )
         self._build_tp_schedule(
             position=position,
@@ -378,10 +384,24 @@ class XauSignalFollowingStrategy:
         )
         self._mark_existing_history_processed(candidate)
         candidate.execution_status = "OPEN"
-        candidate.execution_note = (
-            f"Market filled {lots:.2f} lots at {fill:.2f}; "
-            f"initial risk ${actual_risk:,.2f}."
-        )
+        if temporary_stop:
+            candidate.execution_note = (
+                f"Market filled {lots:.2f} lots at {fill:.2f}; "
+                f"TEMP SL {stop:.2f}; initial risk ${actual_risk:,.2f}. "
+                "Waiting for provider SL correction."
+            )
+            account._audit(
+                "temporary_stop_created",
+                signal_id=candidate.signal_id,
+                position_id=position.position_id,
+                temporary_stop_loss=stop,
+                provider_stop=candidate.current_sl,
+            )
+        else:
+            candidate.execution_note = (
+                f"Market filled {lots:.2f} lots at {fill:.2f}; "
+                f"initial risk ${actual_risk:,.2f}."
+            )
         return True
 
     def _provider_stop(
