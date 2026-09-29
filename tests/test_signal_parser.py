@@ -108,6 +108,34 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(update.layer_max, 4366.5)
         self.assertEqual(update.scope, "current_group")
 
+    def test_take_profits_all_longs_closes_all_provider_longs_only(self) -> None:
+        actions = parse_actions("Take profits all longs now")
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, "close")
+        self.assertEqual(actions[0].direction, "BUY")
+        self.assertEqual(actions[0].scope, "all_direction")
+
+        state = SignalState()
+        state.ingest_event(event(60, "BUY XAUUSD AT 4200 - 4198\\nTP1 4205\\nSL 4190", minute=0))
+        state.ingest_event(event(61, "BUY BTCUSDT AT 82000 - 81900\\nTP1 83000\\nSL 81000", minute=1))
+        state.ingest_event(event(62, "SELL XAUUSD AT 4210 - 4212\\nTP1 4200\\nSL 4220", minute=2))
+        state.ingest_event(event(63, "Take profits all longs now", minute=3))
+
+        self.assertEqual(state.signals["1:60"].status, "CLOSED")
+        self.assertEqual(state.signals["1:61"].status, "CLOSED")
+        self.assertEqual(state.signals["1:62"].status, "ACTIVE")
+
+    def test_take_profits_all_shorts_is_provider_scoped(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(70, "SELL XAUUSD AT 4210 - 4212\\nTP1 4200\\nSL 4220", minute=0))
+        other = event(71, "SELL XAUUSD AT 4215 - 4217\\nTP1 4205\\nSL 4225", minute=1)
+        other["chat_id"] = 2
+        state.ingest_event(other)
+        state.ingest_event(event(72, "Take profit all shorts now", minute=2))
+
+        self.assertEqual(state.signals["1:70"].status, "CLOSED")
+        self.assertEqual(state.signals["2:71"].status, "ACTIVE")
+
     def test_commentary_does_not_close_trade(self) -> None:
         actions = parse_actions(
             "But for now not a valid time to enter as it's already up much and we need lower"
