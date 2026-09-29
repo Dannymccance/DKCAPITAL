@@ -710,6 +710,85 @@ def build_bot(settings: Settings) -> commands.Bot:
         await interaction.response.send_message("DK Capital bot is online.", ephemeral=True)
 
     @bot.tree.command(
+        name="delall",
+        description="Delete every message in the current channel.",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def delall(interaction: discord.Interaction) -> None:
+        if interaction.guild is None or interaction.channel is None:
+            await interaction.response.send_message(
+                "Run this command inside a server text channel.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "This command can only be used in a standard server text channel.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            deleted = await channel.purge(
+                limit=None,
+                bulk=True,
+                reason=f"/delall used by {interaction.user} ({interaction.user.id})",
+            )
+        except discord.Forbidden:
+            logger.exception(
+                "Discord bot lacks permission to purge channel %s",
+                channel.id,
+            )
+            await interaction.followup.send(
+                "I need Manage Messages and Read Message History permissions in this channel.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            logger.exception("Discord /delall failed in channel %s", channel.id)
+            await interaction.followup.send(
+                "Discord returned an error while deleting the channel messages.",
+                ephemeral=True,
+            )
+            return
+
+        # If this is the internal parsed-signal feed, forget deleted Discord
+        # message IDs and move the watermark forward. Otherwise the sync loop
+        # would recreate the signal cards that were just purged.
+        if channel.id == settings.discord_internal_signals_channel_id:
+            _write_json(
+                settings.discord_internal_signals_state_path,
+                {
+                    "initialized": True,
+                    "watermark": datetime.now(UTC).isoformat(),
+                    "messages": {},
+                },
+            )
+
+        # If the configured dashboard itself was in this channel, clear its
+        # stale message reference so the refresh loop does not keep looking for
+        # a message that /delall intentionally removed.
+        dashboard = _load_json(settings.discord_dashboard_config_path)
+        if str(dashboard.get("channel_id") or "") == str(channel.id):
+            _write_json(settings.discord_dashboard_config_path, {})
+
+        logger.warning(
+            "Discord /delall channel=%s guild=%s user=%s deleted=%s",
+            channel.id,
+            interaction.guild.id,
+            interaction.user.id,
+            len(deleted),
+        )
+        await interaction.followup.send(
+            f"Deleted {len(deleted)} message(s) from #{channel.name}.",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
         name="dashboard_create",
         description="Create the auto-updating DK Capital live trade dashboard in this channel.",
     )
