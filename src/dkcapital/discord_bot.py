@@ -264,6 +264,43 @@ def _signal_pnl_text(
     return realised_text, floating_text, total_text
 
 
+def _paper_status_embed(state: dict[str, Any]) -> discord.Embed:
+    starting = float(state.get("starting_balance_usd", 100000.0) or 0.0)
+    balance = float(state.get("balance_usd", starting) or 0.0)
+    equity = float(state.get("equity_usd", balance) or 0.0)
+    realized = float(state.get("realized_pnl_usd", 0.0) or 0.0)
+    unrealized = float(state.get("unrealized_pnl_usd", 0.0) or 0.0)
+    candidates = int(state.get("candidate_count", 0) or 0)
+    open_positions = int(state.get("open_position_count", 0) or 0)
+    mode = str(state.get("strategy_mode") or "observe_only")
+    symbol = str(state.get("symbol") or "XAUUSD")
+    mark = state.get("last_mark_price")
+
+    embed = discord.Embed(
+        title="DK Capital | Paper Engine",
+        description=f"Virtual {symbol} account | Strategy: **{mode}**",
+    )
+    embed.add_field(name="Starting Balance", value=f"${starting:,.2f}", inline=True)
+    embed.add_field(name="Balance", value=f"${balance:,.2f}", inline=True)
+    embed.add_field(name="Equity", value=f"${equity:,.2f}", inline=True)
+    embed.add_field(name="Realised PnL", value=f"${realized:+,.2f}", inline=True)
+    embed.add_field(name="Open PnL", value=f"${unrealized:+,.2f}", inline=True)
+    embed.add_field(
+        name="XAU/USD Mark",
+        value="Not available" if mark is None else f"${float(mark):,.2f}",
+        inline=True,
+    )
+    embed.add_field(name="Signals Ingested", value=str(candidates), inline=True)
+    embed.add_field(name="Open Paper Trades", value=str(open_positions), inline=True)
+
+    updated = state.get("updated_at")
+    footer = "Paper trading only"
+    if updated:
+        footer += f" | Updated {updated}"
+    embed.set_footer(text=footer)
+    return embed
+
+
 def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
     signals = list(state.get("signals") or [])
     active = [signal for signal in signals if signal.get("status") == "ACTIVE"]
@@ -785,6 +822,24 @@ def build_bot(settings: Settings) -> commands.Bot:
         )
         await interaction.followup.send(
             f"Deleted {len(deleted)} message(s) from #{channel.name}.",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="paper_status",
+        description="Show the current DK Capital XAUUSD paper account.",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def paper_status(interaction: discord.Interaction) -> None:
+        state = _load_json(settings.paper_state_path)
+        if not state:
+            await interaction.response.send_message(
+                "The paper engine has not written a state snapshot yet.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            embed=_paper_status_embed(state),
             ephemeral=True,
         )
 
