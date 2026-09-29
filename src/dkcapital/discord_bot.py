@@ -377,7 +377,7 @@ def _paper_dashboard_embed(
         1
         for candidate in candidates
         if str(candidate.get("execution_status") or "")
-        in {"PENDING_STRATEGY", "PENDING_SL"}
+        in {"PENDING_STRATEGY", "PENDING_SL", "PENDING_INVALID_SL"}
     )
     stats = _paper_trade_stats(state, pip_size)
 
@@ -479,11 +479,40 @@ def _paper_dashboard_embed(
         name="Signal Intake",
         value=(
             f"Parsed XAUUSD: **{len(candidates)}**\n"
-            f"Queued for strategy: **{queued}**\n"
+            f"Queued / waiting: **{queued}**\n"
             f"Pip size: **{pip_size:g}** ($1.00 = {1.0 / pip_size:,.0f} pips)"
         ),
         inline=True,
     )
+
+    decision_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("execution_status") or "")
+        not in {"OPEN", "CLOSED", "SKIPPED_PRE_STRATEGY"}
+    ][-5:]
+    if decision_candidates:
+        decision_lines: list[str] = []
+        for candidate in reversed(decision_candidates):
+            status = str(candidate.get("execution_status") or "UNKNOWN")
+            message_id = candidate.get("root_message_id")
+            note = str(candidate.get("execution_note") or "").strip()
+            prefix = f"TG {message_id} | " if message_id is not None else ""
+            line = (
+                f"**{prefix}{candidate.get('direction')} XAUUSD** - "
+                f"`{status}`"
+            )
+            if note:
+                line += f"\n{note}"
+            decision_lines.append(line)
+        decisions = "\n\n".join(decision_lines)
+        if len(decisions) > 1024:
+            decisions = decisions[:1018] + "\n..."
+        embed.add_field(
+            name="Recent Signal Decisions",
+            value=decisions,
+            inline=False,
+        )
 
     if open_positions:
         lines: list[str] = []
