@@ -93,6 +93,7 @@ class SignalState:
             reply_to = event.get("reply_to_message_id")
             actions = parse_actions(text, int(reply_to) if reply_to is not None else None)
             timestamp = _timestamp(event)
+            market = event.get("market") if isinstance(event.get("market"), dict) else None
 
             inherited_targets: list[str] = []
             if reply_to is not None:
@@ -151,6 +152,7 @@ class SignalState:
                                 "entry_low": action.entry_low,
                                 "entry_high": action.entry_high,
                                 "sl": action.sl,
+                                "market": market,
                             }
                         ],
                         source_message_ids=[message_id],
@@ -178,7 +180,14 @@ class SignalState:
                 for signal_id in targets:
                     signal = self.signals.get(signal_id)
                     if signal is not None:
-                        self._apply(signal, action, message_id, timestamp, text)
+                        self._apply(
+                            signal,
+                            action,
+                            message_id,
+                            timestamp,
+                            text,
+                            market,
+                        )
 
                 for signal_id in targets:
                     if signal_id not in message_targets:
@@ -313,6 +322,7 @@ class SignalState:
         message_id: int,
         timestamp: str,
         text: str,
+        market: dict[str, Any] | None,
     ) -> None:
         if message_id not in signal.source_message_ids:
             signal.source_message_ids.append(message_id)
@@ -322,6 +332,8 @@ class SignalState:
             "message_id": message_id,
             "kind": action.kind,
         }
+        if market is not None:
+            history_event["market"] = market
 
         if action.kind == "trade_update":
             history_event["sl_before"] = signal.current_sl
