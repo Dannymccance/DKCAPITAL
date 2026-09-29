@@ -160,6 +160,70 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
         self.assertEqual(state.message_targets[(1, 97)], ["1:96"])
 
+    def test_deleted_signal_repost_at_51_seconds_amends_original_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                108,
+                "SELL XAUUSD AT 4168 - 4171\nTP1 4164\nTP2 4161.50\nTP3 4141\nSL 4377",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            {
+                "event_type": "message_deleted",
+                "chat_id": 1,
+                "message_ids": [108],
+                "observed_at": "2026-09-28T08:00:10+00:00",
+            }
+        )
+        state.ingest_event(
+            event(
+                109,
+                "SELL XAUUSD AT 4169.50 - 4172.50\nTP1 4165\nTP2 4162.50\nTP3 4141\nSL 4378",
+                minute=0,
+                second=51,
+            )
+        )
+
+        self.assertEqual(list(state.signals), ["1:108"])
+        signal = state.signals["1:108"]
+        self.assertEqual(signal.entry_low, 4169.5)
+        self.assertEqual(signal.entry_high, 4172.5)
+        self.assertEqual(signal.current_sl, 4378.0)
+        self.assertEqual(signal.source_message_ids, [108, 109])
+        self.assertEqual(signal.history[-1]["kind"], "signal_amendment")
+
+    def test_deleted_signal_repost_after_90_seconds_is_separate_trade(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(
+                110,
+                "SELL XAUUSD AT 4168 - 4171\nTP1 4164\nSL 4177",
+                minute=0,
+                second=0,
+            )
+        )
+        state.ingest_event(
+            {
+                "event_type": "message_deleted",
+                "chat_id": 1,
+                "message_ids": [110],
+                "observed_at": "2026-09-28T08:00:10+00:00",
+            }
+        )
+        state.ingest_event(
+            event(
+                111,
+                "SELL XAUUSD AT 4169.50 - 4172.50\nTP1 4165\nSL 4178",
+                minute=1,
+                second=31,
+            )
+        )
+
+        self.assertEqual(list(state.signals), ["1:111"])
+
     def test_deleted_signal_followed_by_explicit_scale_in_is_not_amendment(self) -> None:
         state = SignalState()
         state.ingest_event(

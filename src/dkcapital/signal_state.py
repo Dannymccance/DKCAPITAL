@@ -10,6 +10,7 @@ from dkcapital.signal_parser import ParsedAction, parse_actions
 OPEN_STATUSES = {"ACTIVE"}
 GROUP_WINDOW_MINUTES = 180
 AMENDMENT_WINDOW_SECONDS = 30
+DELETED_REPOST_WINDOW_SECONDS = 90
 
 
 def _timestamp(event: dict[str, Any]) -> str:
@@ -260,7 +261,7 @@ class SignalState:
                         and self._within_seconds(
                             _timestamp(deleted),
                             _timestamp(later),
-                            AMENDMENT_WINDOW_SECONDS,
+                            DELETED_REPOST_WINDOW_SECONDS,
                         )
                     ):
                         selected.append(deleted)
@@ -323,13 +324,6 @@ class SignalState:
             return None
 
         latest = compatible[-1]
-        comparison_time = latest.last_update_at or latest.opened_at
-        if not self._within_seconds(
-            comparison_time,
-            timestamp,
-            AMENDMENT_WINDOW_SECONDS,
-        ):
-            return None
 
         # Strong evidence only. A rapid same-direction signal can be a genuine
         # scale-in, so time proximity by itself is not enough to merge trades.
@@ -343,6 +337,19 @@ class SignalState:
         )
         explicit_correction = self._is_correction_text(text)
         exact_duplicate = self._same_signal_text(latest.last_update_text, text)
+
+        comparison_time = latest.last_update_at or latest.opened_at
+        window_seconds = (
+            DELETED_REPOST_WINDOW_SECONDS
+            if previous_was_deleted
+            else AMENDMENT_WINDOW_SECONDS
+        )
+        if not self._within_seconds(
+            comparison_time,
+            timestamp,
+            window_seconds,
+        ):
+            return None
 
         if previous_was_deleted or explicit_correction or exact_duplicate:
             return latest
