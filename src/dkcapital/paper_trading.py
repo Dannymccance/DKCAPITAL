@@ -356,8 +356,34 @@ class PaperAccount:
             )
             return True, "created"
 
+        previous_entry_low = existing.entry_low
+        previous_entry_high = existing.entry_high
+        previous_sl = existing.current_sl
+        previous_stop_was_malformed = bool(
+            previous_sl is not None
+            and (
+                (
+                    direction == "BUY"
+                    and previous_sl >= min(previous_entry_low, previous_entry_high)
+                )
+                or (
+                    direction == "SELL"
+                    and previous_sl <= max(previous_entry_low, previous_entry_high)
+                )
+            )
+        )
+
         existing.last_seen_at = now
         existing.signal_status = str(signal.get("status") or existing.signal_status)
+        existing.entry_low = float(signal.get("entry_low") or existing.entry_low)
+        existing.entry_high = float(
+            signal.get("entry_high") or signal.get("entry_low") or existing.entry_high
+        )
+        existing.original_sl = (
+            float(signal["original_sl"])
+            if signal.get("original_sl") is not None
+            else None
+        )
         existing.current_sl = (
             float(signal["current_sl"])
             if signal.get("current_sl") is not None
@@ -371,6 +397,14 @@ class PaperAccount:
         ]
         existing.signal_history = list(signal.get("history") or [])
         existing.fingerprint = fingerprint
+
+        # Same-message provider corrections must update the paper candidate.
+        if (
+            existing.execution_status == "REJECTED_INVALIDATED"
+            and previous_stop_was_malformed
+        ):
+            existing.execution_status = "PENDING_STRATEGY"
+            existing.execution_note = "Provider edited the malformed setup; re-evaluating."
         self._audit(
             "signal_updated",
             signal_id=signal_id,
