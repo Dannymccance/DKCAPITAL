@@ -256,6 +256,27 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
 
     scope = _scope(normalized, reply_to_message_id, symbol)
 
+    # Provider-wide side exits such as "Take profits all longs now".
+    # These deliberately do not require a ticker or reply target. The state
+    # resolver still scopes them to the originating Telegram chat/provider.
+    side_close = re.search(
+        r"\\b(?:TAKE\\s+PROFITS?|CLOSE|EXIT|SECURE\\s+PROFITS?)\\s+"
+        r"(?:ON\\s+)?ALL\\s+(LONGS?|SHORTS?|BUYS?|SELLS?)\\b",
+        normalized,
+    )
+    if side_close:
+        side_word = side_close.group(1)
+        side_direction = "BUY" if side_word.startswith(("LONG", "BUY")) else "SELL"
+        return [
+            ParsedAction(
+                kind="close",
+                direction=side_direction,
+                scope="all_direction",
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        ]
+
     if re.search(
         r"\b(?:BOTH\s+)?(?:OUT\s+ON\s+SL|SL(?:'S)?\s+(?:HIT|HITTED|TAGGED|TAKEN|OUT))\b",
         normalized,
