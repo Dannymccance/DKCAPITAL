@@ -327,6 +327,74 @@ def _paper_realised_pips(position: dict[str, Any], pip_size: float) -> float:
     return weighted / initial_qty
 
 
+def _paper_position_for_signal(
+    paper_state: dict[str, Any],
+    signal_id: str,
+) -> dict[str, Any] | None:
+    matches = [
+        position
+        for position in paper_state.get("positions") or []
+        if str(position.get("signal_id") or "") == signal_id
+    ]
+    if not matches:
+        return None
+
+    open_matches = [
+        position
+        for position in matches
+        if str(position.get("status") or "") == "OPEN"
+    ]
+    if open_matches:
+        return open_matches[-1]
+    return matches[-1]
+
+
+def _paper_position_metrics(
+    position: dict[str, Any],
+    pip_size: float,
+) -> dict[str, float]:
+    entry = float(position.get("entry_price") or 0.0)
+    initial_qty = float(position.get("initial_quantity_oz") or 0.0)
+    remaining_qty = float(position.get("remaining_quantity_oz") or 0.0)
+    mark = position.get("last_mark_price")
+    direction = str(position.get("direction") or "").upper()
+
+    realised_usd = float(position.get("realized_pnl_usd") or 0.0)
+    open_usd = float(position.get("unrealized_pnl_usd") or 0.0)
+    total_usd = realised_usd + open_usd
+
+    realised_pips = _paper_realised_pips(position, pip_size)
+    live_pips = (
+        _paper_pips(direction, entry, float(mark), pip_size)
+        if mark is not None and entry > 0
+        else 0.0
+    )
+    remaining_fraction = (
+        remaining_qty / initial_qty if initial_qty > 0 else 0.0
+    )
+    open_weighted_pips = live_pips * remaining_fraction
+    total_weighted_pips = realised_pips + open_weighted_pips
+
+    initial_risk = float(position.get("initial_risk_usd") or 0.0)
+    realised_r = realised_usd / initial_risk if initial_risk > 0 else 0.0
+    open_r = open_usd / initial_risk if initial_risk > 0 else 0.0
+    total_r = total_usd / initial_risk if initial_risk > 0 else 0.0
+
+    return {
+        "realised_usd": realised_usd,
+        "open_usd": open_usd,
+        "total_usd": total_usd,
+        "realised_pips": realised_pips,
+        "live_pips": live_pips,
+        "open_weighted_pips": open_weighted_pips,
+        "total_weighted_pips": total_weighted_pips,
+        "realised_r": realised_r,
+        "open_r": open_r,
+        "total_r": total_r,
+        "remaining_fraction": remaining_fraction,
+    }
+
+
 def _paper_trade_stats(state: dict[str, Any], pip_size: float) -> dict[str, Any]:
     positions = list(state.get("positions") or [])
     closed = [p for p in positions if str(p.get("status") or "") == "CLOSED"]
@@ -719,6 +787,7 @@ def _provider_name(signal: dict[str, Any]) -> str:
 def _signal_fingerprint(
     signal: dict[str, Any],
     spot_quote: dict[str, Any] | None = None,
+    paper_position: dict[str, Any] | None = None,
 ) -> str:
     relevant = {
         "direction": signal.get("direction"),
@@ -739,6 +808,25 @@ def _signal_fingerprint(
         "history": signal.get("history"),
         "spot_price": None if spot_quote is None else spot_quote.get("price"),
         "spot_computed_at": None if spot_quote is None else spot_quote.get("computed_at"),
+        "paper_position": (
+            None
+            if paper_position is None
+            else {
+                "status": paper_position.get("status"),
+                "entry_price": paper_position.get("entry_price"),
+                "lot_size": paper_position.get("lot_size"),
+                "initial_quantity_oz": paper_position.get("initial_quantity_oz"),
+                "remaining_quantity_oz": paper_position.get("remaining_quantity_oz"),
+                "stop_loss": paper_position.get("stop_loss"),
+                "stop_source": paper_position.get("stop_source"),
+                "temporary_stop_active": paper_position.get("temporary_stop_active"),
+                "last_mark_price": paper_position.get("last_mark_price"),
+                "unrealized_pnl_usd": paper_position.get("unrealized_pnl_usd"),
+                "realized_pnl_usd": paper_position.get("realized_pnl_usd"),
+                "initial_risk_usd": paper_position.get("initial_risk_usd"),
+                "history": paper_position.get("history"),
+            }
+        ),
     }
     return json.dumps(relevant, sort_keys=True, separators=(",", ":"))
 
@@ -747,6 +835,8 @@ def _signal_embed(
     signal: dict[str, Any],
     *,
     spot_quote: dict[str, Any] | None = None,
+    paper_position: dict[str, Any] | None = None,
+    pip_size: float = 0.01,
     timezone_name: str = "Europe/Isle_of_Man",
 ) -> discord.Embed:
     direction = str(signal.get("direction") or "?")
@@ -790,14 +880,88 @@ def _signal_embed(
             spot_value = "Temporarily unavailable"
         embed.add_field(name="XAU/USD Spot", value=spot_value, inline=False)
 
-        realised_text, floating_text, total_text = _signal_pnl_text(
-            signal,
-            spot_quote,
-            timezone_name,
-        )
-        embed.add_field(name="Realised PnL", value=realised_text, inline=True)
-        embed.add_field(name="Open PnL", value=floating_text, inline=True)
-        embed.add_field(name="Total PnL", value=total_text, inline=True)
+        if paper_position is not None:
+            metrics = _paper_position_metrics(paper_position, pip_size)
+            stop = paper_position.get("stop_loss")
+            if stop is None:
+                paper_stop = "None"
+            else:
+                paper_stop = _price(stop)
+                if bool(paper_position.get("temporary_stop_active")):
+                    paper_stop = f"TEMP {paper_stop}"
+                elif str(paper_position.get("stop_source") or "") == "BREAKEVEN":
+                    paper_stop = f"BE {paper_stop}"
+
+            initial_qty = float(paper_position.get("initial_quantity_oz") or 0.0)
+            remaining_qty = float(paper_position.get("remaining_quantity_oz") or 0.0)
+            remaining_pct = (
+                remaining_qty / initial_qty * 100.0
+                if initial_qty > 0
+                else 0.0
+            )
+            embed.add_field(
+                name="Paper Execution",
+                value=(
+                    f"Fill **{_price(paper_position.get('entry_price'))}** | "
+                    f"**{float(paper_position.get('lot_size') or 0.0):.2f} lots**\n"
+                    f"Stop **{paper_stop}** | Remaining **{remaining_pct:.1f}%**"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Realised PnL",
+                value=(
+                    f"**{_paper_signed_usd(metrics['realised_usd'])}**\n"
+                    f"**{metrics['realised_pips']:+,.1f} pips** | "
+                    f"{metrics['realised_r']:+.2f}R"
+                ),
+                inline=True,
+            )
+            embed.add_field(
+                name="Open PnL",
+                value=(
+                    f"**{_paper_signed_usd(metrics['open_usd'])}**\n"
+                    f"**{metrics['live_pips']:+,.1f} pips** | "
+                    f"{metrics['open_r']:+.2f}R"
+                ),
+                inline=True,
+            )
+            embed.add_field(
+                name="Total PnL",
+                value=(
+                    f"**{_paper_signed_usd(metrics['total_usd'])}**\n"
+                    f"**{metrics['total_weighted_pips']:+,.1f} weighted pips** | "
+                    f"{metrics['total_r']:+.2f}R"
+                ),
+                inline=True,
+            )
+        else:
+            realised_text, floating_text, total_text = _signal_pnl_text(
+                signal,
+                spot_quote,
+                timezone_name,
+            )
+            signal_pips = None
+            if (
+                spot_quote is not None
+                and spot_quote.get("price") is not None
+                and pip_size > 0
+            ):
+                signal_pips = (
+                    _move_points(signal, float(spot_quote["price"])) / pip_size
+                )
+
+            embed.add_field(name="Realised PnL", value=realised_text, inline=True)
+            embed.add_field(
+                name="Open PnL",
+                value=(
+                    floating_text
+                    if signal_pips is None
+                    else f"**{signal_pips:+,.1f} pips**\n{floating_text}"
+                ),
+                inline=True,
+            )
+            embed.add_field(name="Total PnL", value=total_text, inline=True)
 
     tps = signal.get("tps") or {}
     hits = {int(value) for value in signal.get("tp_hits") or []}
@@ -1025,7 +1189,15 @@ def build_bot(settings: Settings) -> commands.Bot:
                 and str(signal.get("status") or "") == "ACTIVE"
                 else None
             )
-            fingerprint = _signal_fingerprint(signal, signal_spot)
+            paper_position = _paper_position_for_signal(
+                paper_state,
+                signal_id,
+            )
+            fingerprint = _signal_fingerprint(
+                signal,
+                signal_spot,
+                paper_position,
+            )
             if message_id and record.get("fingerprint") == fingerprint:
                 continue
 
@@ -1036,6 +1208,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                         embed=_signal_embed(
                             signal,
                             spot_quote=signal_spot,
+                            paper_position=paper_position,
+                            pip_size=settings.paper_xau_pip_size,
                             timezone_name=settings.display_timezone,
                         )
                     )
@@ -1044,6 +1218,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                         embed=_signal_embed(
                             signal,
                             spot_quote=signal_spot,
+                            paper_position=paper_position,
+                            pip_size=settings.paper_xau_pip_size,
                             timezone_name=settings.display_timezone,
                         )
                     )
@@ -1057,6 +1233,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                     embed=_signal_embed(
                         signal,
                         spot_quote=signal_spot,
+                        paper_position=paper_position,
+                        pip_size=settings.paper_xau_pip_size,
                         timezone_name=settings.display_timezone,
                     )
                 )
@@ -1084,11 +1262,17 @@ def build_bot(settings: Settings) -> commands.Bot:
                 and str(signal.get("status") or "") == "ACTIVE"
                 else None
             )
+            paper_position = _paper_position_for_signal(
+                paper_state,
+                signal_id,
+            )
             try:
                 message = await channel.send(
                     embed=_signal_embed(
                         signal,
                         spot_quote=signal_spot,
+                        paper_position=paper_position,
+                        pip_size=settings.paper_xau_pip_size,
                         timezone_name=settings.display_timezone,
                     )
                 )
@@ -1098,7 +1282,11 @@ def build_bot(settings: Settings) -> commands.Bot:
 
             messages[signal_id] = {
                 "message_id": message.id,
-                "fingerprint": _signal_fingerprint(signal, signal_spot),
+                "fingerprint": _signal_fingerprint(
+                    signal,
+                    signal_spot,
+                    paper_position,
+                ),
             }
             watermark = opened_at
             registry["watermark"] = watermark
