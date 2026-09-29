@@ -51,6 +51,7 @@ def _load_account(settings: Settings) -> tuple[PaperAccount, bool]:
             starting_balance_usd=settings.paper_starting_balance_usd,
             symbol=settings.paper_symbol,
             strategy_mode=settings.paper_strategy_mode,
+            entry_policy=settings.paper_entry_policy,
         ),
         True,
     )

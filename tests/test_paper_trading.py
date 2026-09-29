@@ -40,7 +40,45 @@ class PaperAccountTests(unittest.TestCase):
         self.assertEqual(snapshot["balance_usd"], 100000.0)
         self.assertEqual(snapshot["equity_usd"], 100000.0)
         self.assertEqual(snapshot["strategy_mode"], "observe_only")
+        self.assertEqual(snapshot["entry_policy"], "all_parsed")
         self.assertEqual(snapshot["open_position_count"], 0)
+
+    def test_all_parsed_signals_are_queued_for_strategy(self) -> None:
+        account = PaperAccount(entry_policy="all_parsed")
+        account.sync_signal(signal())
+        self.assertEqual(
+            account.candidates["elite:1"].execution_status,
+            "PENDING_STRATEGY",
+        )
+
+    def test_peak_equity_and_drawdown_are_persistent_metrics(self) -> None:
+        account = PaperAccount(strategy_mode="test_strategy")
+        account.sync_signal(signal())
+        position = account.open_position(
+            signal_id="elite:1",
+            fill_price=4157,
+            quantity_oz=100,
+            stop_loss=4164,
+        )
+
+        account.mark(4147)
+        self.assertEqual(account.equity_usd, 101000.0)
+        self.assertEqual(account.peak_equity_usd, 101000.0)
+
+        account.mark(4162)
+        snapshot = account.snapshot()
+        self.assertEqual(snapshot["equity_usd"], 99500.0)
+        self.assertEqual(snapshot["current_drawdown_usd"], 1500.0)
+        self.assertAlmostEqual(
+            snapshot["current_drawdown_pct"],
+            1500.0 / 101000.0 * 100.0,
+        )
+        self.assertEqual(snapshot["max_drawdown_usd"], 1500.0)
+
+        restored = PaperAccount.from_snapshot(snapshot)
+        self.assertEqual(restored.peak_equity_usd, 101000.0)
+        self.assertEqual(restored.max_drawdown_usd, 1500.0)
+        self.assertEqual(position.status, "OPEN")
 
     def test_only_xauusd_signals_are_ingested(self) -> None:
         account = PaperAccount()

@@ -140,3 +140,24 @@ troy ounces, so PnL is independent of any future broker-specific lot convention.
 
 The strategy layer can be added without changing the Telegram parser or paper
 accounting ledger.
+
+
+## Permanent paper-trading dashboard
+
+The Discord bot maintains one permanent dashboard message in channel
+`1554479167024926820` by default. The dashboard is recreated automatically if
+its message is deleted and the bot attempts to pin it when first created.
+
+It shows the $100,000 paper account balance and live equity, realised and open
+PnL, return, peak equity, current and maximum drawdown, the latest XAU/USD mark,
+trade statistics, signal intake, all open paper positions with USD and pip PnL,
+and recent closed trades.
+
+XAUUSD pip reporting defaults to a 0.01 price increment, so a $1.00 gold move is
+reported as 100 pips. This convention is configurable with
+`PAPER_XAU_PIP_SIZE`.
+
+The entry-selection policy is `all_parsed`: every parsed XAUUSD signal from
+the configured providers is queued for paper execution. Position sizing and
+execution rules are intentionally kept separate so they can be defined without
+changing signal selection.

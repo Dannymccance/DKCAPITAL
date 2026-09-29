@@ -85,6 +85,7 @@ class PaperAccount:
         starting_balance_usd: float = 100_000.0,
         symbol: str = "XAUUSD",
         strategy_mode: str = "observe_only",
+        entry_policy: str = "all_parsed",
     ) -> None:
         if starting_balance_usd <= 0:
             raise ValueError("starting_balance_usd must be positive")
@@ -92,11 +93,15 @@ class PaperAccount:
         self.version = PAPER_ENGINE_VERSION
         self.symbol = symbol.upper()
         self.strategy_mode = strategy_mode
+        self.entry_policy = entry_policy
         self.starting_balance_usd = float(starting_balance_usd)
         self.balance_usd = float(starting_balance_usd)
         self.equity_usd = float(starting_balance_usd)
         self.realized_pnl_usd = 0.0
         self.unrealized_pnl_usd = 0.0
+        self.peak_equity_usd = float(starting_balance_usd)
+        self.max_drawdown_usd = 0.0
+        self.max_drawdown_pct = 0.0
         self.last_mark_price: float | None = None
         self.last_mark_at: str | None = None
         self.created_at = utc_now()
@@ -111,12 +116,21 @@ class PaperAccount:
             starting_balance_usd=float(payload.get("starting_balance_usd", 100_000.0)),
             symbol=str(payload.get("symbol") or "XAUUSD"),
             strategy_mode=str(payload.get("strategy_mode") or "observe_only"),
+            entry_policy=str(payload.get("entry_policy") or "all_parsed"),
         )
         account.version = int(payload.get("version", PAPER_ENGINE_VERSION))
         account.balance_usd = float(payload.get("balance_usd", account.starting_balance_usd))
         account.equity_usd = float(payload.get("equity_usd", account.balance_usd))
         account.realized_pnl_usd = float(payload.get("realized_pnl_usd", 0.0))
         account.unrealized_pnl_usd = float(payload.get("unrealized_pnl_usd", 0.0))
+        account.peak_equity_usd = float(
+            payload.get(
+                "peak_equity_usd",
+                max(account.starting_balance_usd, account.equity_usd),
+            )
+        )
+        account.max_drawdown_usd = float(payload.get("max_drawdown_usd", 0.0))
+        account.max_drawdown_pct = float(payload.get("max_drawdown_pct", 0.0))
         account.last_mark_price = (
             float(payload["last_mark_price"])
             if payload.get("last_mark_price") is not None
@@ -129,6 +143,11 @@ class PaperAccount:
 
         for raw in payload.get("candidates") or []:
             candidate = PaperCandidate(**raw)
+            if (
+                account.entry_policy == "all_parsed"
+                and candidate.execution_status == "OBSERVED"
+            ):
+                candidate.execution_status = "PENDING_STRATEGY"
             account.candidates[candidate.signal_id] = candidate
 
         for raw in payload.get("positions") or []:
@@ -227,7 +246,11 @@ class PaperAccount:
                 source_message_ids=[int(v) for v in signal.get("source_message_ids") or []],
                 signal_history=list(signal.get("history") or []),
                 fingerprint=fingerprint,
-                execution_status="OBSERVED",
+                execution_status=(
+                    "PENDING_STRATEGY"
+                    if self.entry_policy == "all_parsed"
+                    else "OBSERVED"
+                ),
             )
             self.candidates[signal_id] = candidate
             self._audit(
@@ -407,6 +430,19 @@ class PaperAccount:
         self.unrealized_pnl_usd = total_unrealized
         self.balance_usd = self.starting_balance_usd + self.realized_pnl_usd
         self.equity_usd = self.balance_usd + self.unrealized_pnl_usd
+        if self.equity_usd > self.peak_equity_usd:
+            self.peak_equity_usd = self.equity_usd
+
+        current_drawdown_usd = max(0.0, self.peak_equity_usd - self.equity_usd)
+        current_drawdown_pct = (
+            (current_drawdown_usd / self.peak_equity_usd) * 100.0
+            if self.peak_equity_usd > 0
+            else 0.0
+        )
+        if current_drawdown_usd > self.max_drawdown_usd:
+            self.max_drawdown_usd = current_drawdown_usd
+        if current_drawdown_pct > self.max_drawdown_pct:
+            self.max_drawdown_pct = current_drawdown_pct
         self.updated_at = utc_now()
 
     def snapshot(self) -> dict[str, Any]:
@@ -415,12 +451,27 @@ class PaperAccount:
             "version": self.version,
             "engine": "xauusd_paper",
             "strategy_mode": self.strategy_mode,
+            "entry_policy": self.entry_policy,
             "symbol": self.symbol,
             "starting_balance_usd": self.starting_balance_usd,
             "balance_usd": self.balance_usd,
             "equity_usd": self.equity_usd,
             "realized_pnl_usd": self.realized_pnl_usd,
             "unrealized_pnl_usd": self.unrealized_pnl_usd,
+            "peak_equity_usd": self.peak_equity_usd,
+            "current_drawdown_usd": max(
+                0.0,
+                self.peak_equity_usd - self.equity_usd,
+            ),
+            "current_drawdown_pct": (
+                max(0.0, self.peak_equity_usd - self.equity_usd)
+                / self.peak_equity_usd
+                * 100.0
+                if self.peak_equity_usd > 0
+                else 0.0
+            ),
+            "max_drawdown_usd": self.max_drawdown_usd,
+            "max_drawdown_pct": self.max_drawdown_pct,
             "last_mark_price": self.last_mark_price,
             "last_mark_at": self.last_mark_at,
             "created_at": self.created_at,

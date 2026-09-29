@@ -264,42 +264,266 @@ def _signal_pnl_text(
     return realised_text, floating_text, total_text
 
 
-def _paper_status_embed(state: dict[str, Any]) -> discord.Embed:
+def _paper_signed_usd(value: float) -> str:
+    return f"${value:+,.2f}"
+
+
+def _paper_pips(
+    direction: str,
+    entry_price: float,
+    mark_price: float,
+    pip_size: float,
+) -> float:
+    if pip_size <= 0:
+        return 0.0
+    move = (
+        mark_price - entry_price
+        if direction.upper() == "BUY"
+        else entry_price - mark_price
+    )
+    return move / pip_size
+
+
+def _paper_realised_pips(position: dict[str, Any], pip_size: float) -> float:
+    if pip_size <= 0:
+        return 0.0
+    entry = float(position.get("entry_price") or 0.0)
+    initial_qty = float(position.get("initial_quantity_oz") or 0.0)
+    direction = str(position.get("direction") or "").upper()
+    if entry <= 0 or initial_qty <= 0:
+        return 0.0
+
+    weighted = 0.0
+    for item in position.get("history") or []:
+        if str(item.get("kind") or "") != "close":
+            continue
+        price = item.get("price")
+        qty = item.get("quantity_oz")
+        if price is None or qty is None:
+            continue
+        signed_pips = _paper_pips(
+            direction,
+            entry,
+            float(price),
+            pip_size,
+        )
+        weighted += signed_pips * float(qty)
+    return weighted / initial_qty
+
+
+def _paper_trade_stats(state: dict[str, Any], pip_size: float) -> dict[str, Any]:
+    positions = list(state.get("positions") or [])
+    closed = [p for p in positions if str(p.get("status") or "") == "CLOSED"]
+    wins = sum(1 for p in closed if float(p.get("realized_pnl_usd") or 0.0) > 1e-9)
+    losses = sum(1 for p in closed if float(p.get("realized_pnl_usd") or 0.0) < -1e-9)
+    breakeven = max(0, len(closed) - wins - losses)
+    win_rate = (wins / len(closed) * 100.0) if closed else 0.0
+    realised_pips = sum(_paper_realised_pips(p, pip_size) for p in closed)
+    return {
+        "closed": len(closed),
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate": win_rate,
+        "realised_pips": realised_pips,
+    }
+
+
+def _paper_dashboard_embed(
+    state: dict[str, Any],
+    *,
+    timezone_name: str = "Europe/Isle_of_Man",
+    pip_size: float = 0.01,
+) -> discord.Embed:
     starting = float(state.get("starting_balance_usd", 100000.0) or 0.0)
     balance = float(state.get("balance_usd", starting) or 0.0)
     equity = float(state.get("equity_usd", balance) or 0.0)
     realized = float(state.get("realized_pnl_usd", 0.0) or 0.0)
     unrealized = float(state.get("unrealized_pnl_usd", 0.0) or 0.0)
-    candidates = int(state.get("candidate_count", 0) or 0)
-    open_positions = int(state.get("open_position_count", 0) or 0)
+    total_pnl = equity - starting
+    total_return = (total_pnl / starting * 100.0) if starting > 0 else 0.0
+
+    peak_equity = float(state.get("peak_equity_usd", max(starting, equity)) or 0.0)
+    current_dd = float(state.get("current_drawdown_usd", 0.0) or 0.0)
+    current_dd_pct = float(state.get("current_drawdown_pct", 0.0) or 0.0)
+    max_dd = float(state.get("max_drawdown_usd", 0.0) or 0.0)
+    max_dd_pct = float(state.get("max_drawdown_pct", 0.0) or 0.0)
+
+    positions = list(state.get("positions") or [])
+    open_positions = [
+        p for p in positions if str(p.get("status") or "") == "OPEN"
+    ]
+    candidates = list(state.get("candidates") or [])
+    queued = sum(
+        1
+        for candidate in candidates
+        if str(candidate.get("execution_status") or "") == "PENDING_STRATEGY"
+    )
+    stats = _paper_trade_stats(state, pip_size)
+
     mode = str(state.get("strategy_mode") or "observe_only")
-    symbol = str(state.get("symbol") or "XAUUSD")
+    entry_policy = str(state.get("entry_policy") or "all_parsed")
     mark = state.get("last_mark_price")
 
     embed = discord.Embed(
-        title="DK Capital | Paper Engine",
-        description=f"Virtual {symbol} account | Strategy: **{mode}**",
+        title="DK Capital | XAUUSD Paper Trading",
+        description=(
+            f"**$100k Paper Account** | Entry policy: **{entry_policy.upper()}**\n"
+            f"Strategy mode: **{mode}**"
+        ),
     )
-    embed.add_field(name="Starting Balance", value=f"${starting:,.2f}", inline=True)
-    embed.add_field(name="Balance", value=f"${balance:,.2f}", inline=True)
-    embed.add_field(name="Equity", value=f"${equity:,.2f}", inline=True)
-    embed.add_field(name="Realised PnL", value=f"${realized:+,.2f}", inline=True)
-    embed.add_field(name="Open PnL", value=f"${unrealized:+,.2f}", inline=True)
+
     embed.add_field(
-        name="XAU/USD Mark",
-        value="Not available" if mark is None else f"${float(mark):,.2f}",
+        name="Account",
+        value=(
+            f"Starting: **${starting:,.2f}**\n"
+            f"Balance: **${balance:,.2f}**\n"
+            f"Live equity: **${equity:,.2f}**\n"
+            f"Total PnL: **{_paper_signed_usd(total_pnl)}** ({total_return:+.2f}%)"
+        ),
         inline=True,
     )
-    embed.add_field(name="Signals Ingested", value=str(candidates), inline=True)
-    embed.add_field(name="Open Paper Trades", value=str(open_positions), inline=True)
+    embed.add_field(
+        name="PnL",
+        value=(
+            f"Realised: **{_paper_signed_usd(realized)}**\n"
+            f"Open: **{_paper_signed_usd(unrealized)}**\n"
+            f"Realised pips: **{stats['realised_pips']:+,.1f}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Drawdown",
+        value=(
+            f"Peak equity: **${peak_equity:,.2f}**\n"
+            f"Current: **${current_dd:,.2f}** ({current_dd_pct:.2f}%)\n"
+            f"Maximum: **${max_dd:,.2f}** ({max_dd_pct:.2f}%)"
+        ),
+        inline=True,
+    )
+
+    mark_text = "Unavailable"
+    if mark is not None:
+        mark_text = f"**${float(mark):,.2f}**"
+        marked_at = state.get("last_mark_at")
+        if marked_at:
+            mark_text += f"\n{_local_timestamp(marked_at, timezone_name)}"
+    embed.add_field(name="XAU/USD Live Mark", value=mark_text, inline=True)
+
+    embed.add_field(
+        name="Trade Stats",
+        value=(
+            f"Open: **{len(open_positions)}** | Closed: **{stats['closed']}**\n"
+            f"W/L/BE: **{stats['wins']} / {stats['losses']} / {stats['breakeven']}**\n"
+            f"Win rate: **{stats['win_rate']:.1f}%**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Signal Intake",
+        value=(
+            f"Parsed XAUUSD: **{len(candidates)}**\n"
+            f"Queued for strategy: **{queued}**\n"
+            f"Pip size: **{pip_size:g}** ($1.00 = {1.0 / pip_size:,.0f} pips)"
+        ),
+        inline=True,
+    )
+
+    if open_positions:
+        lines: list[str] = []
+        for position in open_positions[-10:]:
+            direction = str(position.get("direction") or "?").upper()
+            entry = float(position.get("entry_price") or 0.0)
+            live_mark = position.get("last_mark_price")
+            if live_mark is None:
+                live_mark = mark
+            current_pips = (
+                _paper_pips(direction, entry, float(live_mark), pip_size)
+                if live_mark is not None and entry > 0
+                else 0.0
+            )
+            open_pnl = float(position.get("unrealized_pnl_usd") or 0.0)
+            realised_trade = float(position.get("realized_pnl_usd") or 0.0)
+            realised_trade_pips = _paper_realised_pips(position, pip_size)
+            initial_qty = float(position.get("initial_quantity_oz") or 0.0)
+            remaining_qty = float(position.get("remaining_quantity_oz") or 0.0)
+            remaining_pct = (
+                remaining_qty / initial_qty * 100.0 if initial_qty > 0 else 0.0
+            )
+            stop = position.get("stop_loss")
+            stop_text = "None" if stop is None else _price(stop)
+            signal_id = str(position.get("signal_id") or "")
+            candidate = next(
+                (
+                    c
+                    for c in candidates
+                    if str(c.get("signal_id") or "") == signal_id
+                ),
+                None,
+            )
+            provider = _provider_name(candidate or {})
+            lines.append(
+                f"**{direction} XAUUSD** | {provider}\n"
+                f"Entry {_price(entry)} -> Mark {_price(live_mark)} | SL {stop_text}\n"
+                f"Open **{_paper_signed_usd(open_pnl)} / {current_pips:+,.1f} pips** | "
+                f"Realised **{_paper_signed_usd(realised_trade)} / "
+                f"{realised_trade_pips:+,.1f} pips**\n"
+                f"Size {remaining_qty:,.2f}/{initial_qty:,.2f} oz ({remaining_pct:.1f}% remaining)"
+            )
+
+        if len(open_positions) > 10:
+            lines.append(f"...and {len(open_positions) - 10} more open trade(s).")
+        current_text = "\n\n".join(lines)
+        if len(current_text) > 1024:
+            current_text = current_text[:1018] + "\n..."
+        embed.add_field(name="Current Trades", value=current_text, inline=False)
+    else:
+        embed.add_field(
+            name="Current Trades",
+            value=(
+                "No open paper trades yet. Every parsed XAUUSD signal is selected; "
+                "fills begin when the sizing/risk strategy is configured."
+            ),
+            inline=False,
+        )
+
+    closed_positions = [
+        p for p in positions if str(p.get("status") or "") == "CLOSED"
+    ]
+    if closed_positions:
+        recent_lines: list[str] = []
+        for position in closed_positions[-5:][::-1]:
+            pnl = float(position.get("realized_pnl_usd") or 0.0)
+            pips = _paper_realised_pips(position, pip_size)
+            recent_lines.append(
+                f"{position.get('direction')} XAUUSD @ {_price(position.get('entry_price'))} "
+                f"| **{_paper_signed_usd(pnl)} / {pips:+,.1f} pips**"
+            )
+        embed.add_field(
+            name="Recent Closed Trades",
+            value="\n".join(recent_lines),
+            inline=False,
+        )
 
     updated = state.get("updated_at")
-    footer = "Paper trading only"
+    footer = "PAPER TRADING ONLY"
     if updated:
-        footer += f" | Updated {updated}"
+        footer += f" | Updated {_local_timestamp(updated, timezone_name)}"
     embed.set_footer(text=footer)
     return embed
 
+
+def _paper_status_embed(
+    state: dict[str, Any],
+    *,
+    timezone_name: str = "Europe/Isle_of_Man",
+    pip_size: float = 0.01,
+) -> discord.Embed:
+    return _paper_dashboard_embed(
+        state,
+        timezone_name=timezone_name,
+        pip_size=pip_size,
+    )
 
 def _dashboard_embed(state: dict[str, Any]) -> discord.Embed:
     signals = list(state.get("signals") or [])
@@ -536,6 +760,79 @@ def build_bot(settings: Settings) -> commands.Bot:
         settings.gold_spot_refresh_seconds,
     )
 
+    async def update_paper_dashboard() -> bool:
+        state = _load_json(settings.paper_state_path)
+        if not state:
+            return False
+
+        channel_id = settings.paper_dashboard_channel_id
+        config = _load_json(settings.paper_dashboard_state_path)
+        message_id = config.get("message_id")
+
+        try:
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception(
+                "Unable to access paper dashboard channel %s",
+                channel_id,
+            )
+            return False
+
+        if not hasattr(channel, "send"):
+            logger.error(
+                "Configured paper dashboard channel %s is not messageable",
+                channel_id,
+            )
+            return False
+
+        embed = _paper_dashboard_embed(
+            state,
+            timezone_name=settings.display_timezone,
+            pip_size=settings.paper_xau_pip_size,
+        )
+
+        try:
+            if message_id:
+                try:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.edit(embed=embed)
+                    return True
+                except discord.NotFound:
+                    logger.warning(
+                        "Paper dashboard message %s was deleted; recreating",
+                        message_id,
+                    )
+
+            message = await channel.send(embed=embed)
+            try:
+                await message.pin(
+                    reason="Permanent DK Capital paper-trading dashboard",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                logger.warning(
+                    "Paper dashboard created but could not be pinned channel=%s message=%s",
+                    channel_id,
+                    message.id,
+                )
+
+            _write_json(
+                settings.paper_dashboard_state_path,
+                {
+                    "channel_id": channel_id,
+                    "message_id": message.id,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            logger.info(
+                "Paper dashboard created channel=%s message=%s",
+                channel_id,
+                message.id,
+            )
+            return True
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("Paper dashboard update failed")
+            return False
+
     async def update_dashboard() -> bool:
         config = _load_json(settings.discord_dashboard_config_path)
         channel_id = config.get("channel_id")
@@ -716,6 +1013,14 @@ def build_bot(settings: Settings) -> commands.Bot:
         await bot.wait_until_ready()
 
     @tasks.loop(seconds=5)
+    async def paper_dashboard_loop() -> None:
+        await update_paper_dashboard()
+
+    @paper_dashboard_loop.before_loop
+    async def before_paper_dashboard_loop() -> None:
+        await bot.wait_until_ready()
+
+    @tasks.loop(seconds=5)
     async def dashboard_loop() -> None:
         await update_dashboard()
 
@@ -739,6 +1044,8 @@ def build_bot(settings: Settings) -> commands.Bot:
 
         if not dashboard_loop.is_running():
             dashboard_loop.start()
+        if not paper_dashboard_loop.is_running():
+            paper_dashboard_loop.start()
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
 
@@ -813,6 +1120,11 @@ def build_bot(settings: Settings) -> commands.Bot:
         if str(dashboard.get("channel_id") or "") == str(channel.id):
             _write_json(settings.discord_dashboard_config_path, {})
 
+        # The permanent paper dashboard is deliberately recreated by its loop
+        # after a purge. Clear the stale message ID so recreation is immediate.
+        if channel.id == settings.paper_dashboard_channel_id:
+            _write_json(settings.paper_dashboard_state_path, {})
+
         logger.warning(
             "Discord /delall channel=%s guild=%s user=%s deleted=%s",
             channel.id,
@@ -839,7 +1151,11 @@ def build_bot(settings: Settings) -> commands.Bot:
             )
             return
         await interaction.response.send_message(
-            embed=_paper_status_embed(state),
+            embed=_paper_status_embed(
+                state,
+                timezone_name=settings.display_timezone,
+                pip_size=settings.paper_xau_pip_size,
+            ),
             ephemeral=True,
         )
 
