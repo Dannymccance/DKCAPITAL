@@ -15,6 +15,7 @@ ActionKind = Literal[
     "stop_loss",
     "setup_failed",
     "breakeven_close",
+    "unparsed_new_signal",
     "commentary",
 ]
 
@@ -28,6 +29,21 @@ def _norm(text: str) -> str:
 
 def _number(value: str) -> float:
     return float(value.replace(",", ""))
+
+
+def _labelled_price(text: str, label_pattern: str) -> float | None:
+    """Extract a provider-labelled price without requiring whitespace after it.
+
+    Telegram providers sometimes send values such as "Entry: 4157low lot".
+    Stopping the numeric capture when the digits end is deliberate: a trailing
+    word boundary would reject that otherwise valid price because both the
+    final digit and the following letter are regex word characters.
+    """
+    match = re.search(
+        rf"\b(?:{label_pattern})\s*(?::|=|@|-)?\s*(\d[\d,]*(?:\.\d+)?)",
+        text,
+    )
+    return _number(match.group(1)) if match else None
 
 
 def _symbol(text: str) -> str | None:
@@ -222,33 +238,51 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
 
     # Elite Portfolios-style structured signal:
     # "I am personally entering ... Gold buy ... Entry: 4281 ... Stop loss: 4275 ... Take profit: Open"
-    structured_entry = re.search(r"\bENTRY\s*:\s*(\d+(?:\.\d+)?)\b", normalized)
-    structured_sl = re.search(
-        r"\b(?:STOP\s*LOSS|SL)\s*:\s*(\d+(?:\.\d+)?)\b",
-        normalized,
-    )
-    if (
-        structured_entry
-        and structured_sl
-        and symbol
+    #
+    # Be deliberately tolerant around labelled prices. Elite sometimes omits
+    # whitespace after the number ("Entry: 4157low lot") or varies separators.
+    # An SL may also arrive on a subsequent Telegram edit, so a valid entry is
+    # enough to create the signal with an UNSET stop until the edit arrives.
+    elite_signal_hint = bool(
+        symbol
         and direction
+        and re.search(r"\bENTRY\b", normalized)
         and (
             "I AM PERSONALLY ENTERING" in normalized
-            or "TAKE PROFIT:" in normalized
+            or re.search(r"\bTAKE\s+PROFIT\b", normalized)
         )
-    ):
-        price = _number(structured_entry.group(1))
+    )
+    if elite_signal_hint:
+        structured_entry = _labelled_price(normalized, r"ENTRY")
+        structured_sl = _labelled_price(normalized, r"STOP\s*LOSS|SL")
+
+        if structured_entry is not None:
+            return [
+                ParsedAction(
+                    kind="new_signal",
+                    symbol=symbol,
+                    direction=direction,
+                    entry_low=structured_entry,
+                    entry_high=structured_entry,
+                    tps=_extract_tps(normalized),
+                    sl=structured_sl,
+                    source_style="elite",
+                    scope="new",
+                    reply_to_message_id=reply_to_message_id,
+                    raw_text=text,
+                )
+            ]
+
+        # A message that is clearly presenting itself as a fresh Elite signal
+        # must never fall through and become a management update for an older
+        # position. Preserve it as unresolved instead.
         return [
             ParsedAction(
-                kind="new_signal",
+                kind="unparsed_new_signal",
                 symbol=symbol,
                 direction=direction,
-                entry_low=price,
-                entry_high=price,
-                tps=_extract_tps(normalized),
-                sl=_number(structured_sl.group(1)),
                 source_style="elite",
-                scope="new",
+                scope="none",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
@@ -260,8 +294,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     # These deliberately do not require a ticker or reply target. The state
     # resolver still scopes them to the originating Telegram chat/provider.
     side_close = re.search(
-        r"\\b(?:TAKE\\s+PROFITS?|CLOSE|EXIT|SECURE\\s+PROFITS?)\\s+"
-        r"(?:ON\\s+)?ALL\\s+(LONGS?|SHORTS?|BUYS?|SELLS?)\\b",
+        r"\b(?:TAKE\s+PROFITS?|CLOSE|EXIT|SECURE\s+PROFITS?)\s+"
+        r"(?:ON\s+)?ALL\s+(LONGS?|SHORTS?|BUYS?|SELLS?)\b",
         normalized,
     )
     if side_close:
