@@ -150,6 +150,7 @@ class BybitDemoEngine:
             base_url=settings.bybit_demo_base_url,
         )
         self.instrument: InstrumentSpec | None = None
+        self.execution_ready = False
         self.state = _load_json(settings.bybit_demo_state_path)
         if not self.state:
             self.state = {
@@ -307,11 +308,31 @@ class BybitDemoEngine:
             stop = _temporary_stop(signal, actual_entry)
             stop_source = "TEMPORARY"
         assert self.instrument is not None
-        self.client.set_stop_loss(
-            symbol=self.settings.bybit_demo_symbol,
-            position_idx=position_idx,
-            stop_loss=_tick_price(stop, self.instrument.tick_size),
-        )
+        try:
+            self.client.set_stop_loss(
+                symbol=self.settings.bybit_demo_symbol,
+                position_idx=position_idx,
+                stop_loss=_tick_price(stop, self.instrument.tick_size),
+            )
+        except BybitApiError:
+            # Never leave a freshly opened demo position unprotected.
+            emergency = float(position.get("size") or actual_size)
+            if emergency > 0:
+                self.client.place_market_order(
+                    symbol=self.settings.bybit_demo_symbol,
+                    side=_exit_side(direction),
+                    qty=_format_decimal(
+                        _floor_step(
+                            _decimal(emergency),
+                            _decimal(self.instrument.qty_step, "0.001"),
+                        )
+                    ),
+                    position_idx=position_idx,
+                    order_link_id=_order_link("dke", signal_id),
+                    reduce_only=True,
+                    close_on_trigger=True,
+                )
+            raise
 
         processed = [
             _event_fingerprint(item) for item in (signal.get("history") or [])
@@ -659,6 +680,41 @@ class BybitDemoEngine:
             self.settings.bybit_demo_execution_enabled,
         )
         if self.settings.bybit_demo_execution_enabled:
+            key_info = self.client.api_key_info()
+            permissions = dict(key_info.get("permissions") or {})
+            contract_permissions = {
+                str(value) for value in (permissions.get("ContractTrade") or [])
+            }
+            read_only = int(key_info.get("readOnly") or 0)
+            required = {"Order", "Position"}
+            missing = sorted(required - contract_permissions)
+            if read_only != 0 or missing:
+                self.execution_ready = False
+                message = (
+                    "Bybit demo execution BLOCKED: API key must be Read-Write "
+                    "with Contract Trade permissions Order and Position. "
+                    f"readOnly={read_only} ContractTrade={sorted(contract_permissions)}"
+                )
+                self.state["permission_check"] = {
+                    "status": "BLOCKED",
+                    "checked_at": _utc_now(),
+                    "read_only": read_only,
+                    "contract_trade": sorted(contract_permissions),
+                    "missing": missing,
+                }
+                self._save()
+                logger.error(message)
+                return
+
+            self.execution_ready = True
+            self.state["permission_check"] = {
+                "status": "OK",
+                "checked_at": _utc_now(),
+                "read_only": read_only,
+                "contract_trade": sorted(contract_permissions),
+            }
+            self._save()
+
             try:
                 self.client.switch_hedge_mode(
                     self.settings.bybit_demo_symbol
@@ -678,6 +734,8 @@ class BybitDemoEngine:
                     "Could not set leverage automatically: %s",
                     exc,
                 )
+        else:
+            self.execution_ready = False
 
     async def run(self) -> None:
         await self.initialise()
@@ -735,9 +793,12 @@ class BybitDemoEngine:
                             }
                             self._save()
                             continue
-                        if not self.settings.bybit_demo_execution_enabled:
+                        if (
+                            not self.settings.bybit_demo_execution_enabled
+                            or not self.execution_ready
+                        ):
                             known[signal_id] = {
-                                "status": "OBSERVED_EXECUTION_DISABLED",
+                                "status": "OBSERVED_EXECUTION_BLOCKED",
                                 "direction": signal.get("direction"),
                                 "observed_at": _utc_now(),
                             }

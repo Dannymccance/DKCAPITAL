@@ -118,6 +118,13 @@ class BybitV5Client:
             raise BybitApiError("Bybit demo wallet returned no UNIFIED account row")
         return rows[0]
 
+    def api_key_info(self) -> dict[str, Any]:
+        response = self._request(
+            "GET",
+            "/v5/user/query-api",
+        )
+        return dict(response.get("result") or {})
+
     def instrument(self, symbol: str) -> InstrumentSpec:
         response = self._request(
             "GET",
