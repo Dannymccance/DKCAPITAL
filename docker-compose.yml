@@ -26,6 +26,17 @@ services:
       - dkcapital-data:/app/data
     restart: unless-stopped
 
+  bybit-demo:
+    build: .
+    command: ["python", "-m", "dkcapital.bybit_demo_engine"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    restart: unless-stopped
+    profiles:
+      - bybit-demo
+
   telegram-session:
     build: .
     command: ["python", "scripts/generate_telegram_session.py"]
