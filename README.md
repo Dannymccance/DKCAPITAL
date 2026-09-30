@@ -97,6 +97,63 @@ If you need the numeric ID for a private Telegram channel or group:
 docker compose run --rm telegram-dialogs
 ```
 
+
+## Bybit demo trading
+
+DK Capital includes an isolated Bybit Demo Trading service for XAUUSD provider
+signals. Provider signals remain `XAUUSD`; execution is mapped to Bybit's
+API-tradable `XAUUSDT` TradFi perpetual.
+
+The service uses only the mainnet Demo Trading API:
+
+```text
+https://api-demo.bybit.com
+```
+
+Create the API key from Bybit while switched into **Demo Trading**. Never put a
+live-account API key in the demo variables.
+
+Add the demo credentials to `.env`:
+
+```text
+BYBIT_DEMO_API_KEY=...
+BYBIT_DEMO_API_SECRET=...
+BYBIT_DEMO_EXECUTION_ENABLED=false
+```
+
+Start with execution disabled:
+
+```bash
+docker compose --profile bybit-demo up -d --build bybit-demo
+docker compose logs --tail=100 bybit-demo
+```
+
+A successful connection writes `/app/data/bybit-demo.json` and logs the demo
+wallet equity, XAUUSDT price, tick size and quantity step. Once the connection
+has been verified, set:
+
+```text
+BYBIT_DEMO_EXECUTION_ENABLED=true
+```
+
+and rebuild/restart the service. Only signals observed after activation are
+eligible for execution and stale signals are rejected. The demo engine sizes
+each new trade from current demo equity and the protective stop, uses hedge
+mode so one BUY and one SELL can coexist, places a server-side stop, mirrors
+provider partial closes and stop changes, and applies the existing 30/30/40
+TP management for three-target signals.
+
+Version 1 intentionally allows only one tracked signal per direction at a time.
+A second same-direction signal is skipped rather than allowing Bybit to merge
+allocations in a way that could make per-signal risk management ambiguous.
+
+Durable state:
+
+```text
+/app/data/bybit-demo.json
+```
+
+
 ## Tests
 
 ```bash

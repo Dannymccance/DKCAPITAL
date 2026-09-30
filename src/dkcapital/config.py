@@ -24,6 +24,13 @@ def _chat_ref(value: str) -> ChatRef:
         return value
 
 
+def _bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str
@@ -62,6 +69,17 @@ class Settings:
     paper_daily_loss_pct: float
     paper_xau_contract_oz_per_lot: float
     paper_xau_lot_step: float
+
+    bybit_demo_api_key: str | None
+    bybit_demo_api_secret: str | None
+    bybit_demo_base_url: str
+    bybit_demo_symbol: str
+    bybit_demo_execution_enabled: bool
+    bybit_demo_state_path: Path
+    bybit_demo_risk_pct: float
+    bybit_demo_leverage: int
+    bybit_demo_poll_seconds: float
+    bybit_demo_max_signal_age_seconds: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -172,6 +190,53 @@ class Settings:
             paper_xau_lot_step=float(
                 os.getenv("PAPER_XAU_LOT_STEP", "0.01").strip()
             ),
+            bybit_demo_api_key=(
+                os.getenv("BYBIT_DEMO_API_KEY", "").strip() or None
+            ),
+            bybit_demo_api_secret=(
+                os.getenv("BYBIT_DEMO_API_SECRET", "").strip() or None
+            ),
+            bybit_demo_base_url=(
+                os.getenv(
+                    "BYBIT_DEMO_BASE_URL",
+                    "https://api-demo.bybit.com",
+                ).strip()
+                or "https://api-demo.bybit.com"
+            ),
+            bybit_demo_symbol=(
+                os.getenv("BYBIT_DEMO_SYMBOL", "XAUUSDT").strip().upper()
+                or "XAUUSDT"
+            ),
+            bybit_demo_execution_enabled=_bool(
+                "BYBIT_DEMO_EXECUTION_ENABLED",
+                False,
+            ),
+            bybit_demo_state_path=Path(
+                os.getenv(
+                    "BYBIT_DEMO_STATE_PATH",
+                    "/app/data/bybit-demo.json",
+                )
+            ),
+            bybit_demo_risk_pct=float(
+                os.getenv("BYBIT_DEMO_RISK_PCT", "0.005").strip()
+            ),
+            bybit_demo_leverage=max(
+                1,
+                int(os.getenv("BYBIT_DEMO_LEVERAGE", "10").strip()),
+            ),
+            bybit_demo_poll_seconds=max(
+                1.0,
+                float(os.getenv("BYBIT_DEMO_POLL_SECONDS", "2").strip()),
+            ),
+            bybit_demo_max_signal_age_seconds=max(
+                30.0,
+                float(
+                    os.getenv(
+                        "BYBIT_DEMO_MAX_SIGNAL_AGE_SECONDS",
+                        "180",
+                    ).strip()
+                ),
+            ),
         )
 
     def validate_telegram_credentials(self) -> None:
@@ -204,3 +269,23 @@ class Settings:
     def validate_discord(self) -> None:
         if not self.discord_bot_token:
             raise RuntimeError("Missing required environment variable: DISCORD_BOT_TOKEN")
+
+    def validate_bybit_demo(self) -> None:
+        missing: list[str] = []
+        if not self.bybit_demo_api_key:
+            missing.append("BYBIT_DEMO_API_KEY")
+        if not self.bybit_demo_api_secret:
+            missing.append("BYBIT_DEMO_API_SECRET")
+        if missing:
+            raise RuntimeError(
+                "Missing required Bybit demo environment variables: "
+                + ", ".join(missing)
+            )
+        if self.bybit_demo_base_url != "https://api-demo.bybit.com":
+            raise RuntimeError(
+                "BYBIT_DEMO_BASE_URL must remain https://api-demo.bybit.com"
+            )
+        if not (0.0 < self.bybit_demo_risk_pct <= 0.02):
+            raise RuntimeError(
+                "BYBIT_DEMO_RISK_PCT must be greater than 0 and no more than 0.02"
+            )
