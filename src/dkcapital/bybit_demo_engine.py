@@ -668,10 +668,16 @@ class BybitDemoEngine:
                     "Could not switch hedge mode automatically: %s",
                     exc,
                 )
-            self.client.set_leverage(
-                self.settings.bybit_demo_symbol,
-                self.settings.bybit_demo_leverage,
-            )
+            try:
+                self.client.set_leverage(
+                    self.settings.bybit_demo_symbol,
+                    self.settings.bybit_demo_leverage,
+                )
+            except BybitApiError as exc:
+                logger.warning(
+                    "Could not set leverage automatically: %s",
+                    exc,
+                )
 
     async def run(self) -> None:
         await self.initialise()
