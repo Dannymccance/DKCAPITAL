@@ -340,8 +340,14 @@ def _candle_path(candle: Kline) -> list[float]:
     return result
 
 
-def _open_positions(account: PaperAccount) -> bool:
-    return any(position.status == "OPEN" for position in account.positions.values())
+def _needs_market_processing(account: PaperAccount) -> bool:
+    if any(position.status == "OPEN" for position in account.positions.values()):
+        return True
+    return any(
+        candidate.execution_status
+        in {"PENDING_STRATEGY", "PENDING_SL", "PENDING_INVALID_SL"}
+        for candidate in account.candidates.values()
+    )
 
 
 def _sync_account(
@@ -423,7 +429,7 @@ def _rebuild(
         execution_time = _ceil_minute(event_time)
 
         while candle_index < len(candles) and candles[candle_index].start < execution_time:
-            if _open_positions(account):
+            if _needs_market_processing(account):
                 _replay_candle(strategy, account, candles[candle_index])
             candle_index += 1
 
@@ -435,7 +441,7 @@ def _rebuild(
         )
 
     while candle_index < len(candles):
-        if _open_positions(account):
+        if _needs_market_processing(account):
             _replay_candle(strategy, account, candles[candle_index])
         candle_index += 1
 
