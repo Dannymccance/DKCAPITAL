@@ -229,6 +229,29 @@ the delayed Telegram and market cursors to the current end of each live stream.
 Existing Telegram history and the Standard Bullion market tape are preserved, but
 only newly captured data after the reset can enter the new paper ledger.
 
+The last pre-reset signals can only be backfilled when the preserved Standard
+Bullion tape provides continuous coverage for the whole replay window. The tool
+refuses to write anything if that coverage is missing or has a gap larger than
+45 seconds.
+
+Dry-run the latest 10 signals first:
+
+```bash
+docker compose stop paper-engine
+docker compose --profile tools run --rm paper-backfill-last
+```
+
+If the dry-run reports complete coverage and the replay summary is correct, write
+the backfill explicitly:
+
+```bash
+docker compose --profile tools run --rm paper-backfill-last \
+  python scripts/backfill_last_signals.py \
+  --count 10 \
+  --confirm BACKFILL-LAST-SIGNALS
+docker compose up -d paper-engine
+```
+
 The accounting core supports paper fills, partial closes, realised USD PnL,
 unrealised USD PnL, balance and equity. XAUUSD position quantity is stored in
 troy ounces, so PnL is independent of any future broker-specific lot convention.
