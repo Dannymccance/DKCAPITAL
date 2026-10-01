@@ -90,7 +90,7 @@ class XauStrategyTests(unittest.TestCase):
         self.assertLessEqual(position.initial_risk_usd, 500.0)
         self.assertGreater(position.initial_risk_usd, 490.0)
 
-    def test_second_same_direction_trade_is_reduced_to_remaining_book_capacity(self) -> None:
+    def test_second_same_direction_trade_gets_full_independent_trade_budget(self) -> None:
         account = self.account()
         first = sig("buy:1", sl=4150.0)
         second = sig(
@@ -106,10 +106,42 @@ class XauStrategyTests(unittest.TestCase):
 
         p1 = account.positions["paper:buy:1"]
         p2 = account.positions["paper:buy:2"]
-        total_risk = account.current_directional_risk_usd("BUY")
-        self.assertLessEqual(total_risk, account.balance_usd * 0.008 + 1e-6)
-        self.assertLess(p2.initial_risk_usd, p1.initial_risk_usd)
-        self.assertGreaterEqual(p2.initial_risk_usd, account.balance_usd * 0.001)
+        self.assertAlmostEqual(p2.lot_size, p1.lot_size)
+        self.assertAlmostEqual(p2.initial_risk_usd, p1.initial_risk_usd)
+        self.assertGreater(
+            account.current_directional_risk_usd("BUY"),
+            account.balance_usd * 0.008,
+        )
+
+    def test_legacy_direction_cap_rejection_is_requeued_and_entered(self) -> None:
+        account = self.account()
+        account.sync_signal(sig("buy:legacy", sl=4150.0))
+        candidate = account.candidates["buy:legacy"]
+        candidate.execution_status = "REJECTED_DIRECTIONAL_RISK_CAP"
+        candidate.execution_note = "legacy cap"
+
+        self.strategy.process(account, quote(4160.0))
+
+        self.assertIn("paper:buy:legacy", account.positions)
+        self.assertEqual(candidate.execution_status, "OPEN")
+
+    def test_multiple_pending_same_direction_signals_are_not_cancelled(self) -> None:
+        account = self.account()
+        account.sync_signal(sig("buy:1", sl=4150.0))
+        account.sync_signal(
+            sig(
+                "buy:2",
+                sl=4150.0,
+                opened_at="2026-09-29T13:30:30+00:00",
+            )
+        )
+
+        self.strategy.process(account, quote(4160.0))
+
+        self.assertIn("paper:buy:1", account.positions)
+        self.assertIn("paper:buy:2", account.positions)
+        self.assertEqual(account.candidates["buy:1"].execution_status, "OPEN")
+        self.assertEqual(account.candidates["buy:2"].execution_status, "OPEN")
 
     def test_opposite_direction_can_hedge_with_independent_risk_cap(self) -> None:
         account = self.account()
@@ -267,10 +299,7 @@ class XauStrategyTests(unittest.TestCase):
             position.entry_price - float(position.stop_loss or 0.0)
         ) * position.remaining_quantity_oz
         self.assertLessEqual(current_risk, original_risk + 1e-6)
-        self.assertLessEqual(
-            account.current_directional_risk_usd("BUY"),
-            account.balance_usd * 0.008 + 1e-6,
-        )
+        self.assertGreater(account.current_directional_risk_usd("BUY"), 0.0)
 
     def test_legacy_wrong_side_rejection_now_enters_with_temp_stop(self) -> None:
         account = self.account()
