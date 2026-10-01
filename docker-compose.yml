@@ -85,6 +85,16 @@ services:
     profiles:
       - tools
 
+  paper-backfill-last:
+    build: .
+    command: ["python", "scripts/backfill_last_signals.py", "--count", "10"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    profiles:
+      - tools
+
   discord-bot:
     build: .
     command: ["python", "-m", "dkcapital.discord_bot"]
