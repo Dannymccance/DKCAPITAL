@@ -80,6 +80,9 @@ class Settings:
     paper_xau_pip_size: float
     paper_dashboard_channel_id: int
     paper_dashboard_state_path: Path
+    paper_simulation_delay_seconds: int
+    paper_market_tape_path: Path
+    paper_delay_state_path: Path
 
     paper_risk_pct: float
     paper_direction_risk_cap_pct: float
@@ -182,6 +185,22 @@ class Settings:
                 os.getenv(
                     "PAPER_DASHBOARD_STATE_PATH",
                     "/app/data/paper-dashboard.json",
+                )
+            ),
+            paper_simulation_delay_seconds=max(
+                0,
+                int(os.getenv("PAPER_SIMULATION_DELAY_SECONDS", "900").strip()),
+            ),
+            paper_market_tape_path=Path(
+                os.getenv(
+                    "PAPER_MARKET_TAPE_PATH",
+                    "/app/data/xauusd-market-tape.jsonl",
+                )
+            ),
+            paper_delay_state_path=Path(
+                os.getenv(
+                    "PAPER_DELAY_STATE_PATH",
+                    "/app/data/paper-delay-state.json",
                 )
             ),
             paper_risk_pct=float(
