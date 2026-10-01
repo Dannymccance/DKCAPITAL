@@ -134,21 +134,27 @@ def _market_coverage(
     if not timed:
         return False, "No Standard Bullion market tape rows cover the requested window.", []
 
-    if timed[0][0] > start:
+    leading_gap = (timed[0][0] - start).total_seconds()
+    if leading_gap > maximum_gap_seconds:
         return (
             False,
-            "Market tape starts at {} but the oldest selected signal starts at {}.".format(
+            "Market tape starts at {} which is {:.1f}s after the oldest selected "
+            "signal at {}.".format(
                 timed[0][0].isoformat(),
+                leading_gap,
                 start.isoformat(),
             ),
             timed,
         )
 
-    if timed[-1][0] < end:
+    trailing_gap = (end - timed[-1][0]).total_seconds()
+    if trailing_gap > maximum_gap_seconds:
         return (
             False,
-            "Market tape ends at {} but the reset boundary is {}.".format(
+            "Market tape ends at {} which is {:.1f}s before the reset boundary "
+            "{}.".format(
                 timed[-1][0].isoformat(),
+                trailing_gap,
                 end.isoformat(),
             ),
             timed,
