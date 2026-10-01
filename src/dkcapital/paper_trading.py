@@ -359,40 +359,69 @@ class PaperAccount:
             )
             return True, "created"
 
+        previous_direction = existing.direction
         previous_entry_low = existing.entry_low
         previous_entry_high = existing.entry_high
         previous_sl = existing.current_sl
+        previous_tps = dict(existing.tps)
+        direction_changed = previous_direction != direction
+        open_position = next(
+            (
+                position
+                for position in self.positions.values()
+                if position.signal_id == signal_id
+                and position.status in OPEN_POSITION_STATUSES
+            ),
+            None,
+        )
+        direction_change_while_open = direction_changed and open_position is not None
         previous_stop_was_malformed = bool(
             previous_sl is not None
             and (
                 (
-                    direction == "BUY"
+                    previous_direction == "BUY"
                     and previous_sl >= min(previous_entry_low, previous_entry_high)
                 )
                 or (
-                    direction == "SELL"
+                    previous_direction == "SELL"
                     and previous_sl <= max(previous_entry_low, previous_entry_high)
                 )
             )
         )
 
-        existing.last_seen_at = now
-        existing.signal_status = str(signal.get("status") or existing.signal_status)
-        existing.entry_low = float(signal.get("entry_low") or existing.entry_low)
-        existing.entry_high = float(
+        incoming_entry_low = float(signal.get("entry_low") or existing.entry_low)
+        incoming_entry_high = float(
             signal.get("entry_high") or signal.get("entry_low") or existing.entry_high
         )
-        existing.original_sl = (
+        incoming_original_sl = (
             float(signal["original_sl"])
             if signal.get("original_sl") is not None
             else None
         )
-        existing.current_sl = (
+        incoming_current_sl = (
             float(signal["current_sl"])
             if signal.get("current_sl") is not None
             else None
         )
-        existing.tps = {str(k): float(v) for k, v in (signal.get("tps") or {}).items()}
+        incoming_tps = {
+            str(k): float(v) for k, v in (signal.get("tps") or {}).items()
+        }
+        entry_changed = (
+            abs(incoming_entry_low - previous_entry_low) > 1e-9
+            or abs(incoming_entry_high - previous_entry_high) > 1e-9
+        )
+        stop_changed = incoming_current_sl != previous_sl
+        targets_changed = incoming_tps != previous_tps
+
+        existing.last_seen_at = now
+        existing.signal_status = str(signal.get("status") or existing.signal_status)
+        if not direction_change_while_open:
+            existing.direction = direction
+            existing.entry_low = incoming_entry_low
+            existing.entry_high = incoming_entry_high
+            existing.original_sl = incoming_original_sl
+            existing.current_sl = incoming_current_sl
+            existing.tps = incoming_tps
         existing.remaining_fraction = float(signal.get("remaining_fraction", 1.0) or 0.0)
         existing.partial_close_count = int(signal.get("partial_close_count", 0) or 0)
         existing.source_message_ids = [
@@ -401,17 +430,68 @@ class PaperAccount:
         existing.signal_history = list(signal.get("history") or [])
         existing.fingerprint = fingerprint
 
-        # Same-message provider corrections must update the paper candidate.
-        if (
-            existing.execution_status == "REJECTED_INVALIDATED"
-            and previous_stop_was_malformed
-        ):
+        if direction_change_while_open:
+            self._audit(
+                "signal_direction_change_ignored_while_open",
+                signal_id=signal_id,
+                position_id=open_position.position_id,
+                position_direction=open_position.direction,
+                provider_direction=direction,
+            )
+
+        # A provider correction can make a previously rejected, unfilled setup
+        # executable again. Requeue only when the edited geometry is relevant to
+        # the original rejection. Never flip or reopen an already-open position.
+        requeued = False
+        if not direction_change_while_open:
+            if (
+                existing.execution_status == "REJECTED_TARGETS_ALREADY_PASSED"
+                and (direction_changed or entry_changed or targets_changed)
+            ):
+                requeued = True
+            elif (
+                existing.execution_status == "REJECTED_INVALIDATED"
+                and (
+                    direction_changed
+                    or entry_changed
+                    or stop_changed
+                    or previous_stop_was_malformed
+                )
+            ):
+                requeued = True
+            elif (
+                existing.execution_status == "REJECTED_DIRECTIONAL_RISK_CAP"
+                and direction_changed
+            ):
+                requeued = True
+            elif (
+                existing.execution_status == "REJECTED_SIZE_TOO_SMALL"
+                and (direction_changed or entry_changed or stop_changed)
+            ):
+                requeued = True
+
+        if requeued:
             existing.execution_status = "PENDING_STRATEGY"
-            existing.execution_note = "Provider edited the malformed setup; re-evaluating."
+            existing.execution_note = (
+                "Provider corrected trade geometry; re-evaluating."
+            )
+            self._audit(
+                "signal_requeued_after_provider_edit",
+                signal_id=signal_id,
+                previous_direction=previous_direction,
+                direction=existing.direction,
+                entry_changed=entry_changed,
+                stop_changed=stop_changed,
+                targets_changed=targets_changed,
+            )
+
         self._audit(
             "signal_updated",
             signal_id=signal_id,
             signal_status=existing.signal_status,
+            direction=existing.direction,
+            direction_changed=direction_changed,
+            geometry_requeued=requeued,
             remaining_fraction=existing.remaining_fraction,
         )
         return True, "updated"
