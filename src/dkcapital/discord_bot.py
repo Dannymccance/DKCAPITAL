@@ -45,7 +45,9 @@ def _paper_market_quote(state: dict[str, Any]) -> dict[str, Any] | None:
         "ask": float(ask) if ask is not None else float(price),
         "computed_at": state.get("last_mark_at"),
         "is_stale": False,
-        "source": "paper-engine",
+        "source": "standard-bullion:XAUUSD",
+        "source_url": "https://standardbullion.com",
+        "attribution": "Data by Standard Bullion",
     }
 
 
@@ -503,6 +505,7 @@ def _paper_dashboard_embed(
         marked_at = state.get("last_mark_at")
         if marked_at:
             mark_text += f"\n{_local_timestamp(marked_at, timezone_name)}"
+        mark_text += "\n[Data by Standard Bullion](https://standardbullion.com)"
     embed.add_field(name="XAU/USD Live Mark", value=mark_text, inline=True)
 
     embed.add_field(
@@ -876,6 +879,7 @@ def _signal_embed(
                 spot_value += f"\nObserved {_local_time(observed, timezone_name)}"
             if spot_quote.get("is_stale"):
                 spot_value += "\nStale quote"
+            spot_value += "\n[Data by Standard Bullion](https://standardbullion.com)"
         else:
             spot_value = "Temporarily unavailable"
         embed.add_field(name="XAU/USD Spot", value=spot_value, inline=False)
