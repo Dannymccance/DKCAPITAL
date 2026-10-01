@@ -85,14 +85,14 @@ class XauSignalFollowingStrategy:
         account: PaperAccount,
         direction: str,
     ) -> tuple[float, str]:
-        standard = account.balance_usd * self.config.risk_pct
-        cap = account.balance_usd * self.config.direction_risk_cap_pct
-        used = account.current_directional_risk_usd(direction)
-        available = max(0.0, cap - used)
-        budget = min(standard, available)
+        # Every valid parsed signal gets its own normal per-trade risk budget.
+        # There is intentionally no aggregate BUY/SELL book cap. The direction
+        # argument is retained for API compatibility and audit readability.
+        _ = direction
+        budget = account.balance_usd * self.config.risk_pct
         minimum = account.balance_usd * self.config.min_trade_risk_pct
         if budget + 1e-9 < minimum:
-            return 0.0, "directional_risk_capacity_below_minimum"
+            return 0.0, "per_trade_risk_below_minimum"
         return budget, "ok"
 
     def _size_from_stop(
@@ -356,7 +356,7 @@ class XauSignalFollowingStrategy:
             self._reject(
                 account,
                 candidate,
-                "REJECTED_DIRECTIONAL_RISK_CAP",
+                "REJECTED_SIZE_TOO_SMALL",
                 reason,
             )
             return False
@@ -436,25 +436,15 @@ class XauSignalFollowingStrategy:
         account: PaperAccount,
         position: PaperPosition,
     ) -> float:
-        current_position_risk = (
-            self._position_risk_at_stop(position, float(position.stop_loss))
-            if position.stop_loss is not None
-            else 0.0
-        )
-        total_directional = account.current_directional_risk_usd(position.direction)
-        other_directional = max(0.0, total_directional - current_position_risk)
-        direction_capacity = max(
-            0.0,
-            account.balance_usd * self.config.direction_risk_cap_pct
-            - other_directional,
-        )
+        # Stop corrections may resize this trade, but other same-direction
+        # positions never reduce its permitted risk. Each signal is independent.
         trade_cap = account.balance_usd * self.config.risk_pct
         original_cap = (
             position.initial_risk_usd
             if position.initial_risk_usd > 0
             else trade_cap
         )
-        return max(0.0, min(original_cap, trade_cap, direction_capacity))
+        return max(0.0, min(original_cap, trade_cap))
 
     def _resize_for_stop(
         self,
@@ -1060,12 +1050,12 @@ class XauSignalFollowingStrategy:
                 candidate.execution_note = "Waiting for provider correction to malformed SL."
                 changed = True
 
-            if candidate.execution_status in {
-                "PENDING_STRATEGY",
-                "PENDING_SL",
-                "PENDING_INVALID_SL",
-            }:
-                self._cancel_older_pending(account, candidate)
+            if candidate.execution_status == "REJECTED_DIRECTIONAL_RISK_CAP":
+                candidate.execution_status = "PENDING_STRATEGY"
+                candidate.execution_note = (
+                    "Directional risk cap disabled; re-evaluating signal."
+                )
+                changed = True
 
             position = self._position_for(account, candidate.signal_id)
             if position is None:

@@ -229,10 +229,9 @@ the delayed Telegram and market cursors to the current end of each live stream.
 Existing Telegram history and the Standard Bullion market tape are preserved, but
 only newly captured data after the reset can enter the new paper ledger.
 
-The last pre-reset signals can only be backfilled when the preserved Standard
-Bullion tape provides continuous coverage for the whole replay window. The tool
-refuses to write anything if that coverage is missing or has a gap larger than
-45 seconds.
+Historical paper backfills use Twelve Data's genuine `XAU/USD` spot series at
+1-minute resolution. No XAUUSDT proxy instrument is permitted. Set
+`TWELVE_DATA_API_KEY` in `.env` before running a backfill.
 
 Dry-run the latest 10 signals first:
 
@@ -241,16 +240,20 @@ docker compose stop paper-engine
 docker compose --profile tools run --rm paper-backfill-last
 ```
 
-If the dry-run reports complete coverage and the replay summary is correct, write
-the backfill explicitly:
+To replay a different number of signals, override the command, for example
+`--count 14`. After reviewing the dry-run, write the backfill explicitly:
 
 ```bash
 docker compose --profile tools run --rm paper-backfill-last \
   python scripts/backfill_last_signals.py \
   --count 10 \
-  --confirm BACKFILL-LAST-SIGNALS
+  --confirm BACKFILL-XAUUSD
 docker compose up -d paper-engine
 ```
+
+Each valid signal receives its own normal per-trade risk budget. There is no
+aggregate BUY or SELL directional risk cap and a newer signal does not cancel an
+older pending signal.
 
 The accounting core supports paper fills, partial closes, realised USD PnL,
 unrealised USD PnL, balance and equity. XAUUSD position quantity is stored in
@@ -285,22 +288,25 @@ changing signal selection.
 
 ## Paper history recovery
 
-Live DK Capital paper trading now uses Standard Bullion XAU/USD bid/ask only.
+Live DK Capital paper trading uses Standard Bullion XAU/USD bid/ask only. Historical
+paper replay uses Twelve Data `XAU/USD` 1-minute OHLC only. The former Bybit
+`XAUUSDT` proxy replay has been removed and cannot be used by the paper history
+tool.
 
-The previous historical paper replay used Bybit XAUUSDT minute candles as a proxy.
-That replay is intentionally disabled because XAUUSDT is a different instrument.
-Standard Bullion's free historical API provides XAU/USD close observations at
-15-minute intraday resolution, which is not sufficient to determine the true
-order of intrabar TP and SL touches.
+Twelve Data requires an API key:
 
-Telegram history can still be recovered safely without fabricating paper results:
+```text
+TWELVE_DATA_API_KEY=...
+```
+
+Telegram history can still be recovered independently with:
 
 ```bash
 docker compose --profile tools run --rm telegram-backfill
 ```
 
-A historical paper ledger should only be rebuilt once a sufficiently granular
-XAU/USD historical source is configured.
+The XAU/USD backfill is deterministic at 1-minute OHLC resolution. It does not
+claim historical tick-level ordering inside each one-minute candle.
 
 
 

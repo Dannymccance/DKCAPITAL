@@ -388,14 +388,13 @@ async def run() -> None:
 
     logger.info(
         "Paper engine ready balance=%.2f symbol=%s mode=%s entry_policy=%s "
-        "risk=%.2f%% direction_cap=%.2f%% daily_stop=%.2f%% delay=%ss "
+        "risk=%.2f%% direction_cap=DISABLED daily_stop=%.2f%% delay=%ss "
         "telegram_offset=%s market_offset=%s candidates=%s positions=%s initial_sync=%s",
         account.balance_usd,
         account.symbol,
         account.strategy_mode,
         account.entry_policy,
         settings.paper_risk_pct * 100.0,
-        settings.paper_direction_risk_cap_pct * 100.0,
         settings.paper_daily_loss_pct * 100.0,
         settings.paper_simulation_delay_seconds,
         delay_state.get("telegram_offset"),
