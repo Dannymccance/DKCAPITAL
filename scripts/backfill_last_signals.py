@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import lzma
 import shutil
+import struct
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from dkcapital.config import Settings
@@ -18,19 +18,13 @@ from dkcapital.signal_state import SignalState
 from dkcapital.xau_strategy import XauSignalFollowingStrategy, XauStrategyConfig
 
 CONFIRM_TOKEN = "BACKFILL-XAUUSD"
-TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
-TWELVE_DATA_SYMBOL = "XAU/USD"
-TWELVE_DATA_INTERVAL = "1min"
-CHUNK_HOURS = 24
-
-
-@dataclass(frozen=True)
-class Candle:
-    start: datetime
-    open: float
-    high: float
-    low: float
-    close: float
+DUKASCOPY_BASE_URLS = (
+    "https://www.dukascopy.com/datafeed",
+    "https://datafeed.dukascopy.com/datafeed",
+)
+DUKASCOPY_SYMBOL = "XAUUSD"
+DUKASCOPY_PRICE_SCALE = 1000.0
+TICK_RECORD = struct.Struct(">IIIff")
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -106,97 +100,6 @@ def _backup(path: Path, stamp: str) -> Path | None:
     return backup
 
 
-def _request_json(url: str, api_key: str) -> dict[str, Any]:
-    request = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "DKCapital-XAUUSD-Backfill/1.0",
-        },
-    )
-    with urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError("Twelve Data returned a non-object response.")
-    if str(payload.get("status") or "").lower() == "error":
-        raise RuntimeError(
-            "Twelve Data error {}: {}".format(
-                payload.get("code"),
-                payload.get("message") or "unknown error",
-            )
-        )
-    return payload
-
-
-def _fetch_xauusd_candles(
-    *,
-    api_key: str,
-    start: datetime,
-    end: datetime,
-    base_url: str,
-) -> list[Candle]:
-    cursor = start.astimezone(UTC).replace(second=0, microsecond=0)
-    final = end.astimezone(UTC) + timedelta(minutes=1)
-    rows: dict[datetime, Candle] = {}
-
-    while cursor < final:
-        chunk_end = min(final, cursor + timedelta(hours=CHUNK_HOURS))
-        query = urlencode(
-            {
-                "symbol": TWELVE_DATA_SYMBOL,
-                "interval": TWELVE_DATA_INTERVAL,
-                "start_date": cursor.strftime("%Y-%m-%d %H:%M:%S"),
-                "end_date": chunk_end.strftime("%Y-%m-%d %H:%M:%S"),
-                "timezone": "UTC",
-                "order": "ASC",
-                "apikey": api_key,
-            }
-        )
-        payload = _request_json(
-            "{}/time_series?{}".format(base_url.rstrip("/"), query),
-            api_key,
-        )
-
-        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
-        returned_symbol = str(meta.get("symbol") or "")
-        if returned_symbol and returned_symbol.upper().replace(" ", "") != TWELVE_DATA_SYMBOL:
-            raise RuntimeError(
-                "Refusing non-XAU/USD market data. Twelve Data returned symbol {!r}.".format(
-                    returned_symbol
-                )
-            )
-
-        values = payload.get("values") or []
-        if not isinstance(values, list):
-            raise RuntimeError("Twelve Data response is missing time-series values.")
-
-        for raw in values:
-            if not isinstance(raw, dict):
-                continue
-            when = _parse_dt(raw.get("datetime"))
-            if when is None:
-                continue
-            try:
-                candle = Candle(
-                    start=when,
-                    open=float(raw["open"]),
-                    high=float(raw["high"]),
-                    low=float(raw["low"]),
-                    close=float(raw["close"]),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            rows[when] = candle
-
-        cursor = chunk_end
-        time.sleep(0.15)
-
-    candles = [rows[key] for key in sorted(rows)]
-    if not candles:
-        raise RuntimeError("Twelve Data returned no XAU/USD 1-minute candles.")
-    return candles
-
-
 def _full_signal_state(events: list[dict[str, Any]]) -> SignalState:
     state = SignalState()
     for event in sorted(events, key=_event_time):
@@ -265,52 +168,139 @@ def _sync_selected(
         )
 
 
-def _quote(price: float, timestamp: datetime) -> dict[str, Any]:
-    return {
-        "symbol": "XAUUSD",
-        "price": float(price),
-        "bid": float(price),
-        "ask": float(price),
-        "computed_at": timestamp.isoformat(),
-        "source": "twelvedata:XAU/USD:1min",
-    }
-
-
-def _candle_points(candle: Candle) -> list[tuple[datetime, float]]:
-    # Twelve Data supplies genuine XAU/USD OHLC at 1-minute resolution, but not
-    # the exact intraminute tick order. Use a deterministic OHLC path so the
-    # replay is reproducible. No proxy instrument is ever used.
-    if candle.close >= candle.open:
-        values = [candle.open, candle.low, candle.high, candle.close]
-    else:
-        values = [candle.open, candle.high, candle.low, candle.close]
-
-    seconds = [0, 20, 40, 59]
-    points: list[tuple[datetime, float]] = []
-    for index, value in enumerate(values):
-        if points and abs(points[-1][1] - value) <= 1e-12:
-            continue
-        points.append((candle.start + timedelta(seconds=seconds[index]), value))
-    return points
-
-
 def _clean_event(event: dict[str, Any]) -> dict[str, Any]:
-    # Historical replay must be driven exclusively by the XAU/USD API. Remove
-    # any legacy market snapshot attached to the Telegram event.
+    # Ignore every legacy embedded market snapshot. Historical replay is driven
+    # exclusively by Dukascopy XAUUSD bid/ask ticks.
     cleaned = dict(event)
     cleaned.pop("market", None)
     return cleaned
+
+
+def _hour_url(base_url: str, hour: datetime) -> str:
+    hour = hour.astimezone(UTC)
+    zero_based_month = hour.month - 1
+    return (
+        f"{base_url.rstrip('/')}/{DUKASCOPY_SYMBOL}/"
+        f"{hour.year:04d}/{zero_based_month:02d}/{hour.day:02d}/"
+        f"{hour.hour:02d}h_ticks.bi5"
+    )
+
+
+def _download_hour(hour: datetime, timeout: int = 30) -> bytes | None:
+    last_error: Exception | None = None
+    for base_url in DUKASCOPY_BASE_URLS:
+        url = _hour_url(base_url, hour)
+        request = Request(
+            url,
+            headers={
+                "Accept": "*/*",
+                "User-Agent": "Mozilla/5.0 DKCapital-XAUUSD-Backfill/1.0",
+            },
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                payload = response.read()
+            if not payload:
+                return None
+            return payload
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            last_error = exc
+        except (URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise RuntimeError(
+            "Unable to download Dukascopy XAUUSD ticks for {}: {}".format(
+                hour.isoformat(),
+                last_error,
+            )
+        ) from last_error
+    return None
+
+
+def _decode_hour(hour: datetime, compressed: bytes | None) -> list[dict[str, Any]]:
+    if not compressed:
+        return []
+
+    try:
+        raw = lzma.decompress(compressed)
+    except lzma.LZMAError as exc:
+        raise RuntimeError(
+            "Dukascopy returned an invalid XAUUSD BI5 payload for {}.".format(
+                hour.isoformat()
+            )
+        ) from exc
+
+    if len(raw) % TICK_RECORD.size != 0:
+        raise RuntimeError(
+            "Dukascopy XAUUSD tick payload length {} is not divisible by {}.".format(
+                len(raw),
+                TICK_RECORD.size,
+            )
+        )
+
+    ticks: list[dict[str, Any]] = []
+    for offset in range(0, len(raw), TICK_RECORD.size):
+        ms, ask_raw, bid_raw, ask_volume, bid_volume = TICK_RECORD.unpack_from(
+            raw,
+            offset,
+        )
+        timestamp = hour + timedelta(milliseconds=int(ms))
+        ask = float(ask_raw) / DUKASCOPY_PRICE_SCALE
+        bid = float(bid_raw) / DUKASCOPY_PRICE_SCALE
+
+        # Fail closed if the decoder scale or source is wrong.
+        if not (100.0 <= bid <= 10000.0 and 100.0 <= ask <= 10000.0):
+            raise RuntimeError(
+                "Decoded Dukascopy XAUUSD price is outside sanity bounds: "
+                "bid={} ask={} at {}.".format(
+                    bid,
+                    ask,
+                    timestamp.isoformat(),
+                )
+            )
+        if ask + 1e-9 < bid:
+            raise RuntimeError(
+                "Decoded Dukascopy XAUUSD spread is inverted at {}: bid={} ask={}.".format(
+                    timestamp.isoformat(),
+                    bid,
+                    ask,
+                )
+            )
+
+        ticks.append(
+            {
+                "symbol": "XAUUSD",
+                "price": (bid + ask) / 2.0,
+                "bid": bid,
+                "ask": ask,
+                "computed_at": timestamp.isoformat(),
+                "source": "dukascopy:XAUUSD:tick",
+                "ask_volume": float(ask_volume),
+                "bid_volume": float(bid_volume),
+            }
+        )
+    return ticks
+
+
+def _iter_hours(start: datetime, end: datetime):
+    cursor = start.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    final = end.astimezone(UTC)
+    while cursor <= final:
+        yield cursor
+        cursor += timedelta(hours=1)
 
 
 def _replay(
     settings: Settings,
     *,
     telegram_events: list[dict[str, Any]],
-    candles: list[Candle],
     selected_ids: set[str],
     start: datetime,
     end: datetime,
-) -> PaperAccount:
+) -> tuple[PaperAccount, int, int]:
     state = SignalState()
     account = PaperAccount(
         starting_balance_usd=settings.paper_starting_balance_usd,
@@ -324,41 +314,99 @@ def _replay(
     )
     strategy = _strategy(settings)
 
-    timeline: list[tuple[datetime, int, str, dict[str, Any]]] = []
-    for raw_event in telegram_events:
-        event = _clean_event(raw_event)
-        when = _event_time(event)
-        if when <= end:
-            timeline.append((when, 0, "telegram", event))
+    events = [
+        (_event_time(raw), _clean_event(raw))
+        for raw in telegram_events
+        if _event_time(raw) <= end
+    ]
+    events.sort(key=lambda item: item[0])
+    event_index = 0
 
-    for candle in candles:
-        for when, price in _candle_points(candle):
-            if start <= when <= end:
-                timeline.append((when, 1, "market", _quote(price, when)))
-
-    timeline.sort(key=lambda item: (item[0], item[1]))
+    # Build the parser context up to the oldest selected signal.
+    while event_index < len(events) and events[event_index][0] < start:
+        when, event = events[event_index]
+        state.ingest_event(event)
+        event_index += 1
 
     selected_seen: set[str] = set()
-    for when, _, kind, payload in timeline:
-        if kind == "telegram":
-            state.ingest_event(payload)
-            snapshot = _filtered_snapshot(state, selected_ids)
-            selected_seen |= {
-                str(row.get("signal_id") or "")
-                for row in snapshot.get("signals") or []
-            }
-            _sync_selected(
-                account,
-                state,
-                selected_ids,
-                observed_at=when.isoformat(),
+    downloaded_hours = 0
+    total_ticks = 0
+
+    for hour in _iter_hours(start, end):
+        payload = _download_hour(hour)
+        ticks = _decode_hour(hour, payload)
+        if ticks:
+            downloaded_hours += 1
+            total_ticks += len(ticks)
+
+        hour_end = min(hour + timedelta(hours=1), end + timedelta(microseconds=1))
+        timeline: list[tuple[datetime, int, str, dict[str, Any]]] = []
+
+        while event_index < len(events) and events[event_index][0] < hour_end:
+            when, event = events[event_index]
+            if when >= start:
+                timeline.append((when, 0, "telegram", event))
+            else:
+                state.ingest_event(event)
+            event_index += 1
+
+        for tick in ticks:
+            when = _parse_dt(tick.get("computed_at"))
+            if when is None or when < start or when > end:
+                continue
+            timeline.append((when, 1, "market", tick))
+
+        timeline.sort(key=lambda item: (item[0], item[1]))
+
+        for when, _, kind, item in timeline:
+            if kind == "telegram":
+                state.ingest_event(item)
+                snapshot = _filtered_snapshot(state, selected_ids)
+                current_ids = {
+                    str(row.get("signal_id") or "")
+                    for row in snapshot.get("signals") or []
+                }
+                selected_seen |= current_ids
+                _sync_selected(
+                    account,
+                    state,
+                    selected_ids,
+                    observed_at=when.isoformat(),
+                )
+            else:
+                strategy.process(
+                    account,
+                    item,
+                    timestamp=when.isoformat(),
+                )
+
+        print(
+            "{} | ticks={} | candidates={} | positions={} | balance={:.2f}".format(
+                hour.isoformat(),
+                len(ticks),
+                len(account.candidates),
+                len(account.positions),
+                account.balance_usd,
             )
-        else:
-            strategy.process(
-                account,
-                payload,
-                timestamp=when.isoformat(),
-            )
+        )
+        time.sleep(0.05)
+
+    # Apply any Telegram events exactly at the replay endpoint.
+    while event_index < len(events) and events[event_index][0] <= end:
+        when, event = events[event_index]
+        state.ingest_event(event)
+        snapshot = _filtered_snapshot(state, selected_ids)
+        selected_seen |= {
+            str(row.get("signal_id") or "")
+            for row in snapshot.get("signals") or []
+        }
+        _sync_selected(
+            account,
+            state,
+            selected_ids,
+            observed_at=when.isoformat(),
+        )
+        event_index += 1
 
     missing = selected_ids - selected_seen
     if missing:
@@ -367,7 +415,13 @@ def _replay(
                 ", ".join(sorted(missing))
             )
         )
-    return account
+
+    if total_ticks <= 0:
+        raise RuntimeError(
+            "Dukascopy returned no XAUUSD ticks for the replay window."
+        )
+
+    return account, downloaded_hours, total_ticks
 
 
 def _summary(account: PaperAccount, selected_ids: set[str]) -> dict[str, Any]:
@@ -379,11 +433,12 @@ def _summary(account: PaperAccount, selected_ids: set[str]) -> dict[str, Any]:
     ]
     closed = [row for row in positions if row.status == "CLOSED"]
     return {
-        "source": "Twelve Data XAU/USD 1-minute OHLC",
+        "source": "Dukascopy XAUUSD tick bid/ask",
         "starting_balance_usd": account.starting_balance_usd,
         "balance_usd": account.balance_usd,
         "equity_usd": account.equity_usd,
         "realized_pnl_usd": account.realized_pnl_usd,
+        "unrealized_pnl_usd": account.unrealized_pnl_usd,
         "candidate_count": len(candidates),
         "position_count": len(positions),
         "open_positions": sum(1 for row in positions if row.status == "OPEN"),
@@ -403,28 +458,16 @@ def _summary(account: PaperAccount, selected_ids: set[str]) -> dict[str, Any]:
 def run() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Backfill the latest DK Capital XAUUSD signals using Twelve Data "
-            "XAU/USD 1-minute historical market data. No XAUUSDT proxy is used."
+            "Backfill the latest DK Capital XAUUSD signals from free Dukascopy "
+            "XAUUSD bid/ask tick history. No API key and no XAUUSDT proxy."
         )
     )
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--confirm", default="")
-    parser.add_argument(
-        "--base-url",
-        default=TWELVE_DATA_BASE_URL,
-        help="Twelve Data API base URL.",
-    )
     args = parser.parse_args()
 
     if args.count < 1:
         raise SystemExit("--count must be at least 1")
-
-    api_key = os.getenv("TWELVE_DATA_API_KEY", "").strip()
-    if not api_key:
-        raise SystemExit(
-            "TWELVE_DATA_API_KEY is required. Add it to /opt/dkcapital/.env "
-            "before running the XAU/USD backfill."
-        )
 
     settings = Settings.from_env()
     delay_state = _read_json(settings.paper_delay_state_path)
@@ -465,8 +508,9 @@ def run() -> None:
         raise SystemExit("Selected signals have no usable timestamps.")
     start = min(starts)
 
-    print("Market source: Twelve Data XAU/USD")
-    print("Resolution: 1-minute OHLC")
+    print("Market source: Dukascopy XAUUSD")
+    print("Resolution: raw bid/ask ticks")
+    print("Cost: free, no API key")
     print("Proxy instruments: DISABLED")
     print("Directional risk cap: DISABLED")
     print("Requested signals: {}".format(args.count))
@@ -486,25 +530,10 @@ def run() -> None:
         )
 
     print()
-    print("Fetching genuine XAU/USD historical candles...")
-    candles = _fetch_xauusd_candles(
-        api_key=api_key,
-        start=start - timedelta(minutes=1),
-        end=reset_at,
-        base_url=args.base_url,
-    )
-    print(
-        "Fetched {} XAU/USD candles from {} through {}.".format(
-            len(candles),
-            candles[0].start.isoformat(),
-            candles[-1].start.isoformat(),
-        )
-    )
-
-    account = _replay(
+    print("Downloading free Dukascopy XAUUSD tick history...")
+    account, downloaded_hours, total_ticks = _replay(
         settings,
         telegram_events=telegram_events,
-        candles=candles,
         selected_ids=set(selected),
         start=start,
         end=reset_at,
@@ -512,6 +541,12 @@ def run() -> None:
     summary = _summary(account, set(selected))
 
     print()
+    print(
+        "Downloaded XAUUSD history: {} populated hours, {:,} ticks.".format(
+            downloaded_hours,
+            total_ticks,
+        )
+    )
     print("Replay summary:")
     print(json.dumps(summary, indent=2))
 
@@ -551,7 +586,7 @@ def run() -> None:
                 {
                     "event_type": "paper_xauusd_history_backfilled",
                     "observed_at": datetime.now(UTC).isoformat(),
-                    "source": "twelvedata:XAU/USD:1min",
+                    "source": "dukascopy:XAUUSD:tick",
                     "count": args.count,
                     "selected_signal_ids": selected,
                     "replay_start": start.isoformat(),
@@ -565,7 +600,7 @@ def run() -> None:
         )
 
     print()
-    print("XAU/USD backfill written successfully.")
+    print("XAUUSD tick backfill written successfully.")
     if backups:
         print("Backups:")
         for path in backups:
