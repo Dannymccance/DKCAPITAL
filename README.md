@@ -222,38 +222,37 @@ changing signal selection.
 
 ## Paper history recovery
 
-Use the recovery tool when DK Capital paper trading has missed Telegram history or
-needs to be rebuilt from source data. The tool fetches the configured Telegram
-sources, merges missing messages with the retained live event log, fetches Bybit
-XAUUSDT 1-minute history, and replays the existing paper strategy chronologically.
+Live DK Capital paper trading now uses Standard Bullion XAU/USD bid/ask only.
 
-Always stop the state-writing services before a confirmed rebuild:
+The previous historical paper replay used Bybit XAUUSDT minute candles as a proxy.
+That replay is intentionally disabled because XAUUSDT is a different instrument.
+Standard Bullion's free historical API provides XAU/USD close observations at
+15-minute intraday resolution, which is not sufficient to determine the true
+order of intrabar TP and SL touches.
 
-```bash
-docker compose --profile discord stop telegram-listener signal-processor paper-engine discord-bot
-```
-
-Run a dry rebuild first:
+Telegram history can still be recovered safely without fabricating paper results:
 
 ```bash
-docker compose --profile tools run --rm paper-rebuild
+docker compose --profile tools run --rm telegram-backfill
 ```
 
-If the summary is sensible, write the rebuilt state:
+A historical paper ledger should only be rebuilt once a sufficiently granular
+XAU/USD historical source is configured.
 
-```bash
-docker compose --profile tools run --rm paper-rebuild \
-  python scripts/rebuild_paper_history.py \
-  --days 30 \
-  --confirm REBUILD-DK-PAPER
+
+
+## Standard Bullion XAU/USD live feed
+
+DK Capital paper trading uses Standard Bullion's free XAU/USD wholesale gold
+bid/ask feed:
+
+```text
+https://standardbullion.com/spot-prices.json
 ```
 
-The confirmed rebuild creates timestamped backups of the current Telegram event
-log, signal state, paper state, paper event log and prior Telegram backfill before
-writing replacements. It also writes `/app/data/paper-backfill-report.json`.
+The feed is polled on a 15-second cadence. BUY entries use ask, SELL entries use
+bid, BUY exits are valued at bid and SELL exits at ask. The displayed midpoint
+is only a reference mark.
 
-Restart normal services after the rebuild:
-
-```bash
-docker compose --profile discord up -d --build telegram-listener signal-processor paper-engine discord-bot
-```
+No Standard Bullion API key is required for the anonymous feed. Discord surfaces
+that display the quote include a visible "Data by Standard Bullion" attribution.
