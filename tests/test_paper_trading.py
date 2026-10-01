@@ -129,6 +129,72 @@ class PaperAccountTests(unittest.TestCase):
         self.assertEqual(account.candidates["elite:1"].current_sl, 4157.0)
         self.assertEqual(account.candidates["elite:1"].remaining_fraction, 0.5)
 
+    def test_signal_direction_correction_updates_unfilled_rejected_candidate(self) -> None:
+        account = PaperAccount(entry_policy="all_parsed")
+        account.sync_signal(signal(direction="BUY"))
+        candidate = account.candidates["elite:1"]
+        candidate.execution_status = "REJECTED_TARGETS_ALREADY_PASSED"
+        candidate.execution_note = "stale direction caused target rejection"
+
+        changed, result = account.sync_signal(signal(direction="SELL"))
+
+        self.assertTrue(changed)
+        self.assertEqual(result, "updated")
+        self.assertEqual(candidate.direction, "SELL")
+        self.assertEqual(candidate.execution_status, "PENDING_STRATEGY")
+        self.assertIn("corrected trade geometry", candidate.execution_note.lower())
+        self.assertTrue(
+            any(
+                row.get("kind") == "signal_requeued_after_provider_edit"
+                for row in account.audit
+            )
+        )
+
+    def test_direction_correction_never_flips_an_open_paper_position(self) -> None:
+        account = PaperAccount(strategy_mode="test_strategy")
+        account.sync_signal(signal(direction="SELL"))
+        position = account.open_position(
+            signal_id="elite:1",
+            fill_price=4157.0,
+            quantity_oz=100.0,
+            stop_loss=4164.0,
+        )
+        candidate = account.candidates["elite:1"]
+
+        corrected = signal(direction="BUY")
+        corrected["current_sl"] = 4148.0
+        corrected["tps"] = {"1": 4175.0}
+        changed, result = account.sync_signal(corrected)
+
+        self.assertTrue(changed)
+        self.assertEqual(result, "updated")
+        self.assertEqual(position.direction, "SELL")
+        self.assertEqual(candidate.direction, "SELL")
+        self.assertEqual(candidate.current_sl, 4164.0)
+        self.assertEqual(candidate.tps, {})
+        self.assertTrue(
+            any(
+                row.get("kind") == "signal_direction_change_ignored_while_open"
+                for row in account.audit
+            )
+        )
+
+    def test_target_correction_requeues_target_passed_rejection(self) -> None:
+        account = PaperAccount(entry_policy="all_parsed")
+        original = signal(direction="SELL")
+        original["tps"] = {"1": 4140.0}
+        account.sync_signal(original)
+        candidate = account.candidates["elite:1"]
+        candidate.execution_status = "REJECTED_TARGETS_ALREADY_PASSED"
+
+        corrected = signal(direction="SELL")
+        corrected["tps"] = {"1": 4150.0}
+        account.sync_signal(corrected)
+
+        self.assertEqual(candidate.direction, "SELL")
+        self.assertEqual(candidate.tps, {"1": 4150.0})
+        self.assertEqual(candidate.execution_status, "PENDING_STRATEGY")
+
     def test_observe_only_refuses_execution(self) -> None:
         account = PaperAccount()
         account.sync_signal(signal())
