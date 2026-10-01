@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from datetime import UTC, datetime
+from pathlib import Path
 
+from dkcapital.paper_engine import (
+    _delay_cutoff,
+    _market_time,
+    _peek_jsonl,
+    _telegram_time,
+)
 from dkcapital.paper_trading import PaperAccount
 
 
@@ -168,6 +178,64 @@ class PaperAccountTests(unittest.TestCase):
         self.assertEqual(restored.last_mark_price, 4151.0)
         self.assertIn("elite:1", restored.candidates)
         self.assertTrue(restored.candidates["elite:1"].initial_snapshot)
+
+
+class DelayedPaperClockTests(unittest.TestCase):
+    def test_cutoff_is_exactly_fifteen_minutes_behind(self) -> None:
+        now = datetime(2026, 10, 1, 18, 45, 30, tzinfo=UTC)
+        cutoff = _delay_cutoff(900, now=now)
+        self.assertEqual(
+            cutoff,
+            datetime(2026, 10, 1, 18, 30, 30, tzinfo=UTC),
+        )
+
+    def test_telegram_delay_uses_capture_time_not_original_message_time(self) -> None:
+        event = {
+            "date": "2026-10-01T18:00:00+00:00",
+            "observed_at": "2026-10-01T18:30:00+00:00",
+        }
+        self.assertEqual(
+            _telegram_time(event),
+            datetime(2026, 10, 1, 18, 30, 0, tzinfo=UTC),
+        )
+
+    def test_market_delay_uses_local_capture_time(self) -> None:
+        row = {
+            "computed_at": "2026-10-01T18:29:45+00:00",
+            "captured_at": "2026-10-01T18:30:00+00:00",
+        }
+        self.assertEqual(
+            _market_time(row),
+            datetime(2026, 10, 1, 18, 30, 0, tzinfo=UTC),
+        )
+
+    def test_jsonl_peek_does_not_advance_the_caller_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tape.jsonl"
+            rows = [
+                {"captured_at": "2026-10-01T18:30:00+00:00", "price": 4160},
+                {"captured_at": "2026-10-01T18:30:15+00:00", "price": 4161},
+            ]
+            path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            first = _peek_jsonl(path, 0)
+            self.assertIsNotNone(first)
+            assert first is not None
+            first_row, first_next = first
+            self.assertEqual(first_row["price"], 4160)
+
+            same_first = _peek_jsonl(path, 0)
+            self.assertIsNotNone(same_first)
+            assert same_first is not None
+            self.assertEqual(same_first[0]["price"], 4160)
+
+            second = _peek_jsonl(path, first_next)
+            self.assertIsNotNone(second)
+            assert second is not None
+            self.assertEqual(second[0]["price"], 4161)
 
 
 if __name__ == "__main__":
