@@ -31,6 +31,15 @@ def _bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _gold_spot_url() -> str:
+    default = "https://standardbullion.com/spot-prices.json"
+    configured = os.getenv("GOLD_SPOT_URL", "").strip()
+    legacy = "https://api.goldprice.dev/v1/prices?symbol=XAU-USD-SPOT"
+    if not configured or configured == legacy:
+        return default
+    return configured
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str
@@ -126,10 +135,7 @@ class Settings:
                 "DISPLAY_TIMEZONE",
                 "Europe/Isle_of_Man",
             ).strip() or "Europe/Isle_of_Man",
-            gold_spot_url=os.getenv(
-                "GOLD_SPOT_URL",
-                "https://standardbullion.com/spot-prices.json",
-            ).strip(),
+            gold_spot_url=_gold_spot_url(),
             gold_spot_refresh_seconds=max(
                 15,
                 int(os.getenv("GOLD_SPOT_REFRESH_SECONDS", "15").strip()),
