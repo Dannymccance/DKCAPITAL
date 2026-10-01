@@ -5,7 +5,7 @@ def main() -> None:
     raise SystemExit(
         "The legacy XAUUSDT proxy replay has been removed. "
         "DK Capital paper backfills must use genuine XAU/USD market data. "
-        "Set TWELVE_DATA_API_KEY and run: "
+        "Use the free Dukascopy XAUUSD backfill tool and run: "
         "docker compose --profile tools run --rm paper-backfill-last"
     )
 
