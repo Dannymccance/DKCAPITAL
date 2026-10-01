@@ -48,6 +48,10 @@ def _paper_market_quote(state: dict[str, Any]) -> dict[str, Any] | None:
         "source": "standard-bullion:XAUUSD",
         "source_url": "https://standardbullion.com",
         "attribution": "Data by Standard Bullion",
+        "delay_seconds": int(
+            ((state.get("simulation") or {}).get("delay_seconds") or 0)
+        ),
+        "simulation_time": (state.get("simulation") or {}).get("simulation_time"),
     }
 
 
@@ -453,6 +457,11 @@ def _paper_dashboard_embed(
 
     mode = str(state.get("strategy_mode") or "observe_only")
     entry_policy = str(state.get("entry_policy") or "all_parsed")
+    simulation = state.get("simulation") if isinstance(state.get("simulation"), dict) else {}
+    delay_seconds = int(simulation.get("delay_seconds") or 0)
+    delay_minutes = delay_seconds / 60.0
+    simulation_time = simulation.get("simulation_time")
+    warming_up = bool(simulation.get("warming_up", False))
     mark = state.get("last_mark_price")
     directional_risk = state.get("directional_risk_usd") or {}
     buy_risk = float(directional_risk.get("BUY", 0.0) or 0.0)
@@ -467,6 +476,11 @@ def _paper_dashboard_embed(
         description=(
             f"**$100k Paper Account** | Entry policy: **{entry_policy.upper()}**\n"
             f"Strategy mode: **{mode}**"
+            + (
+                f"\nSimulation: **{delay_minutes:g} min delayed**"
+                if delay_seconds > 0
+                else ""
+            )
         ),
     )
 
@@ -499,6 +513,21 @@ def _paper_dashboard_embed(
         inline=True,
     )
 
+    simulation_text = "Not configured"
+    if delay_seconds > 0 and simulation_time:
+        simulation_text = (
+            f"**{_local_timestamp(simulation_time, timezone_name)}**\n"
+            f"Delay: **{delay_minutes:g} minutes**\n"
+            f"Status: **{'BUFFERING' if warming_up else 'ACTIVE'}**"
+        )
+    elif simulation_time:
+        simulation_text = f"**{_local_timestamp(simulation_time, timezone_name)}**"
+    embed.add_field(
+        name="Simulation Clock",
+        value=simulation_text,
+        inline=True,
+    )
+
     mark_text = "Unavailable"
     if mark is not None:
         mark_text = f"**${float(mark):,.2f}**"
@@ -506,7 +535,11 @@ def _paper_dashboard_embed(
         if marked_at:
             mark_text += f"\n{_local_timestamp(marked_at, timezone_name)}"
         mark_text += "\n[Data by Standard Bullion](https://standardbullion.com)"
-    embed.add_field(name="XAU/USD Live Mark", value=mark_text, inline=True)
+    embed.add_field(
+        name=("XAU/USD Delayed Mark" if delay_seconds > 0 else "XAU/USD Live Mark"),
+        value=mark_text,
+        inline=True,
+    )
 
     embed.add_field(
         name="Risk Controls",
@@ -882,7 +915,13 @@ def _signal_embed(
             spot_value += "\n[Data by Standard Bullion](https://standardbullion.com)"
         else:
             spot_value = "Temporarily unavailable"
-        embed.add_field(name="XAU/USD Spot", value=spot_value, inline=False)
+        delay_seconds = int(spot_quote.get("delay_seconds") or 0) if spot_quote else 0
+        field_name = (
+            f"XAU/USD Paper Mark ({delay_seconds // 60}m delayed)"
+            if delay_seconds > 0
+            else "XAU/USD Spot"
+        )
+        embed.add_field(name=field_name, value=spot_value, inline=False)
 
         if paper_position is not None:
             metrics = _paper_position_metrics(paper_position, pip_size)
@@ -1651,8 +1690,8 @@ def build_bot(settings: Settings) -> commands.Bot:
         await interaction.followup.send(
             (
                 f"Elite 6256 test replay completed in <#{channel_id}>. "
-                "It includes both partials, SL-to-entry, live XAU/USD spot, "
-                "realised/open/total PnL, trade history, and local time."
+                "It includes both partials, SL-to-entry, delayed XAU/USD paper "
+                "mark, realised/open/total PnL, trade history, and local time."
             ),
             ephemeral=True,
         )
