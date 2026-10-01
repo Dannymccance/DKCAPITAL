@@ -39,6 +39,40 @@ class GoldSpotClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client._failure_count, 1)
         self.assertGreater(client._retry_not_before_monotonic, time.monotonic())
 
+
+
+    def test_primary_failure_uses_bybit_fallback(self) -> None:
+        client = GoldSpotClient(
+            "https://example.test/xau",
+            refresh_seconds=15,
+        )
+
+        def fail_primary() -> dict:
+            raise HTTPError(
+                client.url,
+                429,
+                "Too Many Requests",
+                {},
+                None,
+            )
+
+        client._fetch_goldprice = fail_primary  # type: ignore[method-assign]
+        client._fetch_bybit = lambda: {  # type: ignore[method-assign]
+            "symbol": "XAUUSD",
+            "venue_symbol": "XAUUSDT",
+            "price": 4200.0,
+            "bid": 4199.9,
+            "ask": 4200.1,
+            "computed_at": None,
+            "is_stale": False,
+            "source": "bybit:XAUUSDT",
+        }
+
+        quote = client._fetch()
+
+        self.assertEqual(quote["source"], "bybit:XAUUSDT")
+        self.assertEqual(quote["price"], 4200.0)
+
     async def test_failed_refresh_returns_last_quote_as_stale(self) -> None:
         client = GoldSpotClient(
             "https://example.test/xau",

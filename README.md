@@ -218,3 +218,42 @@ The entry-selection policy is `all_parsed`: every parsed XAUUSD signal from
 the configured providers is queued for paper execution. Position sizing and
 execution rules are intentionally kept separate so they can be defined without
 changing signal selection.
+
+
+## Paper history recovery
+
+Use the recovery tool when DK Capital paper trading has missed Telegram history or
+needs to be rebuilt from source data. The tool fetches the configured Telegram
+sources, merges missing messages with the retained live event log, fetches Bybit
+XAUUSDT 1-minute history, and replays the existing paper strategy chronologically.
+
+Always stop the state-writing services before a confirmed rebuild:
+
+```bash
+docker compose --profile discord stop telegram-listener signal-processor paper-engine discord-bot
+```
+
+Run a dry rebuild first:
+
+```bash
+docker compose --profile tools run --rm paper-rebuild
+```
+
+If the summary is sensible, write the rebuilt state:
+
+```bash
+docker compose --profile tools run --rm paper-rebuild \
+  python scripts/rebuild_paper_history.py \
+  --days 30 \
+  --confirm REBUILD-DK-PAPER
+```
+
+The confirmed rebuild creates timestamped backups of the current Telegram event
+log, signal state, paper state, paper event log and prior Telegram backfill before
+writing replacements. It also writes `/app/data/paper-backfill-report.json`.
+
+Restart normal services after the rebuild:
+
+```bash
+docker compose --profile discord up -d --build telegram-listener signal-processor paper-engine discord-bot
+```

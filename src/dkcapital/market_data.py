@@ -11,6 +11,10 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger("dkcapital.market_data")
 
+BYBIT_XAU_TICKER_URL = (
+    "https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT"
+)
+
 
 class GoldSpotClient:
     def __init__(
@@ -20,8 +24,10 @@ class GoldSpotClient:
         *,
         base_backoff_seconds: int = 30,
         max_backoff_seconds: int = 900,
+        fallback_url: str = BYBIT_XAU_TICKER_URL,
     ) -> None:
         self.url = url
+        self.fallback_url = fallback_url
         self.refresh_seconds = max(15, int(refresh_seconds))
         self.base_backoff_seconds = max(5, int(base_backoff_seconds))
         self.max_backoff_seconds = max(
@@ -78,8 +84,6 @@ class GoldSpotClient:
     async def quote(self, *, force: bool = False) -> dict[str, Any] | None:
         now = time.monotonic()
 
-        # A forced refresh may bypass the normal success-cache interval, but it
-        # must never bypass a rate-limit/error cooldown.
         if now < self._retry_not_before_monotonic:
             return self._stale_or_none()
 
@@ -111,7 +115,7 @@ class GoldSpotClient:
                         retry_after_seconds=retry_after,
                     )
                     logger.warning(
-                        "XAU/USD quote source rate limited us; backing off for %ss "
+                        "XAU quote sources rate limited us; backing off for %ss "
                         "(failure=%s)",
                         cooldown,
                         self._failure_count,
@@ -120,7 +124,7 @@ class GoldSpotClient:
 
                 cooldown = self._register_failure(f"http_{exc.code}")
                 logger.warning(
-                    "XAU/USD quote HTTP error %s; backing off for %ss",
+                    "XAU quote HTTP error %s; backing off for %ss",
                     exc.code,
                     cooldown,
                 )
@@ -128,7 +132,7 @@ class GoldSpotClient:
             except Exception as exc:
                 cooldown = self._register_failure(type(exc).__name__)
                 logger.warning(
-                    "Unable to fetch XAU/USD quote (%s); backing off for %ss",
+                    "Unable to fetch XAU quote (%s); backing off for %ss",
                     type(exc).__name__,
                     cooldown,
                 )
@@ -142,6 +146,24 @@ class GoldSpotClient:
             return dict(quote)
 
     def _fetch(self) -> dict[str, Any]:
+        primary_error: Exception | None = None
+        try:
+            return self._fetch_goldprice()
+        except Exception as exc:
+            primary_error = exc
+            logger.warning(
+                "Primary XAU/USD quote source failed (%s); trying Bybit XAUUSDT fallback",
+                type(exc).__name__,
+            )
+
+        try:
+            return self._fetch_bybit()
+        except Exception:
+            if primary_error is not None:
+                raise primary_error
+            raise
+
+    def _fetch_goldprice(self) -> dict[str, Any]:
         request = Request(
             self.url,
             headers={
@@ -166,4 +188,48 @@ class GoldSpotClient:
             "computed_at": row.get("computed_at"),
             "is_stale": bool(row.get("is_stale", False)),
             "source": "goldprice.dev",
+        }
+
+    def _fetch_bybit(self) -> dict[str, Any]:
+        request = Request(
+            self.fallback_url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "DKCapital/1.0",
+            },
+        )
+        with urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        if int(payload.get("retCode", -1)) != 0:
+            raise ValueError(
+                f"Bybit ticker error {payload.get('retCode')}: "
+                f"{payload.get('retMsg', 'unknown error')}"
+            )
+
+        rows = payload.get("result", {}).get("list") or []
+        if not rows:
+            raise ValueError("Bybit XAUUSDT ticker returned no rows")
+
+        row = rows[0]
+        raw_price = (
+            row.get("lastPrice")
+            or row.get("markPrice")
+            or row.get("indexPrice")
+        )
+        if raw_price is None:
+            raise ValueError("Bybit XAUUSDT ticker contained no usable price")
+
+        price = float(raw_price)
+        bid_raw = row.get("bid1Price")
+        ask_raw = row.get("ask1Price")
+        return {
+            "symbol": "XAUUSD",
+            "venue_symbol": "XAUUSDT",
+            "price": price,
+            "bid": float(bid_raw) if bid_raw else price,
+            "ask": float(ask_raw) if ask_raw else price,
+            "computed_at": None,
+            "is_stale": False,
+            "source": "bybit:XAUUSDT",
         }
