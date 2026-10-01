@@ -214,6 +214,21 @@ baseline. New data is buffered for 15 minutes before the delayed clock begins
 advancing. Restarting the container does not lose the buffer or replay already
 processed delayed events because both stream cursors are persisted.
 
+For a deliberate clean restart of the paper account, stop the paper engine first
+and run the reset tool:
+
+```bash
+docker compose stop paper-engine
+docker compose --profile tools run --rm paper-reset
+docker compose up -d paper-engine
+```
+
+The reset creates backups of the existing paper account, paper event log and delay
+cursor, resets the virtual account to the configured starting balance, and moves
+the delayed Telegram and market cursors to the current end of each live stream.
+Existing Telegram history and the Standard Bullion market tape are preserved, but
+only newly captured data after the reset can enter the new paper ledger.
+
 The accounting core supports paper fills, partial closes, realised USD PnL,
 unrealised USD PnL, balance and equity. XAUUSD position quantity is stored in
 troy ounces, so PnL is independent of any future broker-specific lot convention.
