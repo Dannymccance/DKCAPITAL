@@ -75,6 +75,16 @@ services:
     profiles:
       - tools
 
+  paper-reset:
+    build: .
+    command: ["python", "scripts/reset_paper_account.py"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    profiles:
+      - tools
+
   discord-bot:
     build: .
     command: ["python", "-m", "dkcapital.discord_bot"]
