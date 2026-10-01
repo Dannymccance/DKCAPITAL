@@ -11,23 +11,28 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger("dkcapital.market_data")
 
-BYBIT_XAU_TICKER_URL = (
-    "https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT"
-)
+STANDARD_BULLION_URL = "https://standardbullion.com/spot-prices.json"
+STANDARD_BULLION_ATTRIBUTION = "Data by Standard Bullion"
+STANDARD_BULLION_SOURCE_URL = "https://standardbullion.com"
 
 
 class GoldSpotClient:
+    """Live XAU/USD spot client backed by Standard Bullion.
+
+    The public Standard Bullion feed returns wholesale gold bid/ask in USD per
+    troy ounce. Paper BUY fills use ask, SELL fills use bid, and open positions
+    are marked on the executable side by the strategy/accounting layer.
+    """
+
     def __init__(
         self,
-        url: str,
-        refresh_seconds: int = 60,
+        url: str = STANDARD_BULLION_URL,
+        refresh_seconds: int = 15,
         *,
         base_backoff_seconds: int = 30,
         max_backoff_seconds: int = 900,
-        fallback_url: str = BYBIT_XAU_TICKER_URL,
     ) -> None:
-        self.url = url
-        self.fallback_url = fallback_url
+        self.url = url or STANDARD_BULLION_URL
         self.refresh_seconds = max(15, int(refresh_seconds))
         self.base_backoff_seconds = max(5, int(base_backoff_seconds))
         self.max_backoff_seconds = max(
@@ -115,8 +120,8 @@ class GoldSpotClient:
                         retry_after_seconds=retry_after,
                     )
                     logger.warning(
-                        "XAU quote sources rate limited us; backing off for %ss "
-                        "(failure=%s)",
+                        "Standard Bullion XAU/USD feed rate limited us; "
+                        "backing off for %ss (failure=%s)",
                         cooldown,
                         self._failure_count,
                     )
@@ -124,7 +129,7 @@ class GoldSpotClient:
 
                 cooldown = self._register_failure(f"http_{exc.code}")
                 logger.warning(
-                    "XAU quote HTTP error %s; backing off for %ss",
+                    "Standard Bullion XAU/USD HTTP error %s; backing off for %ss",
                     exc.code,
                     cooldown,
                 )
@@ -132,7 +137,8 @@ class GoldSpotClient:
             except Exception as exc:
                 cooldown = self._register_failure(type(exc).__name__)
                 logger.warning(
-                    "Unable to fetch XAU quote (%s); backing off for %ss",
+                    "Unable to fetch Standard Bullion XAU/USD quote (%s); "
+                    "backing off for %ss",
                     type(exc).__name__,
                     cooldown,
                 )
@@ -145,25 +151,51 @@ class GoldSpotClient:
             self._last_error = None
             return dict(quote)
 
+    @staticmethod
+    def _parse_standard_bullion(payload: dict[str, Any]) -> dict[str, Any]:
+        metals = payload.get("metals")
+        if not isinstance(metals, list):
+            raise ValueError("Standard Bullion response contained no metals list")
+
+        gold: dict[str, Any] | None = None
+        for raw in metals:
+            if isinstance(raw, dict) and str(raw.get("symbol") or "").upper() == "XAU":
+                gold = raw
+                break
+        if gold is None:
+            raise ValueError("Standard Bullion response contained no XAU row")
+
+        bid_raw = gold.get("bid")
+        ask_raw = gold.get("ask")
+        if bid_raw is None or ask_raw is None:
+            raise ValueError("Standard Bullion XAU row is missing bid or ask")
+
+        bid = float(bid_raw)
+        ask = float(ask_raw)
+        if bid <= 0 or ask <= 0:
+            raise ValueError("Standard Bullion XAU bid/ask must be positive")
+        if ask < bid:
+            raise ValueError("Standard Bullion XAU ask is below bid")
+
+        price = (bid + ask) / 2.0
+        attribution = str(
+            payload.get("attribution")
+            or STANDARD_BULLION_ATTRIBUTION
+        )
+
+        return {
+            "symbol": "XAUUSD",
+            "price": price,
+            "bid": bid,
+            "ask": ask,
+            "computed_at": payload.get("updated"),
+            "is_stale": False,
+            "source": "standard-bullion:XAUUSD",
+            "source_url": STANDARD_BULLION_SOURCE_URL,
+            "attribution": attribution,
+        }
+
     def _fetch(self) -> dict[str, Any]:
-        primary_error: Exception | None = None
-        try:
-            return self._fetch_goldprice()
-        except Exception as exc:
-            primary_error = exc
-            logger.warning(
-                "Primary XAU/USD quote source failed (%s); trying Bybit XAUUSDT fallback",
-                type(exc).__name__,
-            )
-
-        try:
-            return self._fetch_bybit()
-        except Exception:
-            if primary_error is not None:
-                raise primary_error
-            raise
-
-    def _fetch_goldprice(self) -> dict[str, Any]:
         request = Request(
             self.url,
             headers={
@@ -174,62 +206,6 @@ class GoldSpotClient:
         with urlopen(request, timeout=8) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
-        rows = payload.get("symbols") or []
-        if not rows:
-            raise ValueError("Gold spot response contained no symbols")
-
-        row = rows[0]
-        price = float(row["price"])
-        return {
-            "symbol": "XAUUSD",
-            "price": price,
-            "bid": float(row["bid"]) if row.get("bid") is not None else None,
-            "ask": float(row["ask"]) if row.get("ask") is not None else None,
-            "computed_at": row.get("computed_at"),
-            "is_stale": bool(row.get("is_stale", False)),
-            "source": "goldprice.dev",
-        }
-
-    def _fetch_bybit(self) -> dict[str, Any]:
-        request = Request(
-            self.fallback_url,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "DKCapital/1.0",
-            },
-        )
-        with urlopen(request, timeout=8) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-
-        if int(payload.get("retCode", -1)) != 0:
-            raise ValueError(
-                f"Bybit ticker error {payload.get('retCode')}: "
-                f"{payload.get('retMsg', 'unknown error')}"
-            )
-
-        rows = payload.get("result", {}).get("list") or []
-        if not rows:
-            raise ValueError("Bybit XAUUSDT ticker returned no rows")
-
-        row = rows[0]
-        raw_price = (
-            row.get("lastPrice")
-            or row.get("markPrice")
-            or row.get("indexPrice")
-        )
-        if raw_price is None:
-            raise ValueError("Bybit XAUUSDT ticker contained no usable price")
-
-        price = float(raw_price)
-        bid_raw = row.get("bid1Price")
-        ask_raw = row.get("ask1Price")
-        return {
-            "symbol": "XAUUSD",
-            "venue_symbol": "XAUUSDT",
-            "price": price,
-            "bid": float(bid_raw) if bid_raw else price,
-            "ask": float(ask_raw) if ask_raw else price,
-            "computed_at": None,
-            "is_stale": False,
-            "source": "bybit:XAUUSDT",
-        }
+        if not isinstance(payload, dict):
+            raise ValueError("Standard Bullion returned a non-object JSON payload")
+        return self._parse_standard_bullion(payload)

@@ -501,6 +501,15 @@ def _summary(account: PaperAccount) -> dict[str, Any]:
 
 
 async def run() -> None:
+    raise SystemExit(
+        "Historical paper replay is disabled: the previous implementation used "
+        "Bybit XAUUSDT as a proxy for XAUUSD. DK Capital now uses Standard Bullion "
+        "XAU/USD for live paper trading, and the free Standard Bullion history is "
+        "15-minute close data only, which is not precise enough to reconstruct "
+        "intrabar TP/SL ordering safely. Use scripts/backfill_telegram_history.py "
+        "to recover Telegram messages without fabricating paper results."
+    )
+
     parser = argparse.ArgumentParser(
         description=(
             "Rebuild DK Capital XAUUSD paper trading from Telegram history and "

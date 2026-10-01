@@ -8,6 +8,38 @@ from dkcapital.market_data import GoldSpotClient
 
 
 class GoldSpotClientTests(unittest.IsolatedAsyncioTestCase):
+    def test_parses_standard_bullion_xau_bid_ask(self) -> None:
+        quote = GoldSpotClient._parse_standard_bullion(
+            {
+                "updated": "2026-10-01T15:45:00Z",
+                "attribution": "Data by Standard Bullion — https://standardbullion.com",
+                "metals": [
+                    {"symbol": "XAG", "bid": 49.9, "ask": 50.1},
+                    {"symbol": "XAU", "bid": 4165.2, "ask": 4165.8},
+                ],
+            }
+        )
+
+        self.assertEqual(quote["symbol"], "XAUUSD")
+        self.assertEqual(quote["bid"], 4165.2)
+        self.assertEqual(quote["ask"], 4165.8)
+        self.assertAlmostEqual(quote["price"], 4165.5)
+        self.assertEqual(quote["computed_at"], "2026-10-01T15:45:00Z")
+        self.assertEqual(quote["source"], "standard-bullion:XAUUSD")
+        self.assertIn("Standard Bullion", quote["attribution"])
+
+    def test_rejects_missing_xau(self) -> None:
+        with self.assertRaises(ValueError):
+            GoldSpotClient._parse_standard_bullion(
+                {"metals": [{"symbol": "XAG", "bid": 49.9, "ask": 50.1}]}
+            )
+
+    def test_rejects_crossed_market(self) -> None:
+        with self.assertRaises(ValueError):
+            GoldSpotClient._parse_standard_bullion(
+                {"metals": [{"symbol": "XAU", "bid": 4166.0, "ask": 4165.0}]}
+            )
+
     async def test_429_enters_backoff_and_force_does_not_bypass_it(self) -> None:
         client = GoldSpotClient(
             "https://example.test/xau",
@@ -39,40 +71,6 @@ class GoldSpotClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client._failure_count, 1)
         self.assertGreater(client._retry_not_before_monotonic, time.monotonic())
 
-
-
-    def test_primary_failure_uses_bybit_fallback(self) -> None:
-        client = GoldSpotClient(
-            "https://example.test/xau",
-            refresh_seconds=15,
-        )
-
-        def fail_primary() -> dict:
-            raise HTTPError(
-                client.url,
-                429,
-                "Too Many Requests",
-                {},
-                None,
-            )
-
-        client._fetch_goldprice = fail_primary  # type: ignore[method-assign]
-        client._fetch_bybit = lambda: {  # type: ignore[method-assign]
-            "symbol": "XAUUSD",
-            "venue_symbol": "XAUUSDT",
-            "price": 4200.0,
-            "bid": 4199.9,
-            "ask": 4200.1,
-            "computed_at": None,
-            "is_stale": False,
-            "source": "bybit:XAUUSDT",
-        }
-
-        quote = client._fetch()
-
-        self.assertEqual(quote["source"], "bybit:XAUUSDT")
-        self.assertEqual(quote["price"], 4200.0)
-
     async def test_failed_refresh_returns_last_quote_as_stale(self) -> None:
         client = GoldSpotClient(
             "https://example.test/xau",
@@ -87,7 +85,9 @@ class GoldSpotClientTests(unittest.IsolatedAsyncioTestCase):
             "ask": 4160.1,
             "computed_at": "2026-09-29T14:00:00+00:00",
             "is_stale": False,
-            "source": "test",
+            "source": "standard-bullion:XAUUSD",
+            "source_url": "https://standardbullion.com",
+            "attribution": "Data by Standard Bullion",
         }
         client._cached_at_monotonic = time.monotonic() - 60
 
