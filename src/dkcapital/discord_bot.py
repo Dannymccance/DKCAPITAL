@@ -33,6 +33,9 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _paper_market_quote(state: dict[str, Any]) -> dict[str, Any] | None:
+    simulation = state.get("simulation") if isinstance(state.get("simulation"), dict) else {}
+    if simulation.get("enabled") and not simulation.get("last_market_processed_at"):
+        return None
     price = state.get("last_mark_price")
     if price is None:
         return None
@@ -528,8 +531,8 @@ def _paper_dashboard_embed(
         inline=True,
     )
 
-    mark_text = "Unavailable"
-    if mark is not None:
+    mark_text = "Buffering XAU/USD tape..." if warming_up else "Unavailable"
+    if mark is not None and (not simulation.get("enabled") or simulation.get("last_market_processed_at")):
         mark_text = f"**${float(mark):,.2f}**"
         marked_at = state.get("last_mark_at")
         if marked_at:
