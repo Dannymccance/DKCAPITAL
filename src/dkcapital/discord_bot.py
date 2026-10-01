@@ -548,7 +548,7 @@ def _paper_dashboard_embed(
         name="Risk Controls",
         value=(
             f"Per trade: **{risk_pct * 100:.2f}%**\n"
-            f"Per direction: **{direction_risk_cap_pct * 100:.2f}%**\n"
+            "Per direction: **DISABLED**\n"
             f"Daily stop: **{daily_loss_pct * 100:.2f}%**"
         ),
         inline=True,
@@ -568,7 +568,7 @@ def _paper_dashboard_embed(
         value=(
             f"BUY book: **${buy_risk:,.2f}**\n"
             f"SELL book: **${sell_risk:,.2f}**\n"
-            f"Cap/book: **${balance * direction_risk_cap_pct:,.2f}**"
+            "Aggregate cap: **DISABLED**"
         ),
         inline=True,
     )
