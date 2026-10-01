@@ -40,6 +40,15 @@ def _gold_spot_url() -> str:
     return configured
 
 
+def _gold_spot_refresh_seconds() -> int:
+    raw = os.getenv("GOLD_SPOT_REFRESH_SECONDS", "").strip()
+    # Migrate the previous template default (60s) to the Standard Bullion
+    # feed cadence so existing VPS .env files become near-live automatically.
+    if not raw or raw == "60":
+        return 15
+    return max(15, int(raw))
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str
@@ -136,10 +145,7 @@ class Settings:
                 "Europe/Isle_of_Man",
             ).strip() or "Europe/Isle_of_Man",
             gold_spot_url=_gold_spot_url(),
-            gold_spot_refresh_seconds=max(
-                15,
-                int(os.getenv("GOLD_SPOT_REFRESH_SECONDS", "15").strip()),
-            ),
+            gold_spot_refresh_seconds=_gold_spot_refresh_seconds(),
             paper_state_path=Path(
                 os.getenv(
                     "PAPER_STATE_PATH",
