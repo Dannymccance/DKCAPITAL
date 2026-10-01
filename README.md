@@ -229,9 +229,8 @@ the delayed Telegram and market cursors to the current end of each live stream.
 Existing Telegram history and the Standard Bullion market tape are preserved, but
 only newly captured data after the reset can enter the new paper ledger.
 
-Historical paper backfills use Twelve Data's genuine `XAU/USD` spot series at
-1-minute resolution. No XAUUSDT proxy instrument is permitted. Set
-`TWELVE_DATA_API_KEY` in `.env` before running a backfill.
+Historical paper backfills use free Dukascopy `XAUUSD` bid/ask tick history.
+No API key is required and no XAUUSDT proxy instrument is permitted.
 
 Dry-run the latest 10 signals first:
 
@@ -288,16 +287,10 @@ changing signal selection.
 
 ## Paper history recovery
 
-Live DK Capital paper trading uses Standard Bullion XAU/USD bid/ask only. Historical
-paper replay uses Twelve Data `XAU/USD` 1-minute OHLC only. The former Bybit
-`XAUUSDT` proxy replay has been removed and cannot be used by the paper history
-tool.
-
-Twelve Data requires an API key:
-
-```text
-TWELVE_DATA_API_KEY=...
-```
+Live DK Capital paper trading uses Standard Bullion XAU/USD bid/ask only.
+Historical paper replay uses free Dukascopy `XAUUSD` raw bid/ask ticks. The
+former Bybit `XAUUSDT` proxy replay has been removed and cannot be used by the
+paper history tool. No historical API key is required.
 
 Telegram history can still be recovered independently with:
 
@@ -305,8 +298,9 @@ Telegram history can still be recovered independently with:
 docker compose --profile tools run --rm telegram-backfill
 ```
 
-The XAU/USD backfill is deterministic at 1-minute OHLC resolution. It does not
-claim historical tick-level ordering inside each one-minute candle.
+The XAUUSD backfill uses the original tick sequence, including bid and ask, so
+historical entry, TP and SL ordering is evaluated at tick resolution rather than
+invented from candle paths.
 
 
 
