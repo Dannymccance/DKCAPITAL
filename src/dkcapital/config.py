@@ -128,11 +128,11 @@ class Settings:
             ).strip() or "Europe/Isle_of_Man",
             gold_spot_url=os.getenv(
                 "GOLD_SPOT_URL",
-                "https://api.goldprice.dev/v1/prices?symbol=XAU-USD-SPOT",
+                "https://standardbullion.com/spot-prices.json",
             ).strip(),
             gold_spot_refresh_seconds=max(
                 15,
-                int(os.getenv("GOLD_SPOT_REFRESH_SECONDS", "60").strip()),
+                int(os.getenv("GOLD_SPOT_REFRESH_SECONDS", "15").strip()),
             ),
             paper_state_path=Path(
                 os.getenv(
