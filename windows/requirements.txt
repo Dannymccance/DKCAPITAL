@@ -1,0 +1,2 @@
+MetaTrader5==5.0.6231
+python-dotenv>=1.0,<2.0
