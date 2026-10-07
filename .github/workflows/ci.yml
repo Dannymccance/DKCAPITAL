@@ -21,7 +21,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python
-        run: python -m compileall -q src scripts tests
+        run: python -m compileall -q src scripts tests windows
 
       - name: Run tests
         env:

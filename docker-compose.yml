@@ -106,5 +106,18 @@ services:
     profiles:
       - discord
 
+  mt5-gateway:
+    build: .
+    command: ["python", "-m", "dkcapital.mt5_gateway"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MT5_GATEWAY_PORT:-8765}:${MT5_GATEWAY_PORT:-8765}"
+    profiles:
+      - mt5-shadow
+
 volumes:
   dkcapital-data:

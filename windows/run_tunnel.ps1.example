@@ -1,0 +1,17 @@
+param(
+    [Parameter(Mandatory=$true)][string]$UbuntuHost,
+    [string]$UbuntuUser = "root",
+    [string]$IdentityFile = "$env:USERPROFILE\.ssh\id_ed25519"
+)
+
+$ErrorActionPreference = "Stop"
+
+# Keeps the DK Capital MT5 gateway private on the Ubuntu host. The Windows
+# executor connects to http://127.0.0.1:8765 through this local forward.
+ssh -N `
+    -o ExitOnForwardFailure=yes `
+    -o ServerAliveInterval=30 `
+    -o ServerAliveCountMax=3 `
+    -i $IdentityFile `
+    -L 8765:127.0.0.1:8765 `
+    "$UbuntuUser@$UbuntuHost"

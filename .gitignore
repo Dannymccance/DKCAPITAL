@@ -12,3 +12,6 @@ venv/
 data/*
 !data/.gitkeep
 .DS_Store
+
+!windows/.env.example
+windows/data/*
