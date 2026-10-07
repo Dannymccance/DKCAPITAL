@@ -102,6 +102,110 @@ docker compose run --rm telegram-dialogs
 ```
 
 
+## MT5 shadow bridge
+
+DK Capital includes a Windows MetaTrader 5 shadow integration for XAUUSD. It
+connects to the locally installed MT5 terminal, reads the actual account and
+broker symbol specification, calculates broker-native position size using
+MT5's own profit calculation, observes existing positions, and mirrors DK
+Capital signal state into a durable shadow ledger.
+
+The shipped integration is intentionally non-executing. It contains no
+\`order_send()\` call and cannot be switched into live order placement with an
+environment variable.
+
+Architecture:
+
+\`\`\`text
+Telegram
+  -> Ubuntu telegram-listener
+  -> signal-processor
+  -> /app/data/signal-state.json
+  -> mt5-gateway on Ubuntu loopback
+  -> SSH local port forward
+  -> Windows mt5_shadow_executor.py
+  -> local MetaTrader 5 terminal
+  -> read account, XAUUSD specification, ticks and positions
+  -> windows/data/mt5-shadow.json
+\`\`\`
+
+### Ubuntu gateway
+
+Generate a random gateway token and add it to the normal root \`.env\`:
+
+\`\`\`bash
+openssl rand -hex 32
+nano .env
+\`\`\`
+
+Set:
+
+\`\`\`text
+MT5_GATEWAY_TOKEN=<same-random-token-used-on-Windows>
+MT5_GATEWAY_PORT=8765
+\`\`\`
+
+Start the gateway:
+
+\`\`\`bash
+docker compose --profile mt5-shadow up -d --build mt5-gateway
+docker compose logs --tail=100 mt5-gateway
+curl http://127.0.0.1:8765/health
+\`\`\`
+
+Docker publishes the gateway on Ubuntu loopback only. Do not expose port 8765
+directly to the public internet.
+
+### Windows VPS
+
+Install MetaTrader 5 on a Windows VPS, log the terminal into the account you
+want to observe, clone this repository, then run PowerShell:
+
+\`\`\`powershell
+cd DKCAPITAL\windows
+.\install.ps1
+notepad .env
+\`\`\`
+
+Use Python 3.11 for the Windows executor. \`windows/requirements.txt\` pins the
+MetaQuotes \`MetaTrader5\` package separately from the Linux dependencies.
+
+Put the same \`MT5_GATEWAY_TOKEN\` into \`windows/.env\`. You can leave the MT5
+login/password/server fields blank if the terminal is already logged into the
+desired account.
+
+Create the SSH tunnel from Windows to the Ubuntu VPS:
+
+\`\`\`powershell
+Copy-Item .\run_tunnel.ps1.example .\run_tunnel.ps1
+.\run_tunnel.ps1 -UbuntuHost <ubuntu-vps-host>
+\`\`\`
+
+Keep that tunnel running, then start the shadow executor in another PowerShell
+window:
+
+\`\`\`powershell
+.\run_shadow.ps1
+\`\`\`
+
+The durable output is:
+
+\`\`\`text
+windows/data/mt5-shadow.json
+\`\`\`
+
+For each newly observed XAUUSD signal it records the broker symbol, reference
+bid/ask, planned protective stop, planned lot size, planned account-currency
+risk, provider TP/SL changes, terminal signal status, and any real MT5
+positions already present on the account. Signals older than three minutes at
+first observation are skipped by default.
+
+Sizing uses the account's current equity plus MT5 \`order_calc_profit()\` for a
+one-lot move from reference entry to stop, then floors the result to the
+broker's actual volume step. It never rounds a too-small trade upward to the
+broker minimum.
+
+
 ## Bybit demo trading
 
 DK Capital includes an isolated Bybit Demo Trading service for XAUUSD provider
