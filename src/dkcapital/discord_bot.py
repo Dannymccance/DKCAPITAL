@@ -1148,10 +1148,16 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_snapshot = Path(os.getenv("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json"))
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
     mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
+    telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
 
     async def update_mt5_account1() -> None:
         if not mt5_channel_id and not mt5_alert_id:
             return
+        if bot.is_ready():
+            _write_json(Path("/app/data/discord-heartbeat.json"), {
+                "checked_at": datetime.now(UTC).isoformat(),
+                "connected": True,
+            })
         snapshot = _load_json(mt5_snapshot)
         problems: set[str] = set()
         summary: dict[str, Any] | None = None
@@ -1173,6 +1179,16 @@ def build_bot(settings: Settings) -> commands.Bot:
                     problems.add("MT5_DEMO_GROUP_STOP_RISK_OVER_75")
                 if summary["portfolio_risk_gbp"] is not None and summary["portfolio_risk_gbp"]>150.01:
                     problems.add("MT5_DEMO_AGGREGATE_STOP_RISK_OVER_150")
+
+        recovery = _load_json(telegram_recovery_status_path)
+        if not recovery:
+            problems.add("TELEGRAM_RECOVERY_NOT_INITIALIZED")
+        else:
+            checked = _local_datetime(recovery.get("checked_at"), "UTC")
+            if checked is None or (datetime.now(UTC) - checked).total_seconds() > 180:
+                problems.add("TELEGRAM_RECOVERY_HEARTBEAT_STALE")
+            elif not recovery.get("healthy"):
+                problems.add("TELEGRAM_RECOVERY_SCAN_INCOMPLETE")
 
         if mt5_channel_id and snapshot and summary:
             config = _load_json(mt5_dashboard_config)
@@ -1205,7 +1221,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                 try:
                     channel = bot.get_channel(mt5_alert_id) or await bot.fetch_channel(mt5_alert_id)
                     for issue in to_send:
-                        await channel.send(f"🚨 DKcapital Account 1 DEMO alert: `{issue}` — review MT5, entries stay disabled if safety data is unavailable.")
+                        await channel.send(f"🚨 DKcapital Account 1 DEMO alert: `{issue}` — investigate; new entries may be blocked by safety checks.")
                     for issue in recovered:
                         await channel.send(f"✅ DKcapital Account 1 DEMO recovery: `{issue}` cleared.")
                     _write_json(mt5_alert_state_path,{

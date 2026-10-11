@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,18 @@ async def run() -> None:
         else 0
     )
 
+    last_heartbeat = 0.0
+    heartbeat_path = settings.signal_state_path.parent / "signal-processor-heartbeat.json"
     while True:
+        if time.monotonic() - last_heartbeat > 20:
+            heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_heartbeat = heartbeat_path.with_suffix(".tmp")
+            temp_heartbeat.write_text(json.dumps({
+                "checked_at": datetime.now(UTC).isoformat(),
+                "event_log_offset": position,
+            }))
+            temp_heartbeat.replace(heartbeat_path)
+            last_heartbeat = time.monotonic()
         path = settings.telegram_event_log_path
         if not path.exists():
             await asyncio.sleep(1)

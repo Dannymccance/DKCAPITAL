@@ -46,6 +46,14 @@ class GoldSpotClient:
         self._last_error: str | None = None
         self._lock = asyncio.Lock()
 
+    def cached_quote(self) -> dict[str, Any] | None:
+        """Nonblocking market context: never hold up execution signal ingestion."""
+        if self._cached is None:
+            return None
+        if time.monotonic() - self._cached_at_monotonic > self.refresh_seconds:
+            return self._stale_or_none()
+        return dict(self._cached)
+
     def _stale_or_none(self) -> dict[str, Any] | None:
         if self._cached is None:
             return None

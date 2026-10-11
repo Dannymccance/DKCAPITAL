@@ -119,5 +119,16 @@ services:
     profiles:
       - mt5-shadow
 
+  dkcapital-watchdog:
+    build: .
+    command: ["python", "-m", "dkcapital.watchdog"]
+    env_file:
+      - .env
+    volumes:
+      - dkcapital-data:/app/data
+    restart: unless-stopped
+    profiles:
+      - mt5-shadow
+
 volumes:
   dkcapital-data:
