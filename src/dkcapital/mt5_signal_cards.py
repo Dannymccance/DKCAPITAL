@@ -100,3 +100,49 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
     else:
         status = "PARTIAL / RECONCILIATION"
     return {"status": status, "legs": legs, "has_broker_record": has_record, "fresh": True}
+
+
+def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
+    """Gold channel card: provider intent vs actual MT5 fills, clearly separated."""
+    import discord
+
+    provider = {"gws": "GWS", "elite": "Elite Portfolios"}.get(
+        str(signal.get("source_style") or "").lower(), "Telegram Provider")
+    side = str(signal.get("direction") or "?")
+    embed = discord.Embed(
+        title=f"{side} XAUUSD",
+        description=f"**Provider: {provider}**\n**MT5 DEMO ACCOUNT 1:** {state['status']}",
+        color=discord.Color.green() if state["has_broker_record"] else discord.Color.orange(),
+    )
+    low = signal.get("entry_low")
+    high = signal.get("entry_high")
+    entry = f"{low} - {high}" if low != high else str(low)
+    embed.add_field(name="Telegram entry zone", value=entry, inline=True)
+    embed.add_field(name="MT5 broker status", value=state["status"], inline=True)
+    rows = []
+    for leg in (1, 2, 3):
+        item = state["legs"].get(leg)
+        if item is None or item["entry"] is None:
+            rows.append(f"⬜ TP{leg} leg — **Not filled on MT5**")
+            continue
+        status = item["status"]
+        mark = "✅" if status.startswith("CLOSED") else ("🟢" if status == "OPEN" else "⚠️")
+        line = f"{mark} **TP{leg} leg** — {item['lots']:.2f} lots, fill **{item['entry']:.2f}**"
+        line += f"\n{status}"
+        if item.get("exit_price") is not None:
+            line += f" | exit {item['exit_price']:.2f}"
+        if item.get("sl") is not None:
+            line += f" | SL {item['sl']:.2f}"
+        if item.get("tp") is not None:
+            line += f" | TP {item['tp']:.2f}"
+        rows.append(line)
+    embed.add_field(name="Broker-confirmed fills (three legs)", value="\n".join(rows)[:1024], inline=False)
+    targets = signal.get("tps") or {}
+    if targets:
+        embed.add_field(
+            name="Telegram targets (NOT broker-confirmed)",
+            value="\n".join(f"TP{k}: {v}" for k, v in sorted(targets.items(), key=lambda x: int(x[0])))[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="DEMO | ✅ = MT5 CLOSED, not necessarily TP | No Telegram/paper P&L")
+    return embed
