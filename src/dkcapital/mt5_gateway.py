@@ -59,6 +59,9 @@ class GatewayConfig:
 
 class Mt5GatewayHandler(BaseHTTPRequestHandler):
     server_version = "DKCapitalMT5Gateway/1.0"
+    # MT5 WebRequest on Wine may report 1003/5203 when reading HTTP/1.0.
+    # Use explicit HTTP/1.1 framing and close each response after its body.
+    protocol_version = "HTTP/1.1"
 
     @property
     def config(self) -> GatewayConfig:
@@ -74,10 +77,13 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self.send_response(int(status))
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
+        self.wfile.flush()
+        self.close_connection = True
 
     def _authorized(self) -> bool:
         supplied = self.headers.get("Authorization", "")
@@ -91,10 +97,13 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self.send_response(int(status))
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(encoded)
+        self.wfile.flush()
+        self.close_connection = True
 
     def _demo_feed(self) -> None:
         """Pipe-delimited UTF-8 protocol for local MQL5 demo-only EAs.
