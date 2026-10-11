@@ -1153,6 +1153,11 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def update_mt5_account1() -> None:
         if not mt5_channel_id and not mt5_alert_id:
             return
+        if bot.is_ready():
+            _write_json(Path("/app/data/discord-heartbeat.json"), {
+                "checked_at": datetime.now(UTC).isoformat(),
+                "connected": True,
+            })
         snapshot = _load_json(mt5_snapshot)
         problems: set[str] = set()
         summary: dict[str, Any] | None = None
