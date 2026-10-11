@@ -361,14 +361,24 @@ void TryEntry(const string id,const string status,const string direction,
    {
       if(!Allocate(total,a,b,c)) continue;
       vols[0]=a;vols[1]=b;vols[2]=c;
-      double planned=RiskGBP(buy,a,fill,sl)+RiskGBP(buy,b,fill,sl)+RiskGBP(buy,c,fill,sl);
+      double r1=RiskGBP(buy,a,fill,sl);
+      double r2=RiskGBP(buy,b,fill,sl);
+      double r3=RiskGBP(buy,c,fill,sl);
+      // OrderCalcProfit may fail for a broker contract/currency conversion.
+      // Its -1 sentinel is NOT negative exposure or spare risk capacity.
+      if(r1<0 || r2<0 || r3<0)
+      {
+         Print("DK2 RISK BLOCK: failed broker stop-risk valuation id=",id);
+         return;
+      }
+      double planned=r1+r2+r3;
       if(planned>budget+1e-7) continue;
       double requiredMargin=0,margin=0;
       bool marginOK=true;
       ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
       for(int i=0;i<3;i++)
       {
-         if(!OrderCalcMargin(type,GoldSymbol,vols[i],fill,margin))
+         if(!OrderCalcMargin(type,GoldSymbol,vols[i],fill,margin) || margin<0 || !MathIsValidNumber(margin))
          { marginOK=false;break; }
          requiredMargin+=margin;
       }
