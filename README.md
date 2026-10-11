@@ -48,6 +48,12 @@ docker compose --profile discord up -d --build
 docker compose ps
 ```
 
+## MT5 Account 1 broker reporting (planned)
+
+The agreed V2 operating dashboard will show MT5 Account 1 **broker-verified** balance, equity, margin, live three-leg positions, floating P&L, per-leg pips, realised daily/weekly GBP and volume-weighted realised pips, and the GBP75-per-group/GBP150-account risk budgets. A separate Discord alert feed will cover MT5, Telegram and gateway failures, native SL gaps, rejected orders, risk limits and recovery events. See [Discord reporting specification](docs/DKCAPITAL_RULESET_V2.md#6a-discord-operational-dashboard-and-alerts-confirmed-requirement-not-yet-implemented).
+
+**Not yet implemented:** the existing Discord bot updates its source-signal and separate paper dashboards only; it does not receive authoritative Account 1 fills, balance or P&L. MT5 read-only telemetry plus tests must be implemented before broker results appear in Discord. Do not enable V2 trading yet.
+
 ## Discord dashboard
 
 Once the bot is online, run this slash command in the channel where you want the live dashboard:
