@@ -95,6 +95,39 @@ These are implementation recommendations to discuss next. They do not override t
 9. Account switches away from DEMO or expected login: **no new orders**.
 10. Duplicate or delayed provider signals: no duplicate entry after crash/restart.
 
+## 6A. Discord operational dashboard and alerts (confirmed requirement; NOT YET IMPLEMENTED)
+
+The existing Discord bot and Telegram/paper dashboards remain operational, but they do **not** yet report authoritative MT5 broker execution for Account 1. Add a dedicated **Account 1 MT5 DEMO** dashboard and separate issue/alert feed. Display explicit DEMO and account identifier labels; never conflate the paper engine, provider-reported signal outcomes, or other MT5 accounts with Account 1 broker results.
+
+### Permanent account dashboard
+
+- Show broker-confirmed **account balance, equity, free margin, margin used, floating GBP P&L**, and last refreshed time. Use actual MT5 account-currency values (GBP for the current GBP 1,000 demo account). Display a clearly labelled disconnected / stale state if MT5 snapshots expire, not old numbers as if they are live.
+- Show current **open XAUUSD signal groups**, originating provider, BUY/SELL side, actual average/leg fill prices, active volume, actual native SL and TP1/TP2/TP3, current broker quote, native-leg TP progress, unrealised **pips for each leg**, and floating GBP P&L. Show each root group once with its separately identifiable legs and any extra layers/re-entries.
+- Show **realised pips and realised net GBP P&L today and this week**, plus win/loss counts and optional monthly figures. This week's boundaries are Monday 00:00 (Europe/Isle_of_Man) through now, with broker deal timestamps converted to that timezone. Broker-deal history, not the provider's Telegram TP/SL announcements, is authoritative.
+- Show current planned stop-risk used **in GBP against GBP 150** and individual groups against **GBP 75**. Unreconciled broker positions and missing SL are marked explicitly as risk uncertainty and trigger alerts; never report a falsely precise risk figure.
+- Update the existing pinned/permanent Discord message approximately every 30-60 seconds (plus on significant broker events) rather than posting a new message every minute. Discord updates must be rate-limited and resilient to missing permissions, downtime and restarts. Preserve separate existing Telegram and paper dashboards.
+
+### Precise pip reporting
+
+- Display the **configured XAUUSD pip convention** alongside reported pips; existing paper engine default is price increment **0.01 USD per pip**, but the broker/provider convention must be verified before adopting that setting for MT5 account reporting. Contract point size and pip size are not necessarily identical. Do not silently use one provider's pip convention for the other.
+- BUY leg pips = (broker exit or current bid minus actual broker entry) / configured USD-per-pip. SELL leg pips = (actual broker entry minus broker exit or current ask) / configured USD-per-pip. Broker price ticks and actual fills control values, not guessed TP distances.
+- Avoid **three-leg double-counting** in the account's weekly pip headline. For each execution trio, compute realised pip-equivalent as the volume-weighted sum of realised leg pips relative to that trio's total opened lots: sum(closed_lot_volume / trio_initial_total_lots * realised_leg_pips). Add completed and partly closed trios' contributions within the reporting window. If the three full-size legs all gain 100 pips, the trio contributes **100**, not 300 headline pips. Display per-leg pips separately if users want to audit every leg. Count a new explicit layer/re-entry trio separately, with its own reference lot total.
+- Currency P&L must be calculated from **MT5 account/deal profit plus swap and commissions/fees**, not by multiplying displayed pips by a generic pip value. Clearly distinguish floating (mark-to-market) from closed/realised trades. Handle entry/exit commissions without double-counting across days.
+
+### Operational alerts and acknowledgements
+
+- Send immediate/high-priority Discord alerts for Account 1 MT5 connection failure, broker account mismatch/non-demo mode, missing/unconfirmed native SL, EA heartbeat gap, gateway or processor unavailability, missed or delayed Telegram ingestion, failed/rejected or partially filled orders, reconciliation mismatches, and risk calculation uncertainty. Entries must remain blocked when required safety checks cannot be satisfied. Existing positions still need risk management and explicit provider exit processing.
+- Send warning alerts for rejected entries due to £75 group / £150 account exposure ceilings, stale/invalid signal values, and unfulfillable three-leg lot minimums. Send information messages on **broker-confirmed** order fills, TP1, BE changes, TP2/TP3, provider-directed closes, and recoveries.
+- Deduplicate and rate-limit identical alerts, with escalation if a fault persists; record incident start and resolution separately. Alerts must specify source/component, observed time, affected signal/group/ticket where relevant, and whether automated trading is blocked.
+- An independent systemd/health watchdog is needed to alert when the **Discord bot itself** is down, since a stopped Discord bot cannot send its own notifications. Discord is observability, not a dependency for safety-critical stops or broker order management.
+- Do not send API tokens, account passwords or Telegram sessions to Discord. Send no order or entry command from Discord until separately authorised and secured.
+
+### MT5 telemetry integration and rollout
+
+- A future **read-only, authenticated, localhost-only telemetry route** must carry broker account properties, open position tickets, native protective orders, broker deal events, execution diagnostics and a heartbeat from Account 1 to a durable snapshot/history store used by Discord. The current `GET /v1/demo/feed` provides parsed Telegram instructions only; it cannot supply true MT5 balances, fill prices or P&L. The currently configured gateway is not enabled and must not be misrepresented as operational.
+- Implement and acceptance-test broker telemetry separately before publishing any performance figures as actual account results. For missing data display **Unavailable / Awaiting MT5 telemetry**, not £0 or synthetic performance. Before enabling entries, verify a real demo-account sample shows correct amounts and pip convention, WTD rollover, native TP/SL and disconnect alarms.
+- Suggested Discord channel layout: `#dkcapital-dashboard` for the pinned view and `#dkcapital-alerts` for exceptions/trade notifications. Proposed slash commands: `/mt5_status`, `/mt5_trades`, `/mt5_week`, and `/mt5_health`. Naming/permissions can be agreed at implementation.
+
 ## 7. Additional acceptance tests for aggregate risk and expansion (V2)
 
 11. On a GBP 1,000 hedging demo account, two root groups each with GBP 75 verified risk may coexist. A third GBP 75 group is skipped until enough confirmed protective-stop budget is released.
