@@ -128,10 +128,10 @@ class Watchdog:
         # Persist only alerts that were actually delivered.
         delivered = set(prior)
         for issue in pending:
-            if self._notify(f"🚨 DKcapital independent watchdog: \`{issue}\` — inspect Account 1 services."):
+            if self._notify(f"🚨 DKcapital independent watchdog: `{issue}` — inspect Account 1 services."):
                 delivered.add(issue)
         for issue in recovered:
-            if self._notify(f"✅ DKcapital independent watchdog recovery: \`{issue}\` cleared."):
+            if self._notify(f"✅ DKcapital independent watchdog recovery: `{issue}` cleared."):
                 delivered.discard(issue)
         self._write_state(delivered)
         return problems
