@@ -1083,6 +1083,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
         ),
         color=discord.Color.orange() if stale else discord.Color.blue(),
     )
+    embed.add_field(name="EA entry switch", value=("ARMED (demo)" if summary.get("entry_enabled") else "DISABLED"), inline=False)
     prefix = "Last known (stale) " if stale else ""
     embed.add_field(
         name=prefix+"Account",
@@ -1166,6 +1167,10 @@ def build_bot(settings: Settings) -> commands.Bot:
                     problems.add("MT5_DEMO_TELEMETRY_STALE")
                 if summary["risk_unknown"]:
                     problems.add("MT5_DEMO_NATIVE_STOP_OR_RISK_UNKNOWN")
+                if summary.get("feed_http") != 200:
+                    problems.add("MT5_DEMO_INSTRUCTION_FEED_UNAVAILABLE")
+                if any(risk > 75.01 for risk in summary.get("group_risks", {}).values()):
+                    problems.add("MT5_DEMO_GROUP_STOP_RISK_OVER_75")
                 if summary["portfolio_risk_gbp"] is not None and summary["portfolio_risk_gbp"]>150.01:
                     problems.add("MT5_DEMO_AGGREGATE_STOP_RISK_OVER_150")
 
