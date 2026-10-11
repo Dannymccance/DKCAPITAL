@@ -81,6 +81,38 @@ bool DailyAllowed()
    }
    return true;
 }
+double AvailableDailyRisk()
+{
+   string key=DayKey();
+   double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!GlobalVariableCheck(key))
+      GlobalVariableSet(key,equity);
+   double baseline=GlobalVariableGet(key);
+   if(baseline<=0) return 0.0;
+   double available=equity-baseline*(1.0-DailyEquityDrawdownFraction);
+   if(available<=0) return 0.0;
+
+   // Reserve stop-loss exposure for existing positions, including manual trades.
+   // A position without a protective stop blocks further new orders.
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0) continue;
+      string sym=PositionGetString(POSITION_SYMBOL);
+      double sl=PositionGetDouble(POSITION_SL);
+      if(sl<=0) return 0.0;
+      MqlTick quote;
+      if(!SymbolInfoTick(sym,quote)) return 0.0;
+      bool buy=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY;
+      double from=buy?quote.bid:quote.ask;
+      double hypothetical=0.0;
+      ENUM_ORDER_TYPE side=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+      if(!OrderCalcProfit(side,sym,PositionGetDouble(POSITION_VOLUME),from,sl,hypothetical))
+         return 0.0;
+      if(hypothetical<0) available+=hypothetical;
+   }
+   return MathMax(0.0,available);
+}
 bool AlreadyTraded(const ulong magic)
 {
    if(GlobalVariableCheck(LedgerKey(magic,"OPEN"))) return true;
@@ -202,7 +234,9 @@ void MaybeOpen(const string id,const string direction,const double low,const dou
 
    double lots=FloorLots(MathMin(TargetLots,SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)));
    double minLots=SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MIN);
-   double maxRisk=AccountInfoDouble(ACCOUNT_EQUITY)*MaxLossPerTradeFraction;
+   double maxRisk=MathMin(AccountInfoDouble(ACCOUNT_EQUITY)*MaxLossPerTradeFraction,
+                           AvailableDailyRisk());
+   if(maxRisk<=0) return;
    double risk=0;
    ENUM_ORDER_TYPE orderType=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
    while(lots+1e-9>=minLots)
