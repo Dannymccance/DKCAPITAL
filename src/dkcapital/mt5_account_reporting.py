@@ -115,6 +115,8 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
         "version": 2, "mode": "DEMO", "login": login,
         "currency": "GBP", "generated_at": generated.isoformat(),
         **numeric, "positions": out_pos, "deals": out_deals,
+        "feed_http": _integer(payload.get("feed_http", 0)),
+        "entry_enabled": payload.get("entry_enabled") is True,
         "received_at": datetime.now(UTC).isoformat(),
     }
 
@@ -189,6 +191,8 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         "week_realized_pips": round(weekly_pips, 1),
         "week_closed_legs": weekly_closes, "pip_size": pip_size,
         "positions": positions,
+        "feed_http": snapshot.get("feed_http", 0),
+        "entry_enabled": snapshot.get("entry_enabled", False),
         "risk_unknown": risk_unknown,
         "portfolio_risk_gbp": None if risk_unknown else round(sum(groups.values()), 2),
         "group_risks": {str(k): round(v, 2) for k, v in groups.items()},
