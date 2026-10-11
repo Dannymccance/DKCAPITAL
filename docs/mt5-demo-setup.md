@@ -1,3 +1,5 @@
+> **IMPORTANT - RULESET V2 SUPERSEDES THE CURRENT EA TRADE SETTINGS.** See [DKCAPITAL_RULESET_V2.md](DKCAPITAL_RULESET_V2.md). The existing `mt5/DKcapitalDemo.mq5` is a single-position 0.05-lot EA and **does not** implement the user's agreed three-leg sizing, Friday 0.01 x 3 allocation, fixed GBP75 group cap, or automatic Friday flatten. Leave `EnableNewEntries=false` on all MT5 terminals until a revised EA is built, compiled, and validated on a broker demo account. This document otherwise describes the older test EA, not the V2 trading rules.
+
 # DKcapital MT5 two-account DEMO setup
 
 The demo Expert Advisor is at mt5/DKcapitalDemo.mq5. It uses an opt-in authenticated local feed from the existing DKcapital MT5 gateway.
