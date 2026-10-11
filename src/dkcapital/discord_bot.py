@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from discord.ext import commands, tasks
 
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
+from dkcapital.mt5_account_reporting import summarize
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -1067,9 +1069,151 @@ def _signal_embed(
     return embed
 
 
+def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord.Embed:
+    """Broker-based Account 1 view; never source/provider paper statistics."""
+    summary = summarize(snapshot, pip_size=pip_size)
+    stale = summary["stale"]
+    status = "STALE / NOT LIVE" if stale else "DEMO | MT5 broker data"
+    embed = discord.Embed(
+        title="DK Capital | MT5 Demo Account 1",
+        description=(
+            f"**{status}** | Login `{summary['login']}`\n"
+            f"Last received: {summary['received_at']}\n"
+            f"XAUUSD pip convention: USD {pip_size:.2f} per pip (provisional)"
+        ),
+        color=discord.Color.orange() if stale else discord.Color.blue(),
+    )
+    embed.add_field(name="EA entry switch", value=("ARMED (demo)" if summary.get("entry_enabled") else "DISABLED"), inline=False)
+    prefix = "Last known (stale) " if stale else ""
+    embed.add_field(
+        name=prefix+"Account",
+        value=(
+            f"Balance: **£{summary['balance']:,.2f}**\n"
+            f"Equity: **£{summary['equity']:,.2f}**\n"
+            f"Floating P&L: **£{summary['floating_gbp']:+,.2f}**\n"
+            f"Free margin: £{summary['free_margin']:,.2f}"
+        ), inline=False,
+    )
+    embed.add_field(
+        name=prefix+"Realised performance (broker deals)",
+        value=(
+            f"Today: **£{summary['today_realized_gbp']:+,.2f}**\n"
+            f"This week: **£{summary['week_realized_gbp']:+,.2f}**\n"
+            f"This week: **{summary['week_realized_pips']:+,.1f} pips** "
+            "(volume-weighted)\n"
+            f"Closing deals this week: {summary['week_closed_legs']}"
+        ), inline=False,
+    )
+    if summary["risk_unknown"]:
+        risk_text = "**UNKNOWN — inspect protective stops**"
+    else:
+        risk_text = f"**£{summary['portfolio_risk_gbp']:,.2f} / £150.00**"
+    embed.add_field(name="Planned stop-loss exposure", value=risk_text, inline=False)
+    positions = summary["positions"]
+    if not positions:
+        embed.add_field(name="Open broker positions", value="None", inline=False)
+    else:
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for p in positions:
+            grouped.setdefault(p["group"], []).append(p)
+        for group, legs in list(grouped.items())[:14]:
+            details = []
+            for p in sorted(legs, key=lambda x: x["leg"]):
+                details.append(
+                    f"TP{p['leg']} • {p['lots']:.2f} lot • "
+                    f"entry {p['entry']:.2f} • SL {p['sl']:.2f} • "
+                    f"TP {p['tp']:.2f} • **{p['floating_pips']:+,.1f} pips** • "
+                    f"£{p['profit']:+,.2f}"
+                )
+            embed.add_field(
+                name=f"XAUUSD {legs[0]['side']} | Group {group}",
+                value="\n".join(details)[:1024],
+                inline=False,
+            )
+        if len(grouped)>14:
+            embed.add_field(name="More groups",value=f"+{len(grouped)-14} not shown",inline=False)
+    embed.set_footer(text="DEMO ACCOUNT 1 | MT5 fills & deals only; provider claims excluded")
+    return embed
+
+
 def build_bot(settings: Settings) -> commands.Bot:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
+
+    mt5_channel_raw = os.getenv("MT5_DASHBOARD_CHANNEL_ID", "").strip()
+    mt5_alert_raw = os.getenv("MT5_ALERT_CHANNEL_ID", "").strip()
+    mt5_channel_id = int(mt5_channel_raw) if mt5_channel_raw else 0
+    mt5_alert_id = int(mt5_alert_raw) if mt5_alert_raw else 0
+    mt5_pip_size = float(os.getenv("MT5_XAU_PIP_SIZE", "0.01"))
+    mt5_snapshot = Path(os.getenv("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json"))
+    mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
+    mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
+
+    async def update_mt5_account1() -> None:
+        if not mt5_channel_id and not mt5_alert_id:
+            return
+        snapshot = _load_json(mt5_snapshot)
+        problems: set[str] = set()
+        summary: dict[str, Any] | None = None
+        if not snapshot:
+            problems.add("MT5_DEMO_TELEMETRY_MISSING")
+        else:
+            try:
+                summary = summarize(snapshot, pip_size=mt5_pip_size)
+            except (ValueError, TypeError, KeyError):
+                problems.add("MT5_DEMO_TELEMETRY_MALFORMED")
+            else:
+                if summary["stale"]:
+                    problems.add("MT5_DEMO_TELEMETRY_STALE")
+                if summary["risk_unknown"]:
+                    problems.add("MT5_DEMO_NATIVE_STOP_OR_RISK_UNKNOWN")
+                if summary.get("feed_http") != 200:
+                    problems.add("MT5_DEMO_INSTRUCTION_FEED_UNAVAILABLE")
+                if any(risk > 75.01 for risk in summary.get("group_risks", {}).values()):
+                    problems.add("MT5_DEMO_GROUP_STOP_RISK_OVER_75")
+                if summary["portfolio_risk_gbp"] is not None and summary["portfolio_risk_gbp"]>150.01:
+                    problems.add("MT5_DEMO_AGGREGATE_STOP_RISK_OVER_150")
+
+        if mt5_channel_id and snapshot and summary:
+            config = _load_json(mt5_dashboard_config)
+            embed = _mt5_account1_embed(snapshot, pip_size=mt5_pip_size)
+            try:
+                channel = bot.get_channel(mt5_channel_id) or await bot.fetch_channel(mt5_channel_id)
+                message_id = config.get("message_id")
+                if message_id:
+                    try:
+                        existing = await channel.fetch_message(int(message_id))
+                        await existing.edit(embed=embed)
+                    except discord.NotFound:
+                        message_id = None
+                if not message_id:
+                    posted = await channel.send(embed=embed)
+                    try:
+                        await posted.pin(reason="DKcapital MT5 Account 1 dashboard")
+                    except (discord.Forbidden, discord.HTTPException):
+                        logger.warning("Unable to pin MT5 dashboard")
+                    _write_json(mt5_dashboard_config,{"channel_id":mt5_channel_id,"message_id":posted.id})
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception("Unable to publish MT5 Account 1 dashboard")
+
+        if mt5_alert_id:
+            prev = _load_json(mt5_alert_state_path)
+            old = set(prev.get("active") or [])
+            to_send = sorted(problems - old)
+            recovered = sorted(old - problems)
+            if to_send or recovered:
+                try:
+                    channel = bot.get_channel(mt5_alert_id) or await bot.fetch_channel(mt5_alert_id)
+                    for issue in to_send:
+                        await channel.send(f"🚨 DKcapital Account 1 DEMO alert: `{issue}` — review MT5, entries stay disabled if safety data is unavailable.")
+                    for issue in recovered:
+                        await channel.send(f"✅ DKcapital Account 1 DEMO recovery: `{issue}` cleared.")
+                    _write_json(mt5_alert_state_path,{
+                        "active": sorted(problems),
+                        "checked_at": datetime.now(UTC).isoformat(),
+                    })
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.exception("Unable to deliver MT5 Account 1 alert")
 
     async def update_paper_dashboard() -> bool:
         state = _load_json(settings.paper_state_path)
@@ -1364,6 +1508,14 @@ def build_bot(settings: Settings) -> commands.Bot:
         await bot.wait_until_ready()
 
     @tasks.loop(minutes=1)
+    async def mt5_account1_loop() -> None:
+        await update_mt5_account1()
+
+    @mt5_account1_loop.before_loop
+    async def before_mt5_account1_loop() -> None:
+        await bot.wait_until_ready()
+
+    @tasks.loop(minutes=1)
     async def dashboard_loop() -> None:
         await update_dashboard()
 
@@ -1385,6 +1537,8 @@ def build_bot(settings: Settings) -> commands.Bot:
             synced = await bot.tree.sync()
             logger.info("Synced %s global Discord command(s)", len(synced))
 
+        if (mt5_channel_id or mt5_alert_id) and not mt5_account1_loop.is_running():
+            mt5_account1_loop.start()
         if not dashboard_loop.is_running():
             dashboard_loop.start()
         if not paper_dashboard_loop.is_running():

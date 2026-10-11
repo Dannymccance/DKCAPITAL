@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from dkcapital.mt5_account_reporting import normalize_telemetry
+
 from dkcapital.logging_setup import configure_logging
 
 logger = logging.getLogger("dkcapital.mt5_gateway")
@@ -39,6 +41,8 @@ class GatewayConfig:
         self.port = _env_int("MT5_GATEWAY_PORT", 8765)
         self.token = os.getenv("MT5_GATEWAY_TOKEN", "").strip()
         self.demo_feed_enabled = os.getenv("MT5_DEMO_FEED_ENABLED", "false").strip().lower() in {"true", "1", "yes"}
+        self.account1_login = _env_int("MT5_ACCOUNT1_LOGIN", 0)
+        self.account1_telemetry_path = _env_path("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json")
         self.signal_state_path = _env_path(
             "SIGNAL_STATE_PATH",
             "/app/data/signal-state.json",
@@ -150,6 +154,99 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             result.append("|".join(fields))
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
+    def _demo_v2_feed(self) -> None:
+        """Read-only V2 instruction feed: signals plus attributable explicit exits.
+
+        Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
+        Historical signal entries remain visible for managing weekend-held trades;
+        the EA independently rejects stale *new* entries.
+        """
+        if not self.config.demo_feed_enabled:
+            self._write_json(HTTPStatus.FORBIDDEN, {"error": "demo_feed_disabled"})
+            return
+        state = _json(self.config.signal_state_path)
+        lines = ["DKDEMO2"]
+        for signal in state.get("signals", []):
+            if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
+                continue
+            ident = str(signal.get("signal_id", ""))
+            if not re.fullmatch(r"[-0-9:]{1,64}", ident):
+                continue
+            direction = str(signal.get("direction") or "").upper()
+            status = str(signal.get("status") or "").upper()
+            if direction not in ("BUY", "SELL") or status not in (
+                "ACTIVE", "COMPLETED", "CLOSED", "STOPPED",
+                "BREAKEVEN", "CANCELLED", "FAILED",
+            ):
+                continue
+            try:
+                opened = datetime.fromisoformat(str(signal["opened_at"]).replace("Z", "+00:00"))
+                if opened.tzinfo is None:
+                    opened = opened.replace(tzinfo=UTC)
+                prices = [float(signal["entry_low"]), float(signal["entry_high"]),
+                          float(signal["current_sl"]) if signal.get("current_sl") is not None else 0.0]
+                tps = signal.get("tps") or {}
+                prices.extend(float(tps.get(str(i), 0) or 0) for i in (1, 2, 3))
+                if not all(__import__("math").isfinite(v) and v >= 0 for v in prices):
+                    continue
+            except (ValueError, TypeError, KeyError, OverflowError):
+                continue
+            lines.append("|".join([
+                "S", ident, status, direction,
+                str(prices[0]), str(prices[1]), str(prices[2]),
+                str(signal.get("sl_mode") or "PRICE").upper(),
+                *(str(price) for price in prices[3:]),
+                str(int(opened.timestamp())),
+            ]))
+            for action in signal.get("history", []):
+                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close"):
+                    continue
+                mid = action.get("message_id")
+                try:
+                    mid = int(mid)
+                    if mid <= 0:
+                        continue
+                    pct = float(action.get("partial_percent") or 0)
+                    if not __import__("math").isfinite(pct) or not 0 <= pct <= 100:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                lines.append("|".join(["A", ident, str(mid),
+                                      str(action["kind"]).upper(), str(pct)]))
+        self._write_text(HTTPStatus.OK, "\n".join(lines) + "\n")
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        if self.path != "/v2/demo/telemetry":
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+            return
+        if not self._authorized():
+            self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+            return
+        if self.config.account1_login <= 0:
+            self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "account1_login_unconfigured"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 262144:
+                self._write_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid_length"})
+                return
+            payload = json.loads(self.rfile.read(length))
+            normalized = normalize_telemetry(payload, self.config.account1_login)
+        except (ValueError, TypeError, UnicodeDecodeError, KeyError) as exc:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_telemetry", "detail": str(exc)[:100]})
+            return
+        path = self.config.account1_telemetry_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(".tmp")
+            temp.write_text(json.dumps(normalized, separators=(",", ":")), encoding="utf-8")
+            temp.replace(path)
+        except OSError:
+            logger.exception("MT5 telemetry write failure")
+            self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "telemetry_storage_failed"})
+            return
+        self._write_json(HTTPStatus.OK, {"accepted": True, "account": "demo1"})
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         if self.path == "/health":
             self._write_json(
@@ -160,6 +257,27 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     "time": datetime.now(UTC).isoformat(),
                 },
             )
+            return
+
+        if self.path == "/v2/demo/feed":
+            if not self._authorized():
+                self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                return
+            self._demo_v2_feed()
+            return
+
+        if self.path == "/v2/demo/account1":
+            if not self._authorized():
+                self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                return
+            if self.config.account1_login <= 0:
+                self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "account1_login_unconfigured"})
+                return
+            snapshot = _json(self.config.account1_telemetry_path)
+            if not snapshot or snapshot.get("login") != self.config.account1_login:
+                self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no_account1_telemetry"})
+                return
+            self._write_json(HTTPStatus.OK, snapshot)
             return
 
         if self.path == "/v1/demo/feed":
