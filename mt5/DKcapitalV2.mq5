@@ -29,7 +29,7 @@ CTrade trade;
 bool in_cycle = false;
 datetime last_telemetry = 0;
 const ulong MAGIC_BASE = 5100000000;
-const ulong MAGIC_MAX = 48000000000;
+const ulong MAGIC_MAX = 48049672950;
 
 uint Hash(const string value)
 {
@@ -489,7 +489,7 @@ void SendTelemetry()
    }
    json+="],\"deals\":[";
    first=true;
-   datetime offset=TimeTradeServer()-TimeGMT();
+   long offset=(long)TimeTradeServer()-(long)TimeGMT();
    if(MathAbs((double)offset)>14*3600) offset=0;
    if(HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600))
    {
