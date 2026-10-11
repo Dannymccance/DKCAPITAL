@@ -511,12 +511,33 @@ void SendTelemetry()
    if(MathAbs((double)offset)>14*3600) offset=0;
    if(HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600))
    {
+      // Native broker SL/TP closing deals may have magic=0.
+      // Resolve ownership through their original IN deal's position ID.
+      ulong mappedIds[],mappedMagics[];
+      for(int i=0;i<HistoryDealsTotal();i++)
+      {
+         ulong d=HistoryDealGetTicket(i);
+         if(d==0 || HistoryDealGetString(d,DEAL_SYMBOL)!=GoldSymbol ||
+            HistoryDealGetInteger(d,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
+         ulong m=(ulong)HistoryDealGetInteger(d,DEAL_MAGIC);
+         if(!Owned(m)) continue;
+         int n=ArraySize(mappedIds);
+         ArrayResize(mappedIds,n+1);ArrayResize(mappedMagics,n+1);
+         mappedIds[n]=(ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID);
+         mappedMagics[n]=m;
+      }
       int emitted=0;
       for(int i=0;i<HistoryDealsTotal() && emitted<1000;i++)
       {
          ulong deal=HistoryDealGetTicket(i);
          if(deal==0 || HistoryDealGetString(deal,DEAL_SYMBOL)!=GoldSymbol) continue;
          ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
+         if(!Owned(magic))
+         {
+            ulong position=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+            for(int j=0;j<ArraySize(mappedIds);j++)
+               if(mappedIds[j]==position) {magic=mappedMagics[j];break;}
+         }
          if(!Owned(magic)) continue;
          long entry=HistoryDealGetInteger(deal,DEAL_ENTRY);
          if(entry!=DEAL_ENTRY_IN && entry!=DEAL_ENTRY_OUT) continue;
