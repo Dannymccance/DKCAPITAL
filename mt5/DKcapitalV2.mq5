@@ -27,6 +27,8 @@ input int DeviationPoints = 35;
 
 CTrade trade;
 bool in_cycle = false;
+bool telemetry_healthy = false;
+int last_feed_http = 0;
 datetime last_telemetry = 0;
 const ulong MAGIC_BASE = 5100000000;
 const ulong MAGIC_MAX = 48049672950;
@@ -60,7 +62,7 @@ bool DemoIdentity()
 }
 bool TradeAllowed()
 {
-   return DemoIdentity() &&
+   return DemoIdentity() && telemetry_healthy && last_feed_http==200 &&
           (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) &&
           (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
 }
@@ -313,7 +315,8 @@ void TryEntry(const string id,const string status,const string direction,
    if(HasBeenAttempted(id)) return;
    MqlTick q;
    if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0 ||
-      q.ask-q.bid>MaxSpreadUSD) return;
+      q.ask-q.bid>MaxSpreadUSD ||
+      (long)TimeTradeServer()-(long)q.time>30) return;
    bool buy=direction=="BUY";
    double fill=buy?q.ask:q.bid;
    double zLow=MathMin(low,high),zHigh=MathMax(low,high);
@@ -541,6 +544,7 @@ void SendTelemetry()
      "\r\nContent-Type: application/json\r\n";
    string received;
    int status=WebRequest("POST",TelemetryUrl,headers,8000,payload,response,received);
+   telemetry_healthy=(status==200);
    if(status!=200)
       Print("DK2 ALERT telemetry POST failed http=",status," error=",GetLastError());
 }
@@ -583,6 +587,7 @@ void OnTimer()
    string headers="Authorization: Bearer "+FeedToken+"\r\n";
    string responseHeaders;
    int status=WebRequest("GET",FeedUrl,headers,8000,req,resp,responseHeaders);
+   last_feed_http=status;
    if(status==200) ProcessFeed(CharArrayToString(resp,0,-1,CP_UTF8));
    else Print("DK2 ALERT instruction gateway unavailable http=",status,
               " error=",GetLastError());
