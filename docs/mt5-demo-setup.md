@@ -1,4 +1,4 @@
-> **IMPORTANT - RULESET V2 SUPERSEDES THE CURRENT EA TRADE SETTINGS.** See [DKCAPITAL_RULESET_V2.md](DKCAPITAL_RULESET_V2.md). The existing `mt5/DKcapitalDemo.mq5` is a single-position 0.05-lot EA and **does not** implement the user's agreed three-leg sizing, Friday 0.01 x 3 allocation, fixed GBP75 group cap, or automatic Friday flatten. Leave `EnableNewEntries=false` on all MT5 terminals until a revised EA is built, compiled, and validated on a broker demo account. This document otherwise describes the older test EA, not the V2 trading rules.
+> **IMPORTANT - RULESET V2 SUPERSEDES THE CURRENT EA TRADE SETTINGS.** See [DKCAPITAL_RULESET_V2.md](DKCAPITAL_RULESET_V2.md). The existing `mt5/DKcapitalDemo.mq5` is a single-position 0.05-lot EA and **does not** implement the user's agreed three-leg sizing, Friday 0.01 x 3 allocation, fixed GBP75 group cap, or full provider-directed (and only provider-directed) weekend-exit handling. Leave `EnableNewEntries=false` on all MT5 terminals until a revised EA is built, compiled, and validated on a broker demo account. This document otherwise describes the older test EA, not the V2 trading rules.
 
 # DKcapital MT5 two-account DEMO setup
 
@@ -48,3 +48,7 @@ The Telegram listener was previously restarting because TELEGRAM_SESSION_STRING 
 ## Emergency controls
 
 To pause new entries but retain management, turn off EnableNewEntries on both EAs while leaving the terminals running. Stopping the EA or disabling platform Algo Trading may stop software-managed partial exits and breakeven modifications, even though broker-side protective SL orders remain in place.
+
+## Friday and weekend rule (V2, not in this EA)
+
+The user has **withdrawn scheduled Friday liquidation**. There is no automatic clock-based Friday close-out, and no weekly close-only lock. Friday new entries are limited to **three 0.01-lot positions** on a sufficiently funded GBP 1,000 demo account, subject to the **GBP 75 combined planned stop loss ceiling**. EA-owned gold positions remain open across the weekend unless their broker-native protective TP/SL is triggered or an applicable **explicit close instruction** is parsed from the originating Telegram provider. Telegram commentary, provider-reported TP/SL events, feed outages and the approaching broker weekly market closure do not justify forcibly closing positions. A provider close instruction must be reconciled against actual broker fills; if received during market closure, persist the applicable intent and attempt execution on reopening with an alert. Refer to the V2 ruleset for scope and attribution.

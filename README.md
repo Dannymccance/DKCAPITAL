@@ -1,6 +1,6 @@
 # DK Capital
 
-**MT5 demo trading - proposed Ruleset V2:** [docs/DKCAPITAL_RULESET_V2.md](docs/DKCAPITAL_RULESET_V2.md). Includes three separately managed XAUUSD TP positions, normal GBP100-based lot sizing, Friday 0.01 x 3 positions, GBP75 combined planned loss ceiling and a broker-session-aware mandatory Friday close. **The current MT5 EA does not yet implement these agreed rules; new entries must remain disabled until its replacement is tested.**
+**MT5 demo trading - proposed Ruleset V2:** [docs/DKCAPITAL_RULESET_V2.md](docs/DKCAPITAL_RULESET_V2.md). Includes three separately managed XAUUSD TP positions, normal GBP100-based lot sizing, Friday 0.01 x 3 positions, GBP75 combined planned loss ceiling and provider-directed weekend closing only (no timed Friday liquidation). **The current MT5 EA does not yet implement these agreed rules; new entries must remain disabled until its replacement is tested.**
 
 VPS-ready Python services for DK Capital.
 
