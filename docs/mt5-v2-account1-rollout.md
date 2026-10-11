@@ -49,3 +49,16 @@ The Discord container and MT5 gateway container must be rebuilt after deploying 
 **Not operational** if any of the following are true: MQL5 has compile warnings/errors, MT5 feed/telemetry not healthy, V2 configuration unapproved, no native SL on all positions, three-leg fill not confirmed, wrong broker or currency, erroneous daily/weekly performance, missed provider exits unrecovered, or the Discord alert pipeline cannot report faults.
 
 Keep `EnableNewEntries=false` until the above checks are completed and documented.
+
+## Sunday 11 Oct 2026 -> Monday 12 Oct readiness (Account 1 only)
+
+The original V2 `.ex5` attached to Account 1 may still be the **2.00** binary with an unsafe substitute/house SL. Source was corrected in GitHub to enforce **provider-only initial SL** and is now version **2.01**. **Updating a source file alone does not change the EA already running inside MT5.** Do not allow new orders from 2.00. On the next VPS session:
+
+1. In Account 1's XAUUSD chart, open EA Properties (F7), set **EnableNewEntries=false**. It may remain armed otherwise despite a newer GitHub source file.
+2. From `/opt/dkcapital`, run `bash scripts/prepare_monday_account1.sh`. This stages current source to Account 1 and builds/restarts **only** telegram-listener, signal-processor, Discord bot, and the independent watchdog. The script never arms trading, affects Account 2, or restarts MT5.
+3. In Account 1's MetaEditor, **close and reopen** `C:\\Program Files\\MetaTrader 5\\MQL5\\Experts\\DKcapitalV2.mq5`, compile with F7 and verify 0 errors, 0 warnings and EA **version 2.01**. Reload the compiled EA on the XAUUSD chart, preserving the same FeedToken, login, native stop-risk settings and WebRequest URL.
+4. Confirm the Discord dashboard still reports the correct £1,000 GBP DEMO login, live telemetry `feed_http=200`, and that `telegram-recovery-status.json` says `healthy=true`. Recoveries retain original message dates and the EA only admits new entries age <=180 seconds; after a long listener outage, stale entries correctly remain blocked.
+5. Once version 2.01 is actually attached, new entries may be armed for controlled first-trade demo validation. Discord's watchdog will warn if the EA is disarmed, if MT5/gateway reporting becomes stale, if Telegram recovery stalls, or if Discord itself stops producing its heartbeat. The independent watchdog cannot guarantee delivery if Discord itself is unavailable.
+6. First broker fill remains a required acceptance milestone: observe 3 separate native-protected positions, lot allocation, exact provider SL and all applicable TPs, group/portfolio stop-loss estimates, and TP1 broker-fill -> two BE updates. **No one has yet verified this on the demo broker.**
+
+The Telegram recovery scan is intentionally bounded (historical entries cannot bypass the 180-second rule). It does not recover deletions that took place entirely during a disconnect, and extreme message volumes may exceed the catch-up window; incomplete scans generate alerts. These controls substantially reduce missing-post risk but cannot guarantee every provider action is observed under prolonged outages.
