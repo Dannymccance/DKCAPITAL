@@ -20,6 +20,15 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertNotIn("fallbackBuffer", entry)
         self.assertNotIn("HouseMinStopDistanceUSD", code)
 
+    def test_failed_broker_risk_valuation_blocks_entry(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
+        self.assertIn("if(r1<0 || r2<0 || r3<0)", entry)
+        self.assertIn("double planned=r1+r2+r3;", entry)
+        self.assertNotIn(
+            "double planned=RiskGBP(buy,a,fill,sl)+RiskGBP", entry
+        )
+
     def test_risk_caps_resize_lots_not_stop(self):
         code = SOURCE.read_text(encoding="utf-8")
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
