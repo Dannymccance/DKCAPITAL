@@ -393,7 +393,8 @@ void TryEntry(const string id,const string status,const string direction,
 }
 bool ActionKeySeen(const string id,const long mid,const string kind)
 {
-   return GlobalVariableCheck(IDKey(id,kind+"_"+IntegerToString(mid)));
+   string k=IDKey(id,kind+"_"+IntegerToString(mid));
+   return GlobalVariableCheck(k) && GlobalVariableGet(k)==1;
 }
 void HandleAction(const string id,const long mid,const string kind,const double pct)
 {
@@ -409,42 +410,53 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       return;
    }
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
-   // A provider partial is scoped to the current group's total remaining lots.
-   // Mark as reserved before sending broker instructions to avoid double closure
-   // after a disconnect. Any residual partial requires operator review.
-   GlobalVariableSet(key,2);GlobalVariablesFlush();
+   // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
    for(int leg=1;leg<=3;leg++)
    {
-      ulong ticket=TicketForLeg(id,leg);
-      if(ticket>0 && PositionSelectByTicket(ticket))
+      ulong t=TicketForLeg(id,leg);
+      if(t>0 && PositionSelectByTicket(t))
          total+=PositionGetDouble(POSITION_VOLUME);
    }
-   double remaining=FloorLots(total*pct/100);
-   if(remaining<LotMin()-1e-8)
+   string targetKey=key+"_TARGET";
+   if(!GlobalVariableCheck(targetKey))
    {
-      Print("DK2 WARNING partial less than broker min id=",id);
-      return;
+      double closeLots=FloorLots(total*pct/100);
+      if(closeLots<LotMin()-1e-8 && total>0) return;
+      GlobalVariableSet(targetKey,MathMax(0,total-closeLots));
+      GlobalVariableSet(key,2);
+      GlobalVariablesFlush();
    }
-   bool success=true;
-   for(int leg=3;leg>=1 && remaining>=LotMin()-1e-8;leg--)
+   double target=GlobalVariableGet(targetKey);
+   double needed=FloorLots(total-target);
+   for(int leg=3;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
-      ulong ticket=TicketForLeg(id,leg);
-      if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
-      double vol=PositionGetDouble(POSITION_VOLUME);
-      double close=FloorLots(MathMin(remaining,vol));
-      if(close<LotMin()-1e-8) continue;
-      if(vol-close>1e-8 && vol-close<LotMin()-1e-8) continue;
+      ulong t=TicketForLeg(id,leg);
+      if(t==0 || !PositionSelectByTicket(t)) continue;
+      double lots=PositionGetDouble(POSITION_VOLUME);
+      double part=FloorLots(MathMin(needed,lots));
+      if(part<LotMin()-1e-8) continue;
+      if(lots-part>1e-8 && lots-part<LotMin()-1e-8) continue;
       trade.SetExpertMagicNumber(LegMagic(id,leg));
-      bool sent=close>=vol-1e-8 ? trade.PositionClose(ticket) :
-                trade.PositionClosePartial(ticket,close);
-      if(!sent || !BrokerDone()) {success=false;break;}
-      remaining=FloorLots(remaining-close);
+      bool done=part>=lots-1e-8 ? trade.PositionClose(t) :
+                trade.PositionClosePartial(t,part);
+      if(!done || !BrokerDone()) break;
+      needed=FloorLots(needed-part);
    }
-   if(remaining>=LotMin()-1e-8) success=false;
-   if(success) GlobalVariableSet(key,1);
-   else Print("DK2 CRITICAL provider partial incomplete, manual reconciliation id=",id,
-              " msg=",mid," remaining lots=",remaining);
+   double current=0;
+   for(int leg=1;leg<=3;leg++)
+   {
+      ulong t=TicketForLeg(id,leg);
+      if(t>0 && PositionSelectByTicket(t))
+         current+=PositionGetDouble(POSITION_VOLUME);
+   }
+   if(current<=target+LotStep()/2)
+   {
+      GlobalVariableSet(key,1);
+      GlobalVariablesFlush();
+   }
+   else Print("DK2 provider partial remains pending id=",id,
+              " msg=",mid," target lots=",target," open lots=",current);
 }
 string N(double d,int digits=8) {return DoubleToString(d,digits);}
 string L(long n) {return IntegerToString(n);}
