@@ -179,7 +179,6 @@ void MaybeOpen(const string id,const string direction,const double low,const dou
    if(!SymbolSelect(GoldSymbol,true)) return;
 
    ulong magic=SignalMagic(id);
-   if(AlreadyTraded(magic)) return;
    MqlTick tick;
    if(!SymbolInfoTick(GoldSymbol,tick) || tick.ask<=0 || tick.bid<=0) return;
    if(tick.ask-tick.bid>MaximumGoldSpread) return;
@@ -187,12 +186,13 @@ void MaybeOpen(const string id,const string direction,const double low,const dou
    double fill=buy?tick.ask:tick.bid;
    double zoneLow=MathMin(low,high),zoneHigh=MathMax(low,high);
    if(fill<zoneLow-EntryTolerance || fill>zoneHigh+EntryTolerance) return;
+   if(AlreadyTraded(magic)) return;
 
    double buffer=MathMax(6.0,MathAbs(high-low)*2.0);
    double fallback=buy ? MathMin(zoneLow-buffer,fill-buffer) : MathMax(zoneHigh+buffer,fill+buffer);
    double stop=providerStop;
-   if(buy && (stop>=zoneLow || stop>=fill)) stop=fallback;
-   if(!buy && (stop<=zoneHigh || stop<=fill)) stop=fallback;
+   if(stop<=0 || (buy && (stop>=zoneLow || stop>=fill)) ||
+      (!buy && (stop<=zoneHigh || stop<=fill))) stop=fallback;
    if(stop<=0) return;
 
    double point=SymbolInfoDouble(GoldSymbol,SYMBOL_POINT);
@@ -372,7 +372,8 @@ int OnInit()
       Print("DKcapital will only run on the explicitly approved DEMO hedging account.");
       return INIT_FAILED;
    }
-   if(StringLen(FeedToken)<24 || TargetLots<=0 || MaxLossPerTradeFraction<=0 ||
+   if(StringFind(FeedUrl,"http://127.0.0.1:8765/")!=0 ||
+      StringLen(FeedToken)<24 || TargetLots<=0 || MaxLossPerTradeFraction<=0 ||
       MaxLossPerTradeFraction>0.20 || DailyEquityDrawdownFraction<=0 ||
       DailyEquityDrawdownFraction>0.30 || PollSeconds<1)
    {
