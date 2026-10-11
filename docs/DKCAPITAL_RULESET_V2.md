@@ -79,7 +79,7 @@ These are implementation recommendations to discuss next. They do not override t
 - Daily equity drawdown threshold: previously **proposed at 10%**, not yet explicitly confirmed in this ruleset.
 - Aggregate XAUUSD **planned stop-loss exposure of GBP 150 for the GBP 1,000 demo account** is agreed; formula for scaling this cap at other balances has not been decided.
 - Maximum simultaneous signal groups, provider priority, the permitted size/count of layers and re-entries: **proposals in section 4A, not yet agreed**.
-- Provider missing-SL temporary stop and TP-missing handling: needs acceptance tests and rules sign-off.
+- **Provider-only initial SL (confirmed 11 Oct 2026):** Use the exact stop supplied by GWS VIP or Elite Portfolios. If no structurally valid, broker-acceptable provider SL has been received, **do not open the trade**. No house-calculated, temporary or substituted initial stop is permitted. A subsequently corrected provider SL may allow the still-fresh signal to proceed; never chase expired entries. Risk caps reduce lots or reject the entry, not alter the provider stop. Continue to tighten existing positions on later valid provider edits and move remaining legs to their own actual fill prices on broker-confirmed TP1, as already agreed. TP-missing handling remains blank until a valid provider target arrives.
 - Exceptional market conditions (news, spreads, slippage, Friday short sessions): needs acceptance tests and rules sign-off.
 
 ## 6. Acceptance tests before demo order activation

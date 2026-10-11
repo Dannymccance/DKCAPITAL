@@ -18,7 +18,6 @@ input double RiskPaddingGBPPerLeg = 1.0;
 input double StopSlippageUSD = 0.25;
 input double EntryToleranceUSD = 1.0;
 input double MaxSpreadUSD = 1.5;
-input double HouseMinStopDistanceUSD = 6.0;
 input int MaximumSignalAgeSeconds = 180;
 input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
@@ -333,12 +332,17 @@ void TryEntry(const string id,const string status,const string direction,
    double fill=buy?q.ask:q.bid;
    double zLow=MathMin(low,high),zHigh=MathMax(low,high);
    if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD) return;
-   double fallbackBuffer=MathMax(HouseMinStopDistanceUSD,MathAbs(zHigh-zLow)*2);
-   double sl=providerSL;
-   if(!StopValid(buy,sl,q) || (buy?sl>=zLow:sl<=zHigh))
-      sl=buy?MathMin(zLow-fallbackBuffer,fill-fallbackBuffer):
-             MathMax(zHigh+fallbackBuffer,fill+fallbackBuffer);
-   sl=NormalizePrice(sl);
+   // Provider's SL is the ONLY permitted entry stop.
+   // Risk limits adjust lots, never the protective stop price.
+   // Missing/wrong-side/broker-invalid SL means skip until corrected.
+   if(providerSL<=0 || !StopValid(buy,providerSL,q) ||
+      (buy ? providerSL>=zLow : providerSL<=zHigh))
+   {
+      Print("DK2 ENTRY SKIP: missing/invalid provider SL id=",id,
+            " providerSL=",providerSL);
+      return;
+   }
+   double sl=NormalizePrice(providerSL);
    if(!StopValid(buy,sl,q)) return;
    double portfolio=0,groupRisk=0;
    int groups=0;
