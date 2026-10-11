@@ -481,7 +481,10 @@ void SendTelemetry()
    json+="\"equity\":"+N(AccountInfoDouble(ACCOUNT_EQUITY),2)+",";
    json+="\"margin\":"+N(AccountInfoDouble(ACCOUNT_MARGIN),2)+",";
    json+="\"free_margin\":"+N(AccountInfoDouble(ACCOUNT_MARGIN_FREE),2)+",";
-   json+="\"bid\":"+N(q.bid,5)+",\"ask\":"+N(q.ask,5)+",\"positions\":[";
+   json+="\"bid\":"+N(q.bid,5)+",\"ask\":"+N(q.ask,5);
+   json+=",\"feed_http\":"+IntegerToString(last_feed_http);
+   json+=",\"entry_enabled\":"+(EnableNewEntries?"true":"false");
+   json+=",\"positions\":[";
    bool first=true;
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
