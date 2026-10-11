@@ -38,7 +38,7 @@ class BrokerSignalCardsTest(unittest.TestCase):
         self.assertIsNone(state["legs"][2]["entry"])
         embed = mt5_signal_embed({"direction": "BUY", "tps": {"1": 4175}, "tp_hits": [1]}, state)
         self.assertIn("4168.25", embed.fields[2].value)
-        self.assertIn("not necessarily TP", embed.footer.text)
+        self.assertIn("CLOSED does not imply TP", embed.footer.text)
 
     def test_stale_telemetry_cannot_confirm_fill(self):
         self.snapshot["received_at"] = "2026-01-01T00:00:00Z"
