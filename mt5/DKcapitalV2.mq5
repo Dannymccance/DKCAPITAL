@@ -259,12 +259,24 @@ bool TP1BrokerConfirmed(const string id)
    ulong magic=LegMagic(id,1);
    if(TicketForLeg(id,1)>0) return false;
    if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return false;
+   ulong openedId=0;
    for(int i=HistoryDealsTotal()-1;i>=0;i--)
    {
-      ulong deal=HistoryDealGetTicket(i);
-      if((ulong)HistoryDealGetInteger(deal,DEAL_MAGIC)!=magic) continue;
-      if(HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_OUT &&
-         HistoryDealGetInteger(deal,DEAL_REASON)==DEAL_REASON_TP)
+      ulong d=HistoryDealGetTicket(i);
+      if((ulong)HistoryDealGetInteger(d,DEAL_MAGIC)==magic &&
+         HistoryDealGetInteger(d,DEAL_ENTRY)==DEAL_ENTRY_IN)
+      {
+         openedId=(ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID);
+         break;
+      }
+   }
+   if(openedId==0) return false;
+   for(int i=HistoryDealsTotal()-1;i>=0;i--)
+   {
+      ulong d=HistoryDealGetTicket(i);
+      if((ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID)!=openedId) continue;
+      if(HistoryDealGetInteger(d,DEAL_ENTRY)==DEAL_ENTRY_OUT &&
+         HistoryDealGetInteger(d,DEAL_REASON)==DEAL_REASON_TP)
          return true;
    }
    return false;
