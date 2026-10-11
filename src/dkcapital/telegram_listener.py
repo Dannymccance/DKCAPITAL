@@ -14,6 +14,9 @@ from dkcapital.config import ChatRef, Settings
 from dkcapital.event_store import JsonlEventStore
 from dkcapital.logging_setup import configure_logging
 from dkcapital.market_data import GoldSpotClient
+from dkcapital.telegram_recovery import (
+    decide_event, load_known, signature, within_lookback, write_status,
+)
 
 logger = logging.getLogger("dkcapital.telegram")
 
@@ -130,15 +133,41 @@ async def run() -> None:
     )
 
     chat_ids = await _resolve_chat_ids(client, settings.telegram_source_chats)
+    known = load_known(settings.telegram_event_log_path)
+    store_lock = asyncio.Lock()
+    recovery_status_path = settings.telegram_event_log_path.parent / "telegram-recovery-status.json"
+    lookback_days = 7
 
-    async def record(payload: dict[str, Any]) -> None:
-        text = str(payload.get("text") or "")
-        if _is_gold_message(text):
-            quote = await gold_spot.quote()
-            if quote is not None:
+    async def record(payload: dict[str, Any]) -> bool:
+        """Record instructions immediately, avoiding slow external quote requests."""
+        async with store_lock:
+            kind = payload.get("event_type")
+            if kind == "message_deleted":
+                for message_id in payload.get("message_ids") or []:
+                    known.pop((int(payload["chat_id"]), int(message_id)), None)
+                store.append(payload)
+                return True
+            if kind not in ("new_message", "message_edited", "historical_message"):
+                return False
+            observed = decide_event(payload, known)
+            if observed is None:
+                return False
+            if kind == "historical_message":
+                payload["event_type"] = observed
+            elif observed == "message_edited":
+                payload["event_type"] = "message_edited"
+            else:
+                payload["event_type"] = "new_message"
+            quote = gold_spot.cached_quote()
+            if quote is not None and _is_gold_message(str(payload.get("text") or "")):
                 payload["market"] = quote
-        store.append(payload)
-        logger.info("telegram_event %s", json.dumps(payload, ensure_ascii=False))
+            store.append(payload)
+            key = (int(payload["chat_id"]), int(payload["message_id"]))
+            known[key] = signature(payload)
+            # Never log the raw Telegram signal text in INFO logs.
+            logger.info("telegram_event chat=%s id=%s kind=%s",
+                        key[0], key[1], payload["event_type"])
+            return True
 
     async def on_new_message(event: events.NewMessage.Event) -> None:
         await record(_message_payload("new_message", event.message))
@@ -158,16 +187,89 @@ async def run() -> None:
     client.add_event_handler(on_new_message, events.NewMessage(chats=chat_ids))
     client.add_event_handler(on_message_edited, events.MessageEdited(chats=chat_ids))
     client.add_event_handler(on_message_deleted, events.MessageDeleted(chats=chat_ids))
+    logger.info("Telegram listener handlers ready sources=%s log=%s",
+                chat_ids, settings.telegram_event_log_path)
 
-    logger.info(
-        "Telegram listener ready sources=%s event_log=%s",
-        chat_ids,
-        settings.telegram_event_log_path,
-    )
+    async def refresh_gold_quote() -> None:
+        while True:
+            try:
+                await gold_spot.quote()
+            except Exception:
+                logger.exception("Gold quote background refresh failed")
+            await asyncio.sleep(15)
 
+    async def reconcile_recent(limit: int) -> dict[str, Any]:
+        """Catch missed new messages and edits, preserving original Telegram dates.
+
+        This is bounded to protect Telegram API quotas. Saturation is recorded
+        as degraded readiness rather than silently claiming complete recovery.
+        """
+        now = datetime.now(UTC)
+        dialogs = await client.get_dialogs()
+        entities = {utils.get_peer_id(item.entity): item.entity for item in dialogs}
+        recovered = 0
+        amended = 0
+        scans: dict[str, Any] = {}
+        for chat_id in chat_ids:
+            entity = entities.get(chat_id)
+            if entity is None:
+                raise RuntimeError(f"configured source not visible: {chat_id}")
+            messages = []
+            async for item in client.iter_messages(entity, limit=limit):
+                created = _iso(getattr(item, "date", None))
+                if not within_lookback(created, now=now, days=lookback_days):
+                    break
+                messages.append(item)
+            for item in reversed(messages):
+                payload = _message_payload("historical_message", item)
+                old = decide_event(payload, known)
+                if old is not None and await record(payload):
+                    recovered += old == "historical_message"
+                    amended += old == "message_edited"
+            # Reaching the scan limit means there could be older edited/missed
+            # messages outside the bounded recovery window.
+            at_limit = len(messages) >= limit
+            scans[str(chat_id)] = {
+                "recent_checked": len(messages),
+                "scan_limited": at_limit,
+            }
+        return {
+            "healthy": not any(x["scan_limited"] for x in scans.values()),
+            "checked_at": datetime.now(UTC).isoformat(),
+            "recovered": recovered,
+            "amended": amended,
+            "sources": scans,
+        }
+
+    async def recovery_loop() -> None:
+        first = True
+        while True:
+            try:
+                result = await reconcile_recent(300 if first else 120)
+                write_status(recovery_status_path, result)
+                logger.info("Telegram recovery health=%s recovered=%s amended=%s sources=%s",
+                            result["healthy"], result["recovered"],
+                            result["amended"], result["sources"])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Telegram recovery scan failed")
+                write_status(recovery_status_path, {
+                    "healthy": False,
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "error": type(exc).__name__,
+                })
+            first = False
+            await asyncio.sleep(60)
+
+    gold_task = asyncio.create_task(refresh_gold_quote())
+    recovery_task = asyncio.create_task(recovery_loop())
     try:
         await client.run_until_disconnected()
     finally:
+        for task in (gold_task, recovery_task):
+            task.cancel()
+        await asyncio.gather(gold_task, recovery_task, return_exceptions=True)
         await client.disconnect()
 
 
