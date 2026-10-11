@@ -23,8 +23,8 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
                         *, now: datetime | None = None) -> dict[str, Any]:
     """Return unverified unless recent, account-validated telemetry exists.
 
-    A green check means the broker confirmed a closure, not necessarily
-    a TP fill; deal reasons are not yet present in the telemetry protocol.
+    A green check on the Discord card means a confirmed entry fill.
+    A confirmed closure is labeled separately, without assuming TP reason.
     """
     empty = {"status": "MT5 telemetry unavailable", "legs": {},
              "has_broker_record": False, "fresh": False}
@@ -126,7 +126,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
             rows.append(f"⬜ TP{leg} leg — **Not filled on MT5**")
             continue
         status = item["status"]
-        mark = "✅" if status.startswith("CLOSED") else ("🟢" if status == "OPEN" else "⚠️")
+        mark = "✅"  # Confirmed broker entry fill; closing reason shown separately.
         line = f"{mark} **TP{leg} leg** — {item['lots']:.2f} lots, fill **{item['entry']:.2f}**"
         line += f"\n{status}"
         if item.get("exit_price") is not None:
@@ -144,5 +144,5 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
             value="\n".join(f"TP{k}: {v}" for k, v in sorted(targets.items(), key=lambda x: int(x[0])))[:1024],
             inline=False,
         )
-    embed.set_footer(text="DEMO | ✅ = MT5 CLOSED, not necessarily TP | No Telegram/paper P&L")
+    embed.set_footer(text="DEMO | ✅ = MT5 ENTRY FILLED | CLOSED does not imply TP | No paper/provider P&L")
     return embed
