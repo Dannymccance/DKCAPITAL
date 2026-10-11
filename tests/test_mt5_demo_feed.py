@@ -45,6 +45,14 @@ class DemoFeedTests(unittest.TestCase):
             self.request(None)
         self.assertEqual(exc.exception.code, 401)
 
+    def test_http11_framing_and_explicit_close(self):
+        with self.request(self.token) as response:
+            self.assertEqual(response.version, 11)
+            self.assertEqual(response.headers.get("Connection"), "close")
+            body = response.read()
+            self.assertEqual(int(response.headers["Content-Length"]), len(body))
+            self.assertTrue(body.startswith(b"DKDEMO1"))
+
     def test_feed_contains_expected_13_fields(self):
         self.path.write_text(json.dumps({
             "signals": [{
