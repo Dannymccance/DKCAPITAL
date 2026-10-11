@@ -243,10 +243,13 @@ async def run() -> None:
         }
 
     async def recovery_loop() -> None:
-        first = True
+        scan_number = 0
         while True:
             try:
-                result = await reconcile_recent(800 if first else 120)
+                # A deeper periodic scan catches old-message SL edits that
+                # would not appear in the most recent 120 provider posts.
+                deep_scan = (scan_number % 30 == 0)
+                result = await reconcile_recent(800 if deep_scan else 120)
                 write_status(recovery_status_path, result)
                 logger.info("Telegram recovery health=%s recovered=%s amended=%s sources=%s",
                             result["healthy"], result["recovered"],
@@ -260,7 +263,7 @@ async def run() -> None:
                     "checked_at": datetime.now(UTC).isoformat(),
                     "error": type(exc).__name__,
                 })
-            first = False
+            scan_number += 1
             await asyncio.sleep(60)
 
     gold_task = asyncio.create_task(refresh_gold_quote())
