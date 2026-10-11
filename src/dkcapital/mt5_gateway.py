@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +38,7 @@ class GatewayConfig:
         self.host = os.getenv("MT5_GATEWAY_HOST", "0.0.0.0").strip() or "0.0.0.0"
         self.port = _env_int("MT5_GATEWAY_PORT", 8765)
         self.token = os.getenv("MT5_GATEWAY_TOKEN", "").strip()
+        self.demo_feed_enabled = os.getenv("MT5_DEMO_FEED_ENABLED", "false").strip().lower() in {"true", "1", "yes"}
         self.signal_state_path = _env_path(
             "SIGNAL_STATE_PATH",
             "/app/data/signal-state.json",
@@ -80,6 +82,74 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(supplied[len(prefix) :], self.config.token)
 
+    def _write_text(self, status: HTTPStatus, body: str) -> None:
+        encoded = body.encode("utf-8")
+        self.send_response(int(status))
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _demo_feed(self) -> None:
+        """Pipe-delimited UTF-8 protocol for local MQL5 demo-only EAs.
+
+        Fields: S|id|status|direction|entry_low|entry_high|sl|sl_mode|
+                tp1|tp2|tp3|opened_unix_seconds|remaining_fraction
+        The MQL5 agent performs *all* broker/account checks and trade risk
+        checks. This endpoint never submits an order.
+        """
+        if not self.config.demo_feed_enabled:
+            self._write_json(HTTPStatus.FORBIDDEN, {"error": "demo_feed_disabled"})
+            return
+        state = _json(self.config.signal_state_path)
+        result = ["DKDEMO1"]
+        signals = state.get("signals", [])
+        if not isinstance(signals, list):
+            signals = []
+        now = datetime.now(UTC).timestamp()
+        for item in signals:
+            if not isinstance(item, dict) or str(item.get("symbol", "")).upper() != "XAUUSD":
+                continue
+            ident = str(item.get("signal_id", ""))
+            if not re.fullmatch(r"[-0-9:]{1,64}", ident):
+                continue
+            try:
+                opened = datetime.fromisoformat(str(item["opened_at"]).replace("Z", "+00:00"))
+                if opened.tzinfo is None:
+                    opened = opened.replace(tzinfo=UTC)
+                opened_epoch = int(opened.timestamp())
+                if abs(now - opened_epoch) > 172800:
+                    continue
+                status = str(item.get("status", "")).upper()
+                direction = str(item.get("direction", "")).upper()
+                if direction not in ("BUY", "SELL"):
+                    continue
+                if status not in ("ACTIVE", "COMPLETED", "CLOSED", "STOPPED", "BREAKEVEN", "CANCELLED", "FAILED"):
+                    continue
+                low = float(item["entry_low"])
+                high = float(item["entry_high"])
+                sl = float(item["current_sl"]) if item.get("current_sl") is not None else 0.0
+                sl_mode = str(item.get("sl_mode", "PRICE")).upper()
+                tps = item.get("tps") or {}
+                if not isinstance(tps, dict):
+                    tps = {}
+                tp = [float(tps.get(str(i), 0) or 0) for i in (1, 2, 3)]
+                remaining = float(item.get("remaining_fraction", 1))
+                vals = [low, high, sl, *tp, remaining]
+                if not all(__import__("math").isfinite(v) for v in vals):
+                    continue
+            except (ValueError, TypeError, KeyError, OverflowError):
+                continue
+            fields = [
+                "S", ident, status, direction, str(low), str(high),
+                str(sl), sl_mode, *(str(x) for x in tp),
+                str(opened_epoch), str(remaining),
+            ]
+            result.append("|".join(fields))
+        self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         if self.path == "/health":
             self._write_json(
@@ -90,6 +160,13 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     "time": datetime.now(UTC).isoformat(),
                 },
             )
+            return
+
+        if self.path == "/v1/demo/feed":
+            if not self._authorized():
+                self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                return
+            self._demo_feed()
             return
 
         if self.path != "/v1/snapshot":
