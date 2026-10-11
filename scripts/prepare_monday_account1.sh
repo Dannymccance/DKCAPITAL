@@ -19,9 +19,12 @@ echo "Account 1 EA source installed."
 echo "Important: MetaEditor F7 and reattach EA to chart are STILL REQUIRED."
 
 echo "=== RESTART ONLY TELEGRAM INGESTION + DISCORD REPORTER ==="
-docker compose --profile discord up -d --no-deps --build telegram-listener discord-bot
+docker compose --profile discord up -d --no-deps --build telegram-listener signal-processor discord-bot
+
+echo "=== START INDEPENDENT WATCHDOG ==="
+docker compose --profile mt5-shadow up -d --no-deps --build dkcapital-watchdog
 echo "=== VERIFY OTHER CRITICAL COMPONENTS ==="
-docker compose --profile mt5-shadow ps telegram-listener signal-processor discord-bot mt5-gateway
+docker compose --profile mt5-shadow ps telegram-listener signal-processor discord-bot mt5-gateway dkcapital-watchdog
 systemctl is-active dkcapital-mt5-1.service
 echo "=== GATEWAY HEALTH ==="
 curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8765/health || true
