@@ -228,7 +228,8 @@ async def run() -> None:
                     amended += old == "message_edited"
             # Reaching the scan limit means there could be older edited/missed
             # messages outside the bounded recovery window.
-            at_limit = len(messages) >= limit
+            at_limit = (len(messages) >= limit and
+                        (int(chat_id), int(messages[-1].id)) not in known)
             scans[str(chat_id)] = {
                 "recent_checked": len(messages),
                 "scan_limited": at_limit,
@@ -245,7 +246,7 @@ async def run() -> None:
         first = True
         while True:
             try:
-                result = await reconcile_recent(300 if first else 120)
+                result = await reconcile_recent(800 if first else 120)
                 write_status(recovery_status_path, result)
                 logger.info("Telegram recovery health=%s recovered=%s amended=%s sources=%s",
                             result["healthy"], result["recovered"],
