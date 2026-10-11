@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
+from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -879,7 +880,10 @@ def _signal_embed(
     paper_position: dict[str, Any] | None = None,
     pip_size: float = 0.01,
     timezone_name: str = "Europe/Isle_of_Man",
+    broker_state: dict[str, Any] | None = None,
 ) -> discord.Embed:
+    if broker_state is not None:
+        return mt5_signal_embed(signal, broker_state)
     direction = str(signal.get("direction") or "?")
     symbol = str(signal.get("symbol") or "?")
     provider = _provider_name(signal)
@@ -1345,6 +1349,7 @@ def build_bot(settings: Settings) -> commands.Bot:
             if active_gold
             else None
         )
+        broker_snapshot = _load_json(mt5_snapshot)
         registry = _load_json(settings.discord_internal_signals_state_path)
 
         if not registry.get("initialized"):
@@ -1404,6 +1409,9 @@ def build_bot(settings: Settings) -> commands.Bot:
                 signal_spot,
                 paper_position,
             )
+            broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
+            if broker_state is not None:
+                fingerprint += "|" + json.dumps(broker_state, sort_keys=True)
             if message_id and record.get("fingerprint") == fingerprint:
                 continue
 
@@ -1417,6 +1425,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                             paper_position=paper_position,
                             pip_size=settings.paper_xau_pip_size,
                             timezone_name=settings.display_timezone,
+                            broker_state=broker_state,
                         )
                     )
                 else:
@@ -1427,6 +1436,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                             paper_position=paper_position,
                             pip_size=settings.paper_xau_pip_size,
                             timezone_name=settings.display_timezone,
+                            broker_state=broker_state,
                         )
                     )
                 messages[signal_id] = {
@@ -1442,6 +1452,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                         paper_position=paper_position,
                         pip_size=settings.paper_xau_pip_size,
                         timezone_name=settings.display_timezone,
+                            broker_state=broker_state,
                     )
                 )
                 messages[signal_id] = {
@@ -1472,6 +1483,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                 paper_state,
                 signal_id,
             )
+            broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
             try:
                 message = await channel.send(
                     embed=_signal_embed(
@@ -1480,20 +1492,17 @@ def build_bot(settings: Settings) -> commands.Bot:
                         paper_position=paper_position,
                         pip_size=settings.paper_xau_pip_size,
                         timezone_name=settings.display_timezone,
+                            broker_state=broker_state,
                     )
                 )
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception("Failed publishing internal signal %s", signal_id)
                 break
 
-            messages[signal_id] = {
-                "message_id": message.id,
-                "fingerprint": _signal_fingerprint(
-                    signal,
-                    signal_spot,
-                    paper_position,
-                ),
-            }
+            fingerprint = _signal_fingerprint(signal, signal_spot, paper_position)
+            if broker_state is not None:
+                fingerprint += "|" + json.dumps(broker_state, sort_keys=True)
+            messages[signal_id] = {"message_id": message.id, "fingerprint": fingerprint}
             watermark = opened_at
             registry["watermark"] = watermark
             changed = True
