@@ -10,30 +10,22 @@ Status: agreed trading specification for the next MT5 EA implementation. **NOT Y
 - Normal total signal lots: **0.01 lots per complete GBP 100 of account balance**, floored to broker lot increment and respecting three-leg minimums. For GBP 1,000, target 0.10 lots in total, e.g., 0.03 / 0.03 / 0.04 lots assigned to TP1 / TP2 / TP3.
 - **Friday**: target **0.01 lots per leg, three legs, total 0.03 lots per signal**, provided normal balance allocation, stop-risk and broker constraints allow this volume. Never use Friday as a reason to increase the normal permitted total lot size.
 - **GBP 75 maximum estimated planned loss per signal, shared by all three legs**, NOT GBP 75 per leg. Reduce total lots, preserving three minimum-volume positions, where necessary. If all three broker-minimum positions would exceed GBP 75 combined planned loss or cannot be afforded, do not enter. Risk must use each leg's proposed **broker fill price to broker SL**, contract size, FX conversion into GBP, commission estimate and a slippage cushion; recheck and reconcile after execution. Market gaps and execution costs can still exceed this intended cap.
-- On Friday **close all remaining EA-managed XAUUSD positions before the broker's weekly trading session closes**. Applies to signals opened any day of the week, both BUY and SELL, all three legs, all EA-owned re-entries or layers. **Never close unrelated/manual positions or positions owned by another EA.**
-- Once the Friday close-out begins, block all **new** entries and layering until the next weekly gold trading session. Cancel any unfilled EA-owned entry orders to prevent weekend execution. Do not reopen an old signal on Sunday/Monday; require a new, fresh signal.
-- Stop loss and position management continue normally before close-out. Close-out is a higher-priority risk action than TP monitoring or Telegram connectivity.
+- **No scheduled Friday/weekend forced liquidation.** Do not close EA-managed XAUUSD positions based solely on the clock, approaching weekly market closure, a Telegram outage, or a date change. Positions may remain open across the market weekend with broker-native protective SL/TP orders.
+- Close any EA-owned position or affected signal group only if (a) the broker executes that leg's native TP or SL, or (b) DKcapital has parsed an **explicit, applicable trade-close instruction from its originating Telegram provider** and attributed it to the correct provider, signal, side, and scope. Explicit partial-close instructions affect only their requested volume. A generic weekend warning, commentary, or provider announcement that a TP/SL was hit is **not** an instruction to forcibly liquidate the MT5 trade.
+- Provider-originated closes take priority over waiting for a TP. A close instruction must be persisted as an idempotent pending action until broker execution is confirmed; if the market is closed, alert, retain native protective orders, and execute the **still-applicable explicit close instruction** when the broker next permits trading. Never silently mark a position closed based only on a Telegram message. Cancel a pending close if a later unambiguous provider instruction supersedes it before execution, with an audit trail.
+- **Friday remains a trading day** while broker XAUUSD trading is open and normal entry/spread/risk safeguards pass. Friday trades use the separately agreed 0.01 x 3 size; the previous proposed Friday 2-hour entry cutoff, 1-hour flatten, 30-minute zero-position deadline and weekly lock are **withdrawn**.
 
-## 2. Friday weekly close procedure
+## 2. Friday and weekend position handling
 
-Implementation requires broker-session-aware scheduling: query MT5 `SymbolInfoSessionTrade(symbol, FRIDAY, index, from, to)`, account for multiple trade sessions and an end-time crossing midnight, and use current **broker server time** for comparisons. Do **not** hard-code an Isle of Man or UTC clock hour; symbol and broker session schedules may change for DST and holidays. Independently monitor exceptional early closes and broker close-only modes. If an authoritative weekly-close deadline cannot be resolved, disable Friday new orders, alert the operator and flatten while trading is still available.
+1. Use the Isle of Man local date for the Friday reduced-sizing rule; respect the broker's available trading sessions for order placement and execution. Broker weekly market-close time is informational, **not** an automatic close trigger.
+2. Continue managing provider SL/TP changes and broker fills normally on Fridays. All three separate MT5 legs maintain their broker-native protective SL orders; a valid TP order is attached to each leg when available.
+3. If the originating Telegram source explicitly instructs **close, exit, close all gold, close all longs/shorts, or a scoped partial close**, parse the actual meaning and match it only to its own intended DKcapital-managed positions. Distinguish an explicit action from commentary and a provider-reported TP/SL result.
+4. Confirm close or partial-close using **MT5 deal/position history**, with retries for transient trade errors and no duplicate close requests. An instruction to close must not accidentally open an opposite hedge.
+5. When broker trading is unavailable, retain the explicit pending close instruction (with source, message ID, timestamp, applicable signal IDs and scope), alert that the position is still open, and attempt the close once trading resumes while the instruction remains applicable. Keep protective SL/TP in place. Do **not** liquidate just because the weekend ended.
+6. If Telegram is disconnected, **never infer a provider exit**. Continue monitoring native broker TP/SL outcomes. Reconcile messages after reconnect, avoiding duplicate processing or stale new entries. Any explicitly received and still-applicable pending close instruction remains enforceable independently of a subsequent Telegram outage.
+7. Never close unrelated/manual XAUUSD positions or those managed by other EAs. For existing DKcapital positions, provider close routing must account for their exact originating provider and signal group; a provider-wide instruction is limited to that provider's trades.
 
-Suggested initial adjustable offsets (not yet confirmed by the user):
-- No new Friday entries within **120 minutes** before the broker's weekly XAUUSD close.
-- Begin Friday flattening **60 minutes** before that close and target **zero EA-managed XAUUSD positions by 30 minutes before close**.
-
-At flatten start:
-1. Obtain fresh broker position and pending-order inventories, not just the Telegram feed.
-2. Stop accepting new signals for the week. Cancel all unfilled EA-owned XAUUSD entry orders.
-3. Enumerate each account's EA-owned XAUUSD leg using recorded ownership tags/magic IDs plus durable broker-ticket reconciliation.
-4. Close remaining volumes using a market close and confirm actual broker deal history. Re-query broker positions to verify all three legs are zero.
-5. Retry failures at a rate-limited interval while trading remains open. Log order retcodes and alert immediately if positions remain after the target deadline.
-6. Persist a weekly lock across terminal restarts and reconnects. Never retry **opening** positions while locked. Repeat flattening when terminal reconnects before the close.
-7. If broker trading is already closed, do not claim successful flattening. Alert the operator and retain broker-native protective SLs; reconcile on reopening, without trading on stale signals.
-
-The independent Friday/weekend close timer **must not depend on the Telegram parser or HTTP signal feed being online**. The EA must manage Friday flattening even if the feed is stale, unreachable, or returns an error.
-
-**Friday size clock**: apply the smaller 0.03 total as soon as either the broker or Isle of Man local calendar enters Friday; use broker trading sessions for Friday closing deadlines.
+**Weekend risk:** Holding through a closed market can produce a gap beyond SL at reopening. The agreed GBP 75 combined stop-risk limit is a **planned loss cap, not a guaranteed maximum realised loss**.
 
 ## 3. Entry and lot allocation
 
@@ -55,6 +47,7 @@ For normal entries, only take fresh signals with valid instrument, direction and
 - Provider result messages are **not** evidence of actual TP/SL fills. Broker deal/position history is authoritative. Explicit provider close instructions are separate actions.
 - Layering or re-entry requests must have distinct unique IDs, separate caps and clear attribution; no automatic position duplication from edits, restarts or signal replay.
 - Broker-native TP/SL is preferred over software-only price polling. Handle transient disconnections, quote age, request retries, partial fills and terminal restarts.
+- A weekend does not generate an exit on its own. Only broker-native TP/SL execution or a correctly parsed explicit Telegram exit can close EA-managed gold positions.
 
 ## 5. Risk constraints requiring further discussion
 
@@ -70,9 +63,9 @@ For normal entries, only take fresh signals with valid instrument, direction and
 2. A GBP 1,000 Friday signal opens TP1=0.01, TP2=0.01, TP3=0.01 **only when** the three-leg GBP loss estimate is at most GBP 75.
 3. A wide-stop signal is reduced to a valid three-leg volume or skipped; **never** risks GBP 75 per leg.
 4. GBP 200 with 0.01 broker minimum: skip (cannot satisfy three separate legal positions).
-5. At Friday flatten deadline, positions from Tuesday and Friday, BUY and SELL, all three legs, are closed; manual XAUUSD positions are untouched.
-6. Telegram feed unavailable: weekly flatten still works; terminal restart does not clear weekly no-new-orders lock.
-7. Broker close failure or early holiday close: no false success; immediate alert and retry if trade session permits, otherwise retain stops and reconcile after reopen.
+5. Friday close approaching: positions from earlier weekdays and Friday **remain open** absent native TP/SL fills or explicit valid provider close instruction. EA/manual ownership remains correctly scoped.
+6. Telegram feed unavailable near weekend: no automatic Friday liquidation occurs, already broker-held TP/SL orders remain, and no inferred close is generated.
+7. A source-specific Telegram 'close all longs' instruction closes only that provider's matching EA-managed BUY positions after MT5 execution confirmation; if the broker is closed, persist pending exit and alert until executable. Generic commentary or a provider saying 'TP hit' does not force a broker close.
 8. TP1 must be confirmed in MT5 before remaining legs' BE stops change. SL and TP edits must route to the intended original signal and leg.
 9. Account switches away from DEMO or expected login: **no new orders**.
 10. Duplicate or delayed provider signals: no duplicate entry after crash/restart.
