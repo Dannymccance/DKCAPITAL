@@ -70,6 +70,8 @@ class Watchdog:
         self.data = Path(os.getenv("WATCHDOG_DATA_PATH", "/app/data"))
         self.channel_id = os.getenv("MT5_ALERT_CHANNEL_ID", "").strip()
         self.bot_token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+        self.telegram_alert_channel_id = os.getenv("DISCORD_TELEGRAM_ALERT_CHANNEL_ID", "1559168803294937178").strip()
+        self.telegram_alert_user_ids = tuple(x.strip() for x in os.getenv("TELEGRAM_ALERT_USER_IDS", "508740193369587722,629451964782084096").split(",") if x.strip().isdigit())
         self.gateway = os.getenv("MT5_WATCHDOG_GATEWAY_URL", "http://mt5-gateway:8765/health")
         self.state_path = self.data / "watchdog-alert-state.json"
         self.http = build_opener(ProxyHandler({}))
@@ -94,12 +96,16 @@ class Watchdog:
         except (HTTPError, URLError, ValueError, TimeoutError, OSError):
             return False
 
-    def _notify(self, content: str) -> bool:
-        url = f"https://discord.com/api/v10/channels/{self.channel_id}/messages"
+    def _notify(self, content: str, *, telegram: bool = False, ping: bool = False) -> bool:
+        destination = self.telegram_alert_channel_id if telegram else self.channel_id
+        url = f"https://discord.com/api/v10/channels/{destination}/messages"
+        if ping and telegram:
+            content = " ".join(f"<@{uid}>" for uid in self.telegram_alert_user_ids) + "\n" + content
+        allowed = {"parse": [], "users": list(self.telegram_alert_user_ids) if ping and telegram else []}
         try:
             status, _ = self._request(
                 url,
-                body=json.dumps({"content": content, "allowed_mentions": {"parse": []}}).encode(),
+                body=json.dumps({"content": content, "allowed_mentions": allowed}).encode(),
                 discord=True,
             )
             return status in (200, 201)
@@ -128,10 +134,11 @@ class Watchdog:
         # Persist only alerts that were actually delivered.
         delivered = set(prior)
         for issue in pending:
-            if self._notify(f"🚨 DKcapital independent watchdog: `{issue}` — inspect Account 1 services."):
+            telegram = issue.startswith("TELEGRAM_")
+            if self._notify(f"🚨 DKcapital independent watchdog: `{issue}` - inspect " + ("Telegram listener and recovery service." if telegram else "Account 1 services."), telegram=telegram, ping=telegram):
                 delivered.add(issue)
         for issue in recovered:
-            if self._notify(f"✅ DKcapital independent watchdog recovery: `{issue}` cleared."):
+            if self._notify(f"✅ DKcapital independent watchdog recovery: `{issue}` cleared.", telegram=issue.startswith("TELEGRAM_")):
                 delivered.discard(issue)
         self._write_state(delivered)
         return problems
