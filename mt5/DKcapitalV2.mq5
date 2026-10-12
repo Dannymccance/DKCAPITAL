@@ -255,9 +255,10 @@ bool CloseGroup(const string id)
    }
    return ok;
 }
-bool TP1BrokerConfirmed(const string id)
+bool TPLegBrokerConfirmed(const string id,int leg)
 {
-   ulong magic=LegMagic(id,1);
+   if(leg<1 || leg>3) return false;
+   ulong magic=LegMagic(id,leg);
    if(TicketForLeg(id,1)>0) return false;
    if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return false;
    ulong openedId=0;
@@ -355,7 +356,7 @@ void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3)
 {
    bool buy=direction=="BUY";
-   bool tp1Confirmed=TP1BrokerConfirmed(id);
+   bool tp1Confirmed=TPLegBrokerConfirmed(id,1);
    double providerOverride=0;
    if(GlobalVariableCheck(IDKey(id,"PROVIDER_SL_OVERRIDE")))
       providerOverride=GlobalVariableGet(IDKey(id,"PROVIDER_SL_OVERRIDE"));
@@ -378,7 +379,7 @@ void ManageLegs(const string id,const string direction,const double stop,
       else if(BetterStop(buy,stop,wantedSL) && StopValid(buy,stop,quote))
          wantedSL=NormalizePrice(stop);
       double rawTP=leg==1?tp1:(leg==2?tp2:tp3);
-       if(leg>=4) rawTP=tp1Confirmed?tp2:tp1;
+       if(leg>=4) rawTP=TPLegBrokerConfirmed(id,2)?tp3:(tp1Confirmed?tp2:tp1);
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -552,7 +553,8 @@ void TryLayer(const string id,long mid,const string status,const string directio
          TicketForLeg(id,leg)==0)
       {slot=leg;break;}
    if(slot==0) return;
-   double target=ValidTP(buy,TP1BrokerConfirmed(id)?t2:t1,q);
+   if(TPLegBrokerConfirmed(id,3)) return;
+   double target=ValidTP(buy,TPLegBrokerConfirmed(id,1)?t2:t1,q);
    if(target<=0) return;
    // Durable reservation before order placement prevents restart duplicates.
    GlobalVariableSet(IDKey(id,"LAYER_SLOT_"+IntegerToString(slot)),mid);
