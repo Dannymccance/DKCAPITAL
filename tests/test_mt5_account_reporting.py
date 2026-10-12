@@ -177,18 +177,57 @@ class GatewayTelemetryTests(unittest.TestCase):
             "status": "ACTIVE", "direction": "BUY",
             "entry_low": 4150, "entry_high": 4153,
             "current_sl": 4140, "sl_mode": "PRICE",
+            "source_style": "gws",
             "tps": {"1": 4160}, "layer_max": 4145,
             "opened_at": datetime.now(UTC).isoformat(),
             "history": [
                 {"kind": "opened", "message_id": 222},
                 {"kind": "trade_update", "message_id": 223, "layer_max": 4145},
-                {"kind": "add_layer", "message_id": 224},
+                {"kind": "add_layer", "message_id": 224,
+                 "timestamp": datetime.now(UTC).isoformat(), "layer_max": 4145},
             ],
         }]}))
         with self.call("/v2/demo/feed") as response:
             lines = response.read().decode().splitlines()
-        self.assertIn("L|-10011:222|224|10|3|4145", lines)
+        self.assertEqual(
+            len([line for line in lines if line.startswith("L|-10011:222|224|10|1|4145.0|")]), 1
+        )
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
+
+
+    def test_permission_alone_does_not_emit_layer_order(self):
+        self.path.write_text(json.dumps({"signals": [{
+            "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "source_style": "gws", "status": "ACTIVE", "direction": "BUY",
+            "entry_low": 4150, "entry_high": 4153,
+            "current_sl": 4140, "sl_mode": "PRICE",
+            "tps": {"1": 4160, "2": 4162.5}, "layer_max": 4145,
+            "opened_at": datetime.now(UTC).isoformat(),
+            "history": [{"kind": "trade_update", "message_id": 223, "layer_max": 4145}],
+        }]}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        self.assertFalse(any(line.startswith("L|") for line in lines))
+
+    def test_old_or_unattributed_add_never_emitted(self):
+        now = datetime.now(UTC)
+        for source_style, timestamp in [
+            ("elite", now.isoformat()), ("gws", None)
+        ]:
+            with self.subTest(style=source_style, timestamp=timestamp):
+                self.path.write_text(json.dumps({"signals": [{
+                    "symbol": "XAUUSD", "signal_id": "-10011:222",
+                    "source_style": source_style,
+                    "status": "ACTIVE", "direction": "BUY",
+                    "entry_low": 4150, "entry_high": 4153,
+                    "current_sl": 4140, "sl_mode": "PRICE",
+                    "opened_at": now.isoformat(),
+                    "history": [{"kind": "add_layer", "message_id": 224,
+                                 "timestamp": timestamp}],
+                }]}))
+                with self.call("/v2/demo/feed") as response:
+                    lines = response.read().decode().splitlines()
+                self.assertFalse(any(line.startswith("L|") for line in lines))
 
     def test_feed_exposes_only_explicit_provider_close(self):
         self.path.write_text(json.dumps({"signals":[{
