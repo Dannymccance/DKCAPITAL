@@ -776,6 +776,9 @@ void ProcessFeed(const string content)
          stops[n]=StringToDouble(f[6]);t1s[n]=StringToDouble(f[8]);
          t2s[n]=StringToDouble(f[9]);openedTimes[n]=(long)StringToInteger(f[11]);
       }
+      else if(fields==5 && f[0]=="W")
+         ApplyProviderStop(f[1],(long)StringToInteger(f[2]),
+                           StringToDouble(f[3]),(long)StringToInteger(f[4]));
       else if(fields==7 && f[0]=="L" && f[3]=="10" && f[4]=="3")
       {
          for(int j=0;j<ArraySize(ids);j++)
