@@ -2,13 +2,41 @@
 
 This code is a first implementation candidate, not a declaration of successful broker execution. Never enable trading on a live account. The old `DKcapitalDemo.mq5` is V1 and must not be attached alongside V2.
 
+> **PR #54 / V2.02 status:** New layering support is a code candidate, not a broker-approved EA. Keep `EnableNewEntries=false` and `EnableLayerEntries=false` until independent MetaEditor compilation and demo tests pass. A GitHub Actions Python test does not validate the MQL5 executable.
+
+
 ## What's implemented in this branch
 
 - `mt5/DKcapitalV2.mq5`: three independently tagged MT5 BUY/SELL hedging positions for XAUUSD. **Entry SL must be the exact valid provider-supplied price; missing/invalid provider SL skips the entry. The EA never substitutes a house SL.** Native broker SL and TP1/TP2/TP3 are used; invalid/missing TP remains blank until a valid target is supplied. Broker-confirmed TP1 execution drives breakeven modification on surviving legs.
 - Risk: normal total lots = `floor(GBP balance / 100) * 0.01`, volume-step-aware 30/30/40 allocation, Friday Isle-of-Man 0.01 × 3 maximum, £75 planned risk per root signal and £150 aggregate per Account 1, each including stop gap cushion/fees reserve. Both GBP DEMO hedging mode and exact demo login are hard gates. Unknown/manual XAUUSD positions block new entries without ever being closed by this EA.
-- Telegram: `GET /v2/demo/feed` transmits signal updates and **explicit provider close/partial** action rows. Provider commentary/TP-hit statuses cannot force broker closes. Historic signals are available for weekend-held position management but are age-gated from new entry. Provider partial close intents record a durable target remaining volume to avoid replaying a percentage on restart. Layer and re-entry execution is NOT enabled.
+- Telegram: `GET /v2/demo/feed` transmits signal updates and **explicit provider close/partial** action rows. Provider commentary/TP-hit statuses cannot force broker closes. Historic signals are available for weekend-held position management but are age-gated from new entry. Provider partial close intents record a durable target remaining volume to avoid replaying a percentage on restart. Layer execution is implemented only for explicit timestamped GWS add instructions, and is OFF by default behind a separate `EnableLayerEntries=false` switch. Re-entry execution remains unsupported.
 - Telemetry: EA periodically POSTs broker account, native positions and recent deal history to `/v2/demo/telemetry` using existing local bearer authentication. Gateway enforces a configured allowed demo account login and GBP currency, then atomically stores verified snapshots for Discord. `GET /v2/demo/account1` provides the authenticated read-only broker snapshot.
 - Discord: if optional channels are configured, edits a pinned Account 1 MT5 demo dashboard approximately every minute; uses actual balance, equity, floating P&L, broker execution history, volume-weighted weekly pip performance and native-stop risk. Alerts once per newly detected stale telemetry, missing-stop/unknown risk or excessive planned risk; acknowledges recovery. Existing Telegram and separate paper dashboards stay intact.
+
+
+## Version 2.02: controlled GWS layering, demo-only
+
+- **Opt-in switches:** Both `EnableNewEntries=true` and `EnableLayerEntries=true` must be set before an add can execute. The second switch defaults to false, so replacing the EA does not automatically arm layering.
+- **Source and command:** An explicit GWS `ADDS` / `ADD` signal-management action is required. `ALLOWED TO LAYER UNTIL MAX <price>` sets a boundary but **does not place an order**. Elite Portfolios is not permitted to invoke this GWS-specific layer workflow.
+- **Scope:** The add must resolve to exactly one original signal, not multiple tickets or an ambiguous reply. One 10% layer attempt is permitted across its GWS group. Terminal globals plus broker magic/comment history protect against repeats or restarts. Failed/indeterminate attempts do not retry automatically.
+- **Size:** The add is `floor(original three-leg MT5 IN volume × 0.10, broker volume step)`. It must meet the broker minimum lot and is never rounded upward to force an entry.
+- **Price:** BUY adds must improve the group's MT5 fill-weighted average entry; SELL adds must improve in the opposite direction. If a valid provider layering boundary is present, the new fill must also respect it. No add may occur once an original TP1 ticket has closed or any original leg is missing.
+- **Risk:** Initial entries are limited to 85% of the unchanged £75 group budget, reserving at most 15% for a potential add. Each add must also fit the remaining £75 group / £150 portfolio caps with conservative SL risk and adequate margin. The existing provider SL / stop-improvement protections remain in effect. No adds on Fridays.
+- **Exits and accounting:** One fourth ticket uses a native protective stop and TP2. It is included in broker telemetry, Discord trade cards, stop management, group close, and partial close. The initial three-leg 30/30/40 exit allocation is unchanged.
+- **Fail closed:** Stale provider messages, incomplete history, unknown positions, missing broker SL, rejected risk valuation, missing or invalid TP2, spread spikes, connection issues, or uncertain broker results block a layer.
+
+### Required V2.02 acceptance tests before activation
+
+1. Compile **V2.02** in the correct Account 1 MetaEditor. Record **0 errors and 0 warnings** and confirm the attached chart is running the new EX5, not an older binary.
+2. Leave `EnableLayerEntries=false` initially. Verify a new signal opens only the original three legs, all with native SL and the intended TPs.
+3. In a separate controlled scenario, issue `ALLOWED TO LAYER UNTIL MAX` without `ADDS`. Confirm **no layer** is opened.
+4. Issue one fresh, directly attributable `ADDS` at a better price. With both switches enabled on the demo, confirm precisely **one** additional broker ticket, volume equal to floored 10% of initial IN volume, its native SL, and TP2.
+5. Replay the same Telegram action, restart MT5, then send a second `ADDS` targeting another signal in the same group. Confirm no additional position. Verify broker-history deduplication as well as terminal-global deduplication.
+6. Demonstrate skipped layers for worse entry, past layering boundary, closed TP1, missing original ticket, missing SL, invalid TP2, excess margin, stale messages, exceeded £75 group / £150 portfolio risk, and unavailable quote/telemetry.
+7. Exercise group full close, percentage partial close, amended stops, and TP1-confirmed BE **with the fourth layer present**. Verify all volumes and native orders reconcile after partial fills and EA restart.
+8. Confirm `POST /v2/demo/telemetry` accepts magic-leg 4, account risk includes the layer, and the Discord card only shows the additional entry after an actual MT5 broker fill.
+9. Intentionally interrupt Telegram or the gateway during a test. Verify no duplicate action, no unprotected open layer, and a clear operational alert.
+10. Keep both entry toggles disabled if any acceptance check fails. Do not deploy this EA to a live account or leave demo layering unattended before broker evidence and risk signoff.
 
 ## Server environment — do not paste secrets into chat
 
