@@ -119,7 +119,7 @@ async def sync_mirror(bot: discord.Client, *, channel_id: int,
                                 posted = await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
                                 messages[key] = posted.id
                         else:
-                            posted = await channel.send(body, allowed_mentions=discord.AllowedMentions.none())
+                            posted = await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
                             messages[key] = posted.id
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception("Telegram mirror delivery failed; event retained for retry")
