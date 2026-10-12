@@ -95,7 +95,7 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
         status = "NOT FILLED ON MT5"
     elif any(v["status"] == "OPEN" for v in legs.values()):
         status = "OPEN (MT5 confirmed)"
-    elif all(v["status"].startswith("CLOSED") for v in legs.values()):
+    elif all(v["status"].startswith("CLOSED") for v in legs.values() if v["entry"] is not None):
         status = "CLOSED (MT5 confirmed)"
     else:
         status = "PARTIAL / RECONCILIATION"
