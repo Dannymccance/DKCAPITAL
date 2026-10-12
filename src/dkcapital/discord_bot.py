@@ -1361,7 +1361,11 @@ def build_bot(settings: Settings) -> commands.Bot:
             logger.exception("Unable to access MT5 signal channel")
             return
         messages = registry.setdefault("messages", {})
-        watermark = str(registry.get("watermark") or "")
+        # Fixed cutover prevents historical backlog on upgrade or restart.
+        if not registry.get("replay_cutover_at"):
+            registry["replay_cutover_at"] = datetime.now(UTC).isoformat()
+            _write_json(settings.discord_internal_signals_state_path, registry)
+        cutover = str(registry["replay_cutover_at"])
         changed = False
         updates = 0
         max_updates_per_cycle = 3  # Keep well below Discord message-edit rate limits.
@@ -1370,7 +1374,9 @@ def build_bot(settings: Settings) -> commands.Bot:
             if not signal_id:
                 continue
             prior = messages.get(signal_id)
-            if not prior and str(signal.get("opened_at") or "") <= watermark:
+            if not prior and (
+                not signal.get("opened_at") or str(signal["opened_at"]) <= cutover
+            ):
                 continue
             if isinstance(prior, int):
                 prior = {"message_id": prior}
@@ -1394,16 +1400,16 @@ def build_bot(settings: Settings) -> commands.Bot:
                         msg = await channel.fetch_message(int(prior["message_id"]))
                         await msg.edit(embed=mt5_signal_embed(signal, broker_state))
                     except discord.NotFound:
-                        msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
+                        # Never recreate a deleted card for a historical signal.
+                        messages.pop(signal_id, None)
+                        _write_json(settings.discord_internal_signals_state_path, registry)
+                        continue
                 else:
                     msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception("MT5 signal card sync failed signal=%s", signal_id)
                 break
             messages[signal_id] = {"message_id": msg.id, "fingerprint": fingerprint}
-            if str(signal.get("opened_at") or "") > watermark:
-                watermark = str(signal["opened_at"])
-                registry["watermark"] = watermark
             changed = True
             updates += 1
             _write_json(settings.discord_internal_signals_state_path, registry)
