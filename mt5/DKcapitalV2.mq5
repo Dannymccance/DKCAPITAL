@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.01"
+#property version "2.02"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -23,6 +23,7 @@ input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
 input int DeviationPoints = 35;
+input bool EnableProviderLayers = false; // DEMO-only: enable after MetaEditor and broker verification.
 
 CTrade trade;
 bool in_cycle = false;
@@ -44,7 +45,7 @@ ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
    return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+3 &&
-          magic%10>=1 && magic%10<=3;
+          magic%10>=1 && magic%10<=6;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
@@ -246,7 +247,7 @@ bool CloseTicket(ulong ticket)
 bool CloseGroup(const string id)
 {
    bool ok=true;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket>0 && !CloseTicket(ticket)) ok=false;
@@ -287,7 +288,7 @@ void ManageLegs(const string id,const string direction,const double stop,
    bool tp1Confirmed=TP1BrokerConfirmed(id);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
@@ -304,6 +305,7 @@ void ManageLegs(const string id,const string direction,const double stop,
       else if(BetterStop(buy,stop,wantedSL) && StopValid(buy,stop,quote))
          wantedSL=NormalizePrice(stop);
       double rawTP=leg==1?tp1:(leg==2?tp2:tp3);
+       if(leg>=4) rawTP=tp1Confirmed?tp2:tp1;
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -441,7 +443,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
    // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -458,7 +460,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    }
    double target=GlobalVariableGet(targetKey);
    double needed=FloorLots(total-target);
-   for(int leg=3;leg>=1 && needed>=LotMin()-1e-8;leg--)
+   for(int leg=6;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
       ulong t=TicketForLeg(id,leg);
       if(t==0 || !PositionSelectByTicket(t)) continue;
@@ -473,7 +475,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       needed=FloorLots(needed-part);
    }
    double current=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
