@@ -31,6 +31,9 @@ int last_feed_http = 0;
 datetime last_telemetry = 0;
 const ulong MAGIC_BASE = 5100000000;
 const ulong MAGIC_MAX = 48049672950;
+const double INITIAL_GROUP_RISK_SHARE = 0.85;
+const double LAYER_GROUP_RISK_SHARE = 0.15;
+const int LAYER_LEG = 4;
 
 uint Hash(const string value)
 {
@@ -44,7 +47,7 @@ ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
    return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+3 &&
-          magic%10>=1 && magic%10<=3;
+          magic%10>=1 && magic%10<=4;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
@@ -246,7 +249,7 @@ bool CloseTicket(ulong ticket)
 bool CloseGroup(const string id)
 {
    bool ok=true;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=4;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket>0 && !CloseTicket(ticket)) ok=false;
@@ -287,7 +290,7 @@ void ManageLegs(const string id,const string direction,const double stop,
    bool tp1Confirmed=TP1BrokerConfirmed(id);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=4;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
@@ -303,7 +306,8 @@ void ManageLegs(const string id,const string direction,const double stop,
       }
       else if(BetterStop(buy,stop,wantedSL) && StopValid(buy,stop,quote))
          wantedSL=NormalizePrice(stop);
-      double rawTP=leg==1?tp1:(leg==2?tp2:tp3);
+      // The separately tracked 10% layer exits at TP2.
+      double rawTP=leg==1?tp1:(leg==2 || leg==LAYER_LEG?tp2:tp3);
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -348,7 +352,9 @@ void TryEntry(const string id,const string status,const string direction,
    int groups=0;
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
    if(MaximumConcurrentGroups>0 && groups>=MaximumConcurrentGroups) return;
-   double budget=MathMin(MaxGroupRiskGBP-groupRisk,MaxPortfolioRiskGBP-portfolio);
+   // Reserve 15% of group capacity for a possible later layer.
+   double budget=MathMin(MaxGroupRiskGBP*INITIAL_GROUP_RISK_SHARE-groupRisk,
+                         MaxPortfolioRiskGBP-portfolio);
    if(budget<=3*RiskPaddingGBPPerLeg) return;
    double minlot=LotMin();
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
@@ -420,6 +426,131 @@ void TryEntry(const string id,const string status,const string direction,
    }
    else Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
 }
+// Original three-leg broker fills are the fixed reference, even after partial closes.
+double OriginalVolume(const string id)
+{
+   if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return 0;
+   double total=0;
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0 || HistoryDealGetString(deal,DEAL_SYMBOL)!=GoldSymbol ||
+         HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
+      ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
+      for(int leg=1;leg<=3;leg++)
+         if(magic==LegMagic(id,leg))
+         {
+            total+=HistoryDealGetDouble(deal,DEAL_VOLUME);
+            break;
+         }
+   }
+   return total;
+}
+// Broker history preserves the one-layer rule if terminal globals are lost.
+bool LayerPreviouslyAttempted(const string id)
+{
+   if(GlobalVariableCheck(IDKey(id,"LAYER_ATTEMPT"))) return true;
+   if(TicketForLeg(id,LAYER_LEG)>0) return true;
+   if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return true;
+   ulong magic=LegMagic(id,LAYER_LEG);
+   for(int i=HistoryDealsTotal()-1;i>=0;i--)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if((ulong)HistoryDealGetInteger(deal,DEAL_MAGIC)==magic &&
+         HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN) return true;
+   }
+   return false;
+}
+// No implicit layering: only a fresh, explicit and attributable L command.
+// The permission boundary is an upper BUY price or lower SELL price.
+void TryLayer(const string id,const long mid,const double percentage,
+              const int maximum,const double boundary,const long sentAt,
+              const string status,const string direction,const double tp2)
+{
+   if(!EnableNewEntries || !TradeAllowed() || status!="ACTIVE" ||
+      mid<=0 || maximum!=1 || MathAbs(percentage-10.0)>1e-8 ||
+      (direction!="BUY" && direction!="SELL")) return;
+   long age=(long)TimeGMT()-sentAt;
+   if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds ||
+      IsUKFriday() || LayerPreviouslyAttempted(id)) return;
+   bool buy=direction=="BUY";
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.bid<=0 || q.ask<=0 ||
+      q.ask-q.bid>MaxSpreadUSD ||
+      (long)TimeTradeServer()-(long)q.time>30) return;
+   double fill=buy?q.ask:q.bid;
+   if(boundary>0 && (buy?fill>boundary:fill<boundary)) return;
+   double referenceLots=OriginalVolume(id);
+   double layerLots=FloorLots(referenceLots*0.10);
+   if(referenceLots<=0 || layerLots<LotMin()-1e-8 ||
+      layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)) return;
+
+   // No layer after TP1 or any missing original leg.
+   double priceVolume=0,openVolume=0,protectiveSL=0;
+   for(int leg=1;leg<=3;leg++)
+   {
+      ulong ticket=TicketForLeg(id,leg);
+      if(ticket==0 || !PositionSelectByTicket(ticket)) return;
+      if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) return;
+      double lots=PositionGetDouble(POSITION_VOLUME);
+      double sl=PositionGetDouble(POSITION_SL);
+      if(lots<=0 || sl<=0 || PositionRiskGBP()<0) return;
+      priceVolume+=PositionGetDouble(POSITION_PRICE_OPEN)*lots;
+      openVolume+=lots;
+      if(leg==1) protectiveSL=sl;
+      else if(buy) protectiveSL=MathMax(protectiveSL,sl);
+      else protectiveSL=MathMin(protectiveSL,sl);
+   }
+   if(openVolume<=0) return;
+   double average=priceVolume/openVolume;
+   double point=SymbolInfoDouble(GoldSymbol,SYMBOL_POINT);
+   if(buy?fill>=average-point*0.5:fill<=average+point*0.5) return;
+   if(!StopValid(buy,protectiveSL,q)) return;
+   double plannedRisk=RiskGBP(buy,layerLots,fill,protectiveSL);
+   if(plannedRisk<0 || plannedRisk>MaxGroupRiskGBP*LAYER_GROUP_RISK_SHARE+1e-7)
+      return;
+   double portfolio=0,groupRisk=0;
+   int groups=0;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups) ||
+      groupRisk+plannedRisk>MaxGroupRiskGBP+1e-7 ||
+      portfolio+plannedRisk>MaxPortfolioRiskGBP+1e-7) return;
+   double margin=0;
+   ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+   if(!OrderCalcMargin(type,GoldSymbol,layerLots,fill,margin) ||
+      margin<0 || !MathIsValidNumber(margin) ||
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
+   double target=ValidTP(buy,tp2,q);
+   if(target<=0) return; // No unplanned runner.
+
+   // Persist before submission: a result of uncertain status needs manual
+   // reconciliation, never a second automatic order.
+   GlobalVariableSet(IDKey(id,"LAYER_ATTEMPT"),(double)TimeGMT());
+   GlobalVariablesFlush();
+   trade.SetExpertMagicNumber(LegMagic(id,LAYER_LEG));
+   bool submitted=buy?
+      trade.Buy(layerLots,GoldSymbol,0,NormalizePrice(protectiveSL),target,
+                "DK2 10pct layer"):
+      trade.Sell(layerLots,GoldSymbol,0,NormalizePrice(protectiveSL),target,
+                 "DK2 10pct layer");
+   ulong ticket=TicketForLeg(id,LAYER_LEG);
+   if(!submitted || !BrokerDone() || ticket==0 ||
+      !PositionSelectByTicket(ticket) ||
+      PositionGetDouble(POSITION_SL)<=0 ||
+      MathAbs(PositionGetDouble(POSITION_VOLUME)-layerLots)>LotStep()/2)
+   {
+      Print("DK2 CRITICAL uncertain layer id=",id,
+            " msg=",mid," ticket=",ticket,
+            " brokerCode=",trade.ResultRetcode(),"; no automatic retry");
+      if(ticket>0 && PositionSelectByTicket(ticket) &&
+         PositionGetDouble(POSITION_SL)<=0 && !CloseTicket(ticket))
+         Print("DK2 CRITICAL unprotected layer requires review ticket=",ticket);
+      return;
+   }
+   Print("DK2 layer FILLED id=",id," telegram=",mid," ticket=",ticket,
+         " lots=",layerLots," actualEntry=",PositionGetDouble(POSITION_PRICE_OPEN),
+         " nativeSL=",PositionGetDouble(POSITION_SL),
+         " nativeTP=",PositionGetDouble(POSITION_TP));
+}
 bool ActionKeySeen(const string id,const long mid,const string kind)
 {
    string k=IDKey(id,kind+"_"+IntegerToString(mid));
@@ -441,7 +572,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
    // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=4;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -458,7 +589,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    }
    double target=GlobalVariableGet(targetKey);
    double needed=FloorLots(total-target);
-   for(int leg=3;leg>=1 && needed>=LotMin()-1e-8;leg--)
+   for(int leg=4;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
       ulong t=TicketForLeg(id,leg);
       if(t==0 || !PositionSelectByTicket(t)) continue;
@@ -473,7 +604,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       needed=FloorLots(needed-part);
    }
    double current=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=4;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -622,6 +753,21 @@ void ProcessFeed(const string content)
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
+      else if(fields==7 && f[0]=="L")
+      {
+         // A layer needs a matching signal record in this exact feed response.
+         for(int j=1;j<i;j++)
+         {
+            string prior[];
+            if(StringSplit(lines[j],'|',prior)!=12 ||
+               prior[0]!="S" || prior[1]!=f[1]) continue;
+            TryLayer(f[1],(long)StringToInteger(f[2]),StringToDouble(f[3]),
+                     (int)StringToInteger(f[4]),StringToDouble(f[5]),
+                     (long)StringToInteger(f[6]),prior[2],prior[3],
+                     StringToDouble(prior[9]));
+            break;
+         }
+      }
    }
 }
 void OnTimer()
