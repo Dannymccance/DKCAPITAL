@@ -226,6 +226,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     lines.append("|".join([
                         "L", ident, str(mid), "10", "3",
                         str(signal.get("layer_max") or 0),
+                        str(int(datetime.fromisoformat(str(action["timestamp"]).replace("Z", "+00:00")).timestamp())),
                     ]))
                 else:
                     lines.append("|".join(["A", ident, str(mid),
