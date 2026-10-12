@@ -446,6 +446,33 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(parse_actions("SELL MORE AT BETTER ENTRY")[0].kind, "add_layer")
         self.assertEqual(parse_actions("WE RE-ENTER SAME")[0].kind, "reenter")
 
+
+    def test_gws_adds_is_single_explicit_add_not_permission(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(100, "BUY XAUUSD AT 4169 - 4166\nTP1 4173\nSL 4160", minute=0))
+        state.ingest_event(event(101, "BUY XAUUSD AT 4165 - 4162\nTP1 4169\nSL 4155", minute=1))
+        state.ingest_event(event(102, "ALLOWED TO LAYER UNTIL MAX 4150", minute=2))
+        self.assertEqual(state.signals["1:100"].layers, 1)
+        self.assertEqual(state.signals["1:101"].layers, 1)
+        state.ingest_event(event(103, "ADDS", minute=3))
+        self.assertEqual(state.signals["1:100"].layers, 1)
+        self.assertEqual(state.signals["1:101"].layers, 2)
+        add = [h for h in state.signals["1:101"].history if h["kind"] == "add_layer"]
+        self.assertEqual(len(add), 1)
+        self.assertEqual(add[0]["layer_max"], 4150)
+        self.assertEqual(state.signals["1:100"].group_id, state.signals["1:101"].group_id)
+
+    def test_ambiguous_layer_reply_to_group_management_is_blocked(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(110, "BUY XAUUSD AT 4169 - 4166\nSL 4160", minute=0))
+        state.ingest_event(event(111, "BUY XAUUSD AT 4165 - 4162\nSL 4155", minute=1))
+        state.ingest_event(event(112, "BOTH SL TO 4155", minute=2))
+        state.ingest_event(event(113, "ADDS", minute=3, reply_to=112))
+        self.assertEqual(state.signals["1:110"].layers, 1)
+        self.assertEqual(state.signals["1:111"].layers, 1)
+        self.assertEqual(len(state.unresolved_actions), 1)
+        self.assertEqual(state.unresolved_actions[0]["reason"], "ambiguous_layer_target")
+
     def test_buy_more_full_signal_parses_as_new_signal(self) -> None:
         action = parse_actions(
             "BUY MORE XAUUSD AT 4155 - 4157\nTP1 4165\nSL 4148"

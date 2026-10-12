@@ -195,13 +195,18 @@ class SignalState:
                     chat_id=chat_id,
                     inherited_targets=inherited_targets,
                 )
-                if not targets:
+                if not targets or (action.kind == "add_layer" and len(targets) != 1):
+                    # A provider add must identify one original signal. Replies
+                    # referencing a group update can map to multiple signals;
+                    # never translate that ambiguity into multiple MT5 orders.
                     self.unresolved_actions.append(
                         {
                             "chat_id": chat_id,
                             "message_id": message_id,
                             "timestamp": timestamp,
                             "action": action.as_dict(),
+                            "reason": "ambiguous_layer_target"
+                            if action.kind == "add_layer" else "no_target",
                         }
                     )
                     continue
@@ -620,6 +625,9 @@ class SignalState:
                 history_event["remaining_fraction"] = signal.remaining_fraction
 
         elif action.kind == "add_layer":
+            # Permission limits are captured at instruction time. A later edit
+            # cannot retroactively authorize an earlier provider add.
+            history_event["layer_max"] = signal.layer_max
             signal.layers += 1
             history_event["layers"] = signal.layers
 

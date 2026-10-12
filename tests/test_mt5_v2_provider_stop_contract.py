@@ -32,10 +32,37 @@ class V2ProviderStopContract(unittest.TestCase):
     def test_risk_caps_resize_lots_not_stop(self):
         code = SOURCE.read_text(encoding="utf-8")
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
-        self.assertIn("MaxGroupRiskGBP-groupRisk", entry)
+        self.assertIn("MaxGroupRiskGBP*INITIAL_GROUP_RISK_SHARE-groupRisk", entry)
         self.assertIn("MaxPortfolioRiskGBP-portfolio", entry)
         self.assertIn("RiskGBP(buy,a,fill,sl)", entry)
         self.assertIn("FloorLots(total-LotStep())", entry)
+
+    def test_one_layer_native_stop_and_broker_checks(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        layer = code.split("void TryLayer(", 1)[1].split("bool ActionKeySeen(", 1)[0]
+        self.assertIn("MathAbs(percentage-10.0)", layer)
+        self.assertIn("maximum!=1", layer)
+        self.assertIn("referenceLots*0.10", layer)
+        self.assertIn("LayerPreviouslyAttempted(id,groupId)", layer)
+        self.assertIn("MaximumSignalAgeSeconds", layer)
+        self.assertIn("StopValid(buy,protectiveSL,q)", layer)
+        self.assertIn("MaxGroupRiskGBP*LAYER_GROUP_RISK_SHARE", layer)
+        self.assertIn("groupRisk+plannedRisk>MaxGroupRiskGBP", layer)
+        self.assertIn("portfolio+plannedRisk>MaxPortfolioRiskGBP", layer)
+        self.assertIn("GlobalVariablesFlush()", layer)
+        self.assertIn("LegMagic(id,LAYER_LEG)", layer)
+        self.assertIn("GROUP_LAYER_ATTEMPT", code)
+        self.assertIn("EnableNewEntries", layer)
+        self.assertIn("EnableLayerEntries", layer)
+        self.assertIn("LayerMarker(groupId)", code)
+        self.assertIn("HistoryDealGetString(deal,DEAL_COMMENT)", code)
+
+    def test_layer_is_in_all_lifecycle_paths(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("magic%10<=4", code)
+        self.assertIn("for(int leg=1;leg<=4;leg++)", code)
+        self.assertIn("for(int leg=4;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
+        self.assertIn("if(leg==1) protectiveSL=sl;", code)
 
 
 if __name__ == "__main__":

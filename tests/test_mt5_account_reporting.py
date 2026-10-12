@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from dkcapital.mt5_account_reporting import normalize_telemetry, summarize
 from dkcapital.mt5_gateway import GatewayConfig, Mt5GatewayHandler
+from dkcapital.signal_state import SignalState
 
 LOGIN = 5057220041
 MAGIC = 5100000000 + 12345 * 10
@@ -79,6 +80,37 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
         self.assertEqual(result["positions"][0]["floating_pips"], 100.0)
 
+    def test_accepts_fourth_layer_as_owned_broker_position(self):
+        data = example()
+        when = datetime.now(UTC).isoformat()
+        data["positions"].append({
+            "ticket": 4, "magic": MAGIC + 4, "side": "BUY",
+            "lots": 0.01, "entry": 4099.0, "sl": 4090.0,
+            "tp": 4110.0, "profit": 2.0, "swap": 0.0, "risk_gbp": 3.0,
+        })
+        data["deals"].append({
+            "ticket": 105, "position_id": 14, "magic": MAGIC + 4,
+            "entry_type": "IN", "side": "BUY", "lots": 0.01,
+            "price": 4099.0, "profit": 0.0, "commission": -0.10,
+            "swap": 0.0, "time": when,
+        })
+        snapshot = normalize_telemetry(data, LOGIN)
+        summary = summarize(snapshot)
+        self.assertEqual(snapshot["positions"][-1]["leg"], 4)
+        self.assertEqual(snapshot["deals"][-1]["magic"], MAGIC + 4)
+        self.assertEqual(summary["portfolio_risk_gbp"], 4.5)
+        self.assertEqual(summary["week_closed_signals"], 1)
+
+    def test_rejects_unowned_fifth_leg(self):
+        data = example()
+        data["positions"][0]["magic"] = MAGIC + 5
+        with self.assertRaises(ValueError):
+            normalize_telemetry(data, LOGIN)
+        data = example()
+        data["deals"][0]["magic"] = MAGIC + 5
+        with self.assertRaises(ValueError):
+            normalize_telemetry(data, LOGIN)
+
     def test_missing_stop_marked_unknown(self):
         data = example()
         data["positions"][0]["sl"] = 0
@@ -143,21 +175,90 @@ class GatewayTelemetryTests(unittest.TestCase):
     def test_feed_encodes_layer_permission_as_nonexecuting_instruction(self):
         self.path.write_text(json.dumps({"signals": [{
             "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "group_id": "-10011:200",
             "status": "ACTIVE", "direction": "BUY",
             "entry_low": 4150, "entry_high": 4153,
             "current_sl": 4140, "sl_mode": "PRICE",
+            "source_style": "gws",
             "tps": {"1": 4160}, "layer_max": 4145,
             "opened_at": datetime.now(UTC).isoformat(),
             "history": [
                 {"kind": "opened", "message_id": 222},
                 {"kind": "trade_update", "message_id": 223, "layer_max": 4145},
-                {"kind": "add_layer", "message_id": 224},
+                {"kind": "add_layer", "message_id": 224,
+                 "timestamp": datetime.now(UTC).isoformat(), "layer_max": 4145},
             ],
         }]}))
         with self.call("/v2/demo/feed") as response:
             lines = response.read().decode().splitlines()
-        self.assertIn("L|-10011:222|224|10|3|4145", lines)
+        self.assertEqual(
+            len([line for line in lines if line.startswith("L|-10011:222|224|10|1|4145.0|") and line.endswith("|-10011:200")]), 1
+        )
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
+
+
+    def test_permission_alone_does_not_emit_layer_order(self):
+        self.path.write_text(json.dumps({"signals": [{
+            "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "source_style": "gws", "status": "ACTIVE", "direction": "BUY",
+            "entry_low": 4150, "entry_high": 4153,
+            "current_sl": 4140, "sl_mode": "PRICE",
+            "tps": {"1": 4160, "2": 4162.5}, "layer_max": 4145,
+            "opened_at": datetime.now(UTC).isoformat(),
+            "history": [{"kind": "trade_update", "message_id": 223, "layer_max": 4145}],
+        }]}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        self.assertFalse(any(line.startswith("L|") for line in lines))
+
+    def test_old_or_unattributed_add_never_emitted(self):
+        now = datetime.now(UTC)
+        for source_style, timestamp in [
+            ("elite", now.isoformat()), ("gws", None)
+        ]:
+            with self.subTest(style=source_style, timestamp=timestamp):
+                self.path.write_text(json.dumps({"signals": [{
+                    "symbol": "XAUUSD", "signal_id": "-10011:222",
+                    "source_style": source_style,
+                    "status": "ACTIVE", "direction": "BUY",
+                    "entry_low": 4150, "entry_high": 4153,
+                    "current_sl": 4140, "sl_mode": "PRICE",
+                    "opened_at": now.isoformat(),
+                    "history": [{"kind": "add_layer", "message_id": 224,
+                                 "timestamp": timestamp}],
+                }]}))
+                with self.call("/v2/demo/feed") as response:
+                    lines = response.read().decode().splitlines()
+                self.assertFalse(any(line.startswith("L|") for line in lines))
+
+
+    def test_real_gws_conversation_produces_only_targeted_group_add(self):
+        state = SignalState()
+        base = datetime.now(UTC) - timedelta(minutes=3)
+        messages = [
+            (51, "BUY XAUUSD AT 4169 - 4166\\nTP1 4173\\nTP2 4175.50\\nSL 4160"),
+            (52, "BUY XAUUSD AT 4165 - 4162\\nTP1 4169\\nTP2 4171.50\\nSL 4155"),
+            (53, "ALLOWED TO LAYER UNTIL MAX 4150"),
+            (54, "ADDS"),
+        ]
+        for index, (mid, message) in enumerate(messages):
+            state.ingest_event({
+                "event_type": "new_message", "chat_id": -10055,
+                "message_id": mid, "date": (
+                    base + timedelta(seconds=60 * index)).isoformat(),
+                "text": message,
+            })
+        self.path.write_text(json.dumps(state.snapshot()))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        adds = [line for line in lines if line.startswith("L|")]
+        self.assertEqual(len(adds), 1)
+        fields = adds[0].split("|")
+        self.assertEqual(len(fields), 8)
+        self.assertEqual(fields[:6], [
+            "L", "-10055:52", "54", "10", "1", "4150.0",
+        ])
+        self.assertEqual(fields[7], "-10055:51")
 
     def test_feed_exposes_only_explicit_provider_close(self):
         self.path.write_text(json.dumps({"signals":[{
