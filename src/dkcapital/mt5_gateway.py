@@ -208,7 +208,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 str(int(opened.timestamp())),
             ]))
             for action in signal.get("history", []):
-                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer"):
+                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer", "trade_update"):
                     continue
                 mid = action.get("message_id")
                 try:
@@ -220,7 +220,17 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                         continue
                 except (ValueError, TypeError):
                     continue
-                if action["kind"] == "add_layer":
+                if action["kind"] == "trade_update":
+                    if action.get("sl_after") is None:
+                        continue
+                    changed_sl = float(action["sl_after"])
+                    if not __import__("math").isfinite(changed_sl) or changed_sl <= 0:
+                        continue
+                    lines.append("|".join([
+                        "W", ident, str(mid), str(changed_sl),
+                        str(int(datetime.fromisoformat(str(action["timestamp"]).replace("Z", "+00:00")).timestamp())),
+                    ]))
+                elif action["kind"] == "add_layer":
                     # Observation-only: an EA change is needed to account for
                     # additional positions in native SL, close and telemetry paths.
                     lines.append("|".join([
