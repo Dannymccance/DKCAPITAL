@@ -1335,7 +1335,8 @@ def build_bot(settings: Settings) -> commands.Bot:
             await message.edit(embed=_dashboard_embed(state))
             return True
         except discord.NotFound:
-            logger.warning("Configured dashboard message no longer exists")
+            logger.warning("Configured legacy dashboard message no longer exists; clearing reference")
+            _write_json(settings.discord_dashboard_config_path, {})
         except discord.Forbidden:
             logger.exception("Discord bot cannot edit the configured dashboard")
         except discord.HTTPException:
@@ -1362,6 +1363,8 @@ def build_bot(settings: Settings) -> commands.Bot:
         messages = registry.setdefault("messages", {})
         watermark = str(registry.get("watermark") or "")
         changed = False
+        updates = 0
+        max_updates_per_cycle = 3  # Keep well below Discord message-edit rate limits.
         for signal in sorted(signals, key=lambda x: str(x.get("opened_at") or "")):
             signal_id = str(signal.get("signal_id") or "")
             if not signal_id:
@@ -1373,9 +1376,18 @@ def build_bot(settings: Settings) -> commands.Bot:
                 prior = {"message_id": prior}
             prior = prior if isinstance(prior, dict) else {}
             broker_state = broker_signal_state(signal_id, broker_snapshot)
-            fingerprint = json.dumps(signal, sort_keys=True, default=str) + "|" + json.dumps(broker_state, sort_keys=True)
+            fingerprint = json.dumps({
+                "direction": signal.get("direction"),
+                "entry_low": signal.get("entry_low"),
+                "entry_high": signal.get("entry_high"),
+                "tps": signal.get("tps"),
+                "source_style": signal.get("source_style"),
+                "broker": broker_state,
+            }, sort_keys=True, default=str)
             if prior.get("message_id") and prior.get("fingerprint") == fingerprint:
                 continue
+            if updates >= max_updates_per_cycle:
+                break
             try:
                 if prior.get("message_id"):
                     try:
@@ -1393,6 +1405,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                 watermark = str(signal["opened_at"])
                 registry["watermark"] = watermark
             changed = True
+            updates += 1
             _write_json(settings.discord_internal_signals_state_path, registry)
         if changed:
             logger.info("MT5 broker signal cards synchronized")
@@ -1523,10 +1536,8 @@ def build_bot(settings: Settings) -> commands.Bot:
 
         if (mt5_channel_id or mt5_alert_id) and not mt5_account1_loop.is_running():
             mt5_account1_loop.start()
-        if not dashboard_loop.is_running():
-            dashboard_loop.start()
-        if not paper_dashboard_loop.is_running():
-            paper_dashboard_loop.start()
+        # Legacy signal and paper dashboards are intentionally retired.
+        # MT5 Account 1 and its broker-confirmed signal cards remain active.
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
         if weekly_channel_id and not weekly_record_loop.is_running():
