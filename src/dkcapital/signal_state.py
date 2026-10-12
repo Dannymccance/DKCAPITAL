@@ -620,6 +620,9 @@ class SignalState:
                 history_event["remaining_fraction"] = signal.remaining_fraction
 
         elif action.kind == "add_layer":
+            # Permission limits are captured at instruction time. A later edit
+            # cannot retroactively authorize an earlier provider add.
+            history_event["layer_max"] = signal.layer_max
             signal.layers += 1
             history_event["layers"] = signal.layers
 
