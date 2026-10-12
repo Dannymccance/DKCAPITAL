@@ -523,6 +523,10 @@ void TryLayer(const string id,long mid,const string status,const string directio
    if(GlobalVariableCheck(dedup)) return;
    double original=InitialLots(id);
    if(original<=0) return;
+   bool originalStillOpen=false;
+   for(int leg=1;leg<=3;leg++)
+      if(TicketForLeg(id,leg)>0) originalStillOpen=true;
+   if(!originalStillOpen) return; // Do not resurrect a previously closed signal.
    MqlTick q;
    if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0 ||
       q.ask-q.bid>MaxSpreadUSD ||
@@ -544,7 +548,8 @@ void TryLayer(const string id,long mid,const string status,const string directio
       || margin<0 || AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
    int slot=0;
    for(int leg=4;leg<=6;leg++)
-      if(!GlobalVariableCheck(IDKey(id,"LAYER_SLOT_"+IntegerToString(leg))))
+      if(!GlobalVariableCheck(IDKey(id,"LAYER_SLOT_"+IntegerToString(leg))) &&
+         TicketForLeg(id,leg)==0)
       {slot=leg;break;}
    if(slot==0) return;
    double target=ValidTP(buy,TP1BrokerConfirmed(id)?t2:t1,q);
