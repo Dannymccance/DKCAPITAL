@@ -18,6 +18,7 @@ from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
 from dkcapital.telegram_discord_mirror import sync_mirror
+from dkcapital.weekly_record import close_time, record_due, weekly_record
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -1155,6 +1156,8 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
     mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
+    weekly_channel_id = int(os.getenv("DISCORD_WEEKLY_RECORD_CHANNEL_ID", "0"))
+    weekly_state_path = Path(os.getenv("WEEKLY_RECORD_STATE_PATH", "/app/data/weekly-record-state.json"))
     telegram_mirror_channel_id = int(os.getenv("DISCORD_TELEGRAM_CHATS_CHANNEL_ID", "0"))
     telegram_mirror_state_path = Path(os.getenv("TELEGRAM_MIRROR_STATE_PATH", "/app/data/telegram-mirror-state.json"))
 
@@ -1394,6 +1397,68 @@ def build_bot(settings: Settings) -> commands.Bot:
         if changed:
             logger.info("MT5 broker signal cards synchronized")
 
+    async def update_weekly_record() -> None:
+        if not weekly_channel_id:
+            return
+        snapshot = _load_json(mt5_snapshot)
+        if not snapshot:
+            return
+        now = datetime.now(UTC)
+        state = _load_json(weekly_state_path)
+        close = close_time(now)
+        week_key = close.astimezone(ZoneInfo("Europe/Isle_of_Man")).strftime("%Y-%m-%d")
+        # Remember the opening observation for the next week's reporting;
+        # do not claim a fabricated starting balance if it was missed.
+        current_monday = (now.astimezone(ZoneInfo("Europe/Isle_of_Man")) -
+                          __import__("datetime").timedelta(days=now.astimezone(ZoneInfo("Europe/Isle_of_Man")).weekday())).date().isoformat()
+        opening = state.setdefault("openings", {})
+        if current_monday not in opening:
+            opening[current_monday] = float(snapshot.get("balance", 0))
+            _write_json(weekly_state_path, state)
+        if not record_due(now):
+            return
+        if week_key in state.get("published", {}):
+            return
+        monday = (close.astimezone(ZoneInfo("Europe/Isle_of_Man")) -
+                  __import__("datetime").timedelta(days=4)).date().isoformat()
+        try:
+            record = weekly_record(
+                snapshot, now=now, pip_size=mt5_pip_size,
+                starting_balance=opening.get(monday),
+            )
+        except (ValueError, TypeError, KeyError):
+            logger.warning("Weekly report awaiting broker snapshot near Friday close")
+            return
+        start = record["starting_balance"]
+        start_text = f"£{start:,.2f} (first recorded balance this week)" if start is not None else "Not recorded"
+        embed = discord.Embed(
+            title=f"DK Capital | Weekly Record | {week_key}",
+            description="MT5 broker-confirmed XAUUSD demo performance",
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="Starting balance", value=start_text, inline=False)
+        embed.add_field(name="Ending balance", value=f"£{record['ending_balance']:,.2f}", inline=True)
+        embed.add_field(name="Weekly P&L", value=f"£{record['realized_pnl']:+,.2f}", inline=True)
+        embed.add_field(name="Weekly pips", value=f"{record['weekly_pips']:+,.1f} (once per signal)", inline=False)
+        embed.add_field(name="Trades taken", value=str(record["trades_taken"]), inline=True)
+        embed.add_field(name="Signals with exits", value=str(record["closed_signals"]), inline=True)
+        embed.set_footer(text="Broker deals only | Friday 17:00 New York market close | GBP")
+        channel = bot.get_channel(weekly_channel_id) or await bot.fetch_channel(weekly_channel_id)
+        message = await channel.send(embed=embed)
+        state.setdefault("published", {})[week_key] = message.id
+        _write_json(weekly_state_path, state)
+
+    @tasks.loop(minutes=1)
+    async def weekly_record_loop() -> None:
+        try:
+            await update_weekly_record()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException, OSError):
+            logger.exception("Weekly record publication failed")
+
+    @weekly_record_loop.before_loop
+    async def before_weekly_record_loop() -> None:
+        await bot.wait_until_ready()
+
     @tasks.loop(seconds=5)
     async def telegram_mirror_loop() -> None:
         if telegram_mirror_channel_id:
@@ -1464,6 +1529,8 @@ def build_bot(settings: Settings) -> commands.Bot:
             paper_dashboard_loop.start()
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
+        if weekly_channel_id and not weekly_record_loop.is_running():
+            weekly_record_loop.start()
         if telegram_mirror_channel_id and not telegram_mirror_loop.is_running():
             telegram_mirror_loop.start()
 
