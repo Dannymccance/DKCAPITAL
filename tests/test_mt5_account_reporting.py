@@ -79,6 +79,37 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
         self.assertEqual(result["positions"][0]["floating_pips"], 100.0)
 
+    def test_accepts_fourth_layer_as_owned_broker_position(self):
+        data = example()
+        when = datetime.now(UTC).isoformat()
+        data["positions"].append({
+            "ticket": 4, "magic": MAGIC + 4, "side": "BUY",
+            "lots": 0.01, "entry": 4099.0, "sl": 4090.0,
+            "tp": 4110.0, "profit": 2.0, "swap": 0.0, "risk_gbp": 3.0,
+        })
+        data["deals"].append({
+            "ticket": 105, "position_id": 14, "magic": MAGIC + 4,
+            "entry_type": "IN", "side": "BUY", "lots": 0.01,
+            "price": 4099.0, "profit": 0.0, "commission": -0.10,
+            "swap": 0.0, "time": when,
+        })
+        snapshot = normalize_telemetry(data, LOGIN)
+        summary = summarize(snapshot)
+        self.assertEqual(snapshot["positions"][-1]["leg"], 4)
+        self.assertEqual(snapshot["deals"][-1]["magic"], MAGIC + 4)
+        self.assertEqual(summary["portfolio_risk_gbp"], 4.5)
+        self.assertEqual(summary["week_closed_signals"], 1)
+
+    def test_rejects_unowned_fifth_leg(self):
+        data = example()
+        data["positions"][0]["magic"] = MAGIC + 5
+        with self.assertRaises(ValueError):
+            normalize_telemetry(data, LOGIN)
+        data = example()
+        data["deals"][0]["magic"] = MAGIC + 5
+        with self.assertRaises(ValueError):
+            normalize_telemetry(data, LOGIN)
+
     def test_missing_stop_marked_unknown(self):
         data = example()
         data["positions"][0]["sl"] = 0
