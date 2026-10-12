@@ -511,7 +511,7 @@ double InitialLots(const string id)
    return total;
 }
 void TryLayer(const string id,long mid,const string status,const string direction,
-              double sl,const string slMode,double t1,double t2,
+              double sl,const string slMode,double t1,double t2,double t3,
               double limit,long instructionTime)
 {
    if(!EnableProviderLayers || !EnableNewEntries || !TradeAllowed() ||
@@ -554,7 +554,8 @@ void TryLayer(const string id,long mid,const string status,const string directio
       {slot=leg;break;}
    if(slot==0) return;
    if(TPLegBrokerConfirmed(id,3)) return;
-   double target=ValidTP(buy,TPLegBrokerConfirmed(id,1)?t2:t1,q);
+   double nextTarget=TPLegBrokerConfirmed(id,2)?t3:(TPLegBrokerConfirmed(id,1)?t2:t1);
+   double target=ValidTP(buy,nextTarget,q);
    if(target<=0) return;
    // Durable reservation before order placement prevents restart duplicates.
    GlobalVariableSet(IDKey(id,"LAYER_SLOT_"+IntegerToString(slot)),mid);
@@ -758,7 +759,7 @@ void ProcessFeed(const string content)
    if(count<1 || StringFind(lines[0],"DKDEMO2")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
    string ids[],statuses[],directions[],modes[];
-   double stops[],t1s[],t2s[];
+   double stops[],t1s[],t2s[],t3s[];
    long openedTimes[];
    for(int i=1;i<count;i++)
    {
@@ -779,10 +780,11 @@ void ProcessFeed(const string content)
          ArrayResize(ids,n+1);ArrayResize(statuses,n+1);
          ArrayResize(directions,n+1);ArrayResize(modes,n+1);
          ArrayResize(stops,n+1);ArrayResize(t1s,n+1);
-         ArrayResize(t2s,n+1);ArrayResize(openedTimes,n+1);
+         ArrayResize(t2s,n+1);ArrayResize(t3s,n+1);ArrayResize(openedTimes,n+1);
          ids[n]=f[1];statuses[n]=f[2];directions[n]=f[3];modes[n]=f[7];
          stops[n]=StringToDouble(f[6]);t1s[n]=StringToDouble(f[8]);
-         t2s[n]=StringToDouble(f[9]);openedTimes[n]=(long)StringToInteger(f[11]);
+         t2s[n]=StringToDouble(f[9]);t3s[n]=StringToDouble(f[10]);
+         openedTimes[n]=(long)StringToInteger(f[11]);
       }
       else if(fields==5 && f[0]=="W")
          ApplyProviderStop(f[1],(long)StringToInteger(f[2]),
@@ -793,7 +795,7 @@ void ProcessFeed(const string content)
             if(ids[j]==f[1])
             {
                TryLayer(f[1],(long)StringToInteger(f[2]),statuses[j],
-                        directions[j],stops[j],modes[j],t1s[j],t2s[j],
+                        directions[j],stops[j],modes[j],t1s[j],t2s[j],t3s[j],
                         StringToDouble(f[5]),(long)StringToInteger(f[6]));
                break;
             }
