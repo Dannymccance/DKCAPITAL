@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from dkcapital.mt5_account_reporting import normalize_telemetry, summarize
 from dkcapital.mt5_gateway import GatewayConfig, Mt5GatewayHandler
+from dkcapital.signal_state import SignalState
 
 LOGIN = 5057220041
 MAGIC = 5100000000 + 12345 * 10
@@ -229,6 +230,35 @@ class GatewayTelemetryTests(unittest.TestCase):
                 with self.call("/v2/demo/feed") as response:
                     lines = response.read().decode().splitlines()
                 self.assertFalse(any(line.startswith("L|") for line in lines))
+
+
+    def test_real_gws_conversation_produces_only_targeted_group_add(self):
+        state = SignalState()
+        base = datetime.now(UTC) - timedelta(minutes=3)
+        messages = [
+            (51, "BUY XAUUSD AT 4169 - 4166\\nTP1 4173\\nTP2 4175.50\\nSL 4160"),
+            (52, "BUY XAUUSD AT 4165 - 4162\\nTP1 4169\\nTP2 4171.50\\nSL 4155"),
+            (53, "ALLOWED TO LAYER UNTIL MAX 4150"),
+            (54, "ADDS"),
+        ]
+        for index, (mid, message) in enumerate(messages):
+            state.ingest_event({
+                "event_type": "new_message", "chat_id": -10055,
+                "message_id": mid, "date": (
+                    base + timedelta(seconds=60 * index)).isoformat(),
+                "text": message,
+            })
+        self.path.write_text(json.dumps(state.snapshot()))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        adds = [line for line in lines if line.startswith("L|")]
+        self.assertEqual(len(adds), 1)
+        fields = adds[0].split("|")
+        self.assertEqual(len(fields), 8)
+        self.assertEqual(fields[:6], [
+            "L", "-10055:52", "54", "10", "1", "4150.0",
+        ])
+        self.assertEqual(fields[7], "-10055:51")
 
     def test_feed_exposes_only_explicit_provider_close(self):
         self.path.write_text(json.dumps({"signals":[{
