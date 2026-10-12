@@ -178,6 +178,26 @@ class GatewayTelemetryTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("L|-10011:222|224|10|3|4145|") for line in lines))
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
 
+    def test_provider_stop_amendment_is_timestamped(self):
+        timestamp = datetime.now(UTC).isoformat()
+        self.path.write_text(json.dumps({"signals": [{
+            "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "status": "ACTIVE", "direction": "BUY",
+            "entry_low": 4150, "entry_high": 4153,
+            "current_sl": 4148.5, "sl_mode": "PRICE",
+            "tps": {"1": 4160}, "layer_max": None,
+            "opened_at": timestamp,
+            "history": [
+                {"kind": "opened", "message_id": 222},
+                {"kind": "trade_update", "message_id": 225,
+                 "timestamp": timestamp, "sl_after": 4148.5},
+            ],
+        }]}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        self.assertTrue(any(line.startswith("W|-10011:222|225|4148.5|") for line in lines))
+        self.assertFalse(any(line.startswith("A|-10011:222|225|") for line in lines))
+
     def test_feed_exposes_only_explicit_provider_close(self):
         self.path.write_text(json.dumps({"signals":[{
             "symbol":"XAUUSD","signal_id":"-10011:222","status":"COMPLETED",
