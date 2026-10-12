@@ -79,6 +79,25 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
         self.assertEqual(result["positions"][0]["floating_pips"], 100.0)
 
+    def test_layer_broker_position_and_deal_count_in_risk(self):
+        data = example()
+        layer_magic = MAGIC + 4
+        data["positions"].append({
+            "ticket": 5, "magic": layer_magic, "side": "BUY",
+            "lots": 0.01, "entry": 4099, "sl": 4090, "tp": 4105,
+            "profit": 1.0, "swap": 0.0, "risk_gbp": 3.5,
+        })
+        data["deals"].append({
+            "ticket": 105, "position_id": 15, "magic": layer_magic,
+            "entry_type": "IN", "side": "BUY", "lots": 0.01,
+            "price": 4099, "profit": 0, "commission": -0.05,
+            "swap": 0, "time": datetime.now(UTC).isoformat(),
+        })
+        result = summarize(normalize_telemetry(data, LOGIN))
+        self.assertEqual(len(result["positions"]), 2)
+        self.assertEqual(result["portfolio_risk_gbp"], 5.0)
+        self.assertEqual(result["week_closed_signals"], 1)
+
     def test_missing_stop_marked_unknown(self):
         data = example()
         data["positions"][0]["sl"] = 0
