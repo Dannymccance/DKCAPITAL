@@ -38,7 +38,7 @@ def _is_gold_message(text: str) -> bool:
     return bool(re.search(r"\b(?:GOLD|XAU(?:USD)?)\b", text, re.IGNORECASE))
 
 
-def _message_payload(event_type: str, message: Any) -> dict[str, Any]:
+def _message_payload(event_type: str, message: Any, *, chat_title: str | None = None, sender_name: str | None = None) -> dict[str, Any]:
     media = getattr(message, "media", None)
 
     return {
@@ -47,6 +47,8 @@ def _message_payload(event_type: str, message: Any) -> dict[str, Any]:
         "chat_id": getattr(message, "chat_id", None),
         "message_id": getattr(message, "id", None),
         "sender_id": getattr(message, "sender_id", None),
+        "sender_name": sender_name,
+        "chat_title": chat_title,
         "date": _iso(getattr(message, "date", None)),
         "edit_date": _iso(getattr(message, "edit_date", None)),
         "reply_to_message_id": _reply_to_message_id(message),
@@ -134,6 +136,35 @@ async def run() -> None:
 
     chat_ids = await _resolve_chat_ids(client, settings.telegram_source_chats)
     known = load_known(settings.telegram_event_log_path)
+    dialogs = await client.get_dialogs()
+    chat_titles = {
+        utils.get_peer_id(d.entity): str(d.name or getattr(d.entity, "title", None) or "Telegram")
+        for d in dialogs
+    }
+    sender_names: dict[int, str] = {}
+
+    async def detailed_payload(kind: str, message: Any) -> dict[str, Any]:
+        sender = getattr(message, "sender", None)
+        sender_id = getattr(message, "sender_id", None)
+        if sender is None and sender_id is not None and sender_id not in sender_names:
+            try:
+                sender = await message.get_sender()
+            except Exception:
+                logger.debug("Unable to resolve Telegram sender id=%s", sender_id)
+        name = None
+        if sender is not None:
+            name = utils.get_display_name(sender) or getattr(sender, "title", None)
+            if name and sender_id is not None:
+                sender_names[sender_id] = name
+        if not name:
+            name = sender_names.get(sender_id)
+        chat_id = getattr(message, "chat_id", None)
+        return _message_payload(
+            kind, message,
+            chat_title=chat_titles.get(chat_id),
+            sender_name=name or (chat_titles.get(chat_id) if sender_id is None else None),
+        )
+
     store_lock = asyncio.Lock()
     recovery_status_path = settings.telegram_event_log_path.parent / "telegram-recovery-status.json"
     lookback_days = 7
@@ -170,10 +201,10 @@ async def run() -> None:
             return True
 
     async def on_new_message(event: events.NewMessage.Event) -> None:
-        await record(_message_payload("new_message", event.message))
+        await record(await detailed_payload("new_message", event.message))
 
     async def on_message_edited(event: events.MessageEdited.Event) -> None:
-        await record(_message_payload("message_edited", event.message))
+        await record(await detailed_payload("message_edited", event.message))
 
     async def on_message_deleted(event: events.MessageDeleted.Event) -> None:
         payload = {
@@ -221,7 +252,7 @@ async def run() -> None:
                     break
                 messages.append(item)
             for item in reversed(messages):
-                payload = _message_payload("historical_message", item)
+                payload = await detailed_payload("historical_message", item)
                 old = decide_event(payload, known)
                 if old is not None and await record(payload):
                     recovered += old == "historical_message"
