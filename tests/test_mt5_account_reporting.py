@@ -174,6 +174,7 @@ class GatewayTelemetryTests(unittest.TestCase):
     def test_feed_encodes_layer_permission_as_nonexecuting_instruction(self):
         self.path.write_text(json.dumps({"signals": [{
             "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "group_id": "-10011:200",
             "status": "ACTIVE", "direction": "BUY",
             "entry_low": 4150, "entry_high": 4153,
             "current_sl": 4140, "sl_mode": "PRICE",
@@ -190,7 +191,7 @@ class GatewayTelemetryTests(unittest.TestCase):
         with self.call("/v2/demo/feed") as response:
             lines = response.read().decode().splitlines()
         self.assertEqual(
-            len([line for line in lines if line.startswith("L|-10011:222|224|10|1|4145.0|")]), 1
+            len([line for line in lines if line.startswith("L|-10011:222|224|10|1|4145.0|") and line.endswith("|-10011:200")]), 1
         )
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
 
