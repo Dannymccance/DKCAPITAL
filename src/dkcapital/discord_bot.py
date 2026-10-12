@@ -1385,7 +1385,7 @@ def build_bot(settings: Settings) -> commands.Bot:
 
             message_id = record.get("message_id")
             broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
-            fingerprint += "|" + json.dumps(broker_state, sort_keys=True)
+            fingerprint = json.dumps(signal, sort_keys=True, default=str) + "|" + json.dumps(broker_state, sort_keys=True)
             if message_id and record.get("fingerprint") == fingerprint:
                 continue
 
@@ -1393,12 +1393,10 @@ def build_bot(settings: Settings) -> commands.Bot:
                 if message_id:
                     message = await channel.fetch_message(int(message_id))
                     await message.edit(
-                        embed=mt5_signal_embed(signal, broker_state)
-                    )
+                        embed=mt5mt5_signal_embed(signal, broker_state)
                 else:
                     message = await channel.send(
-                        embed=mt5_signal_embed(signal, broker_state)
-                    )
+                        embed=mt5mt5_signal_embed(signal, broker_state)
                 messages[signal_id] = {
                     "message_id": message.id,
                     "fingerprint": fingerprint,
@@ -1406,8 +1404,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                 changed = True
             except discord.NotFound:
                 message = await channel.send(
-                    embed=mt5_signal_embed(signal, broker_state)
-                )
+                    embed=mt5mt5_signal_embed(signal, broker_state)
                 messages[signal_id] = {
                     "message_id": message.id,
                     "fingerprint": fingerprint,
@@ -1429,8 +1426,7 @@ def build_bot(settings: Settings) -> commands.Bot:
             broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
             try:
                 message = await channel.send(
-                    embed=mt5_signal_embed(signal, broker_state)
-                )
+                    embed=mt5mt5_signal_embed(signal, broker_state)
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception("Failed publishing internal signal %s", signal_id)
                 break
