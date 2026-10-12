@@ -1079,6 +1079,8 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
     """Broker-based Account 1 view; never source/provider paper statistics."""
     summary = summarize(snapshot, pip_size=pip_size)
     stale = summary["stale"]
+    def dot(value: float) -> str:
+        return "🟢" if value > 0 else ("🔴" if value < 0 else "⚪")
     status = "STALE / NOT LIVE" if stale else "DEMO | MT5 broker data"
     embed = discord.Embed(
         title="DK Capital | MT5 Demo Account 1",
@@ -1089,23 +1091,29 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
         ),
         color=discord.Color.orange() if stale else discord.Color.blue(),
     )
-    embed.add_field(name="EA entry switch", value=("ARMED (demo)" if summary.get("entry_enabled") else "DISABLED"), inline=False)
+    embed.add_field(
+        name="Execution status",
+        value=("🟢 MT5 telemetry fresh" if not stale else "🔴 MT5 telemetry stale") +
+              "\n" + ("🟢 EA ARMED (DEMO)" if summary.get("entry_enabled") else "🔴 EA DISABLED") +
+              "\n" + ("🟢 Instruction feed connected" if summary.get("feed_http") == 200 else "🔴 Instruction feed disconnected"),
+        inline=False,
+    )
     prefix = "Last known (stale) " if stale else ""
     embed.add_field(
         name=prefix+"Account",
         value=(
             f"Balance: **£{summary['balance']:,.2f}**\n"
             f"Equity: **£{summary['equity']:,.2f}**\n"
-            f"Floating P&L: **£{summary['floating_gbp']:+,.2f}**\n"
+            f"Floating P&L: {dot(summary['floating_gbp'])} **£{summary['floating_gbp']:+,.2f}**\n"
             f"Free margin: £{summary['free_margin']:,.2f}"
         ), inline=False,
     )
     embed.add_field(
         name=prefix+"Realised performance (broker deals)",
         value=(
-            f"Today: **£{summary['today_realized_gbp']:+,.2f}**\n"
-            f"This week: **£{summary['week_realized_gbp']:+,.2f}**\n"
-            f"This week: **{summary['week_realized_pips']:+,.1f} pips** "
+            f"Today: {dot(summary['today_realized_gbp'])} **£{summary['today_realized_gbp']:+,.2f}**\n"
+            f"This week: {dot(summary['week_realized_gbp'])} **£{summary['week_realized_gbp']:+,.2f}**\n"
+            f"This week: {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
             "(one price move per signal)\n"
             f"Signals with MT5 exits this week: {summary['week_closed_signals']}\n"
             f"Closing deals this week: {summary['week_closed_legs']}"
@@ -1115,10 +1123,20 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
         risk_text = "**UNKNOWN — inspect protective stops**"
     else:
         risk_text = f"**£{summary['portfolio_risk_gbp']:,.2f} / £150.00**"
-    embed.add_field(name="Planned stop-loss exposure", value=risk_text, inline=False)
+    groups = len({p["group"] for p in summary["positions"]})
+    remaining = summary["portfolio_risk_gbp"]
+    available = "UNKNOWN" if remaining is None else f"£{max(0.0, 150.0 - remaining):,.2f}"
+    embed.add_field(
+        name="Risk and exposure",
+        value=f"Planned stop-loss exposure: {risk_text}\n"
+              f"Remaining portfolio risk capacity: **{available}**\n"
+              f"Open signal groups: **{groups}**\n"
+              f"Open broker tickets: **{len(summary['positions'])}**",
+        inline=False,
+    )
     positions = summary["positions"]
     if not positions:
-        embed.add_field(name="Open broker positions", value="None", inline=False)
+        embed.add_field(name="Open broker positions", value="⚪ None (flat)", inline=False)
     else:
         grouped: dict[int, list[dict[str, Any]]] = {}
         for p in positions:
@@ -1127,7 +1145,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
             details = []
             for p in sorted(legs, key=lambda x: x["leg"]):
                 details.append(
-                    f"TP{p['leg']} • {p['lots']:.2f} lot • "
+                    f"{dot(p['profit'])} TP{p['leg']} • {p['lots']:.2f} lot • "
                     f"entry {p['entry']:.2f} • SL {p['sl']:.2f} • "
                     f"TP {p['tp']:.2f} • **{p['floating_pips']:+,.1f} pips** • "
                     f"£{p['profit']:+,.2f}"
