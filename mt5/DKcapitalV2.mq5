@@ -281,11 +281,83 @@ bool TP1BrokerConfirmed(const string id)
    }
    return false;
 }
+
+bool SafeStopBudget(const string id,const ulong ticket,bool buy,double candidate)
+{
+   if(!PositionSelectByTicket(ticket)) return false;
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q) || !StopValid(buy,candidate,q)) return false;
+   double oldRisk=PositionRiskGBP();
+   double newRisk=RiskGBP(buy,PositionGetDouble(POSITION_VOLUME),
+                          PositionGetDouble(POSITION_PRICE_OPEN),candidate);
+   if(oldRisk<0 || newRisk<0) return false;
+   double portfolio=0,groupRisk=0;int groups=0;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return false;
+   return portfolio-oldRisk+newRisk<=MaxPortfolioRiskGBP+1e-7 &&
+          groupRisk-oldRisk+newRisk<=MaxGroupRiskGBP+1e-7;
+}
+bool ApplyProviderStop(const string id,long mid,double candidate,long instructionTime)
+{
+   if(mid<=0 || !DemoIdentity() || !TradeAllowed()) return false;
+   long age=(long)TimeGMT()-instructionTime;
+   if(age<0 || age>MaximumSignalAgeSeconds) return false;
+   string key=IDKey(id,"STOP_MSG_"+IntegerToString(mid));
+   if(GlobalVariableCheck(key)) return true;
+   double delta=0,group=0,portfolio=0;int groups=0;
+   if(!Exposure(portfolio,group,GroupBase(id),groups)) return false;
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q)) return false;
+   int matched=0;
+   for(int leg=1;leg<=6;leg++)
+   {
+      ulong t=TicketForLeg(id,leg);
+      if(t==0 || !PositionSelectByTicket(t)) continue;
+      matched++;
+      bool buy=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY;
+      if(!StopValid(buy,candidate,q)) return false;
+      double previous=PositionRiskGBP();
+      double next=RiskGBP(buy,PositionGetDouble(POSITION_VOLUME),
+                          PositionGetDouble(POSITION_PRICE_OPEN),candidate);
+      if(previous<0 || next<0) return false;
+      delta+=next-previous;
+   }
+   if(matched==0 || portfolio+delta>MaxPortfolioRiskGBP+1e-7 ||
+      group+delta>MaxGroupRiskGBP+1e-7)
+   {
+      Print("DK2 PROVIDER SL BLOCK: group/portfolio risk id=",id,
+            " SL=",candidate);
+      return false;
+   }
+   bool applied=true;
+   for(int leg=1;leg<=6;leg++)
+   {
+      ulong t=TicketForLeg(id,leg);
+      if(t==0 || !PositionSelectByTicket(t)) continue;
+      double current=PositionGetDouble(POSITION_SL);
+      if(MathAbs(current-candidate)<SymbolInfoDouble(GoldSymbol,SYMBOL_POINT)*0.5)
+         continue;
+      trade.SetExpertMagicNumber(LegMagic(id,leg));
+      if(!trade.PositionModify(t,NormalizePrice(candidate),
+                               PositionGetDouble(POSITION_TP)) || !BrokerDone())
+      {applied=false;Print("DK2 PROVIDER SL ALERT modify failed ticket=",t);}
+   }
+   if(applied)
+   {
+      GlobalVariableSet(IDKey(id,"PROVIDER_SL_OVERRIDE"),candidate);
+      GlobalVariableSet(key,1);
+      GlobalVariablesFlush();
+      Print("DK2 provider SL confirmed id=",id," price=",candidate);
+   }
+   return applied;
+}
 void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3)
 {
    bool buy=direction=="BUY";
    bool tp1Confirmed=TP1BrokerConfirmed(id);
+   double providerOverride=0;
+   if(GlobalVariableCheck(IDKey(id,"PROVIDER_SL_OVERRIDE")))
+      providerOverride=GlobalVariableGet(IDKey(id,"PROVIDER_SL_OVERRIDE"));
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
    for(int leg=1;leg<=6;leg++)
