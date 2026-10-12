@@ -175,8 +175,31 @@ class GatewayTelemetryTests(unittest.TestCase):
         }]}))
         with self.call("/v2/demo/feed") as response:
             lines = response.read().decode().splitlines()
-        self.assertTrue(any(line.startswith("L|-10011:222|224|10|3|4145|") for line in lines))
+        self.assertTrue(any(line.startswith("L|-10011:222|224|10|3|4145|") and line.endswith("|-10011:222") for line in lines))
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
+
+    def test_one_layer_instruction_per_provider_group(self):
+        stamp = datetime.now(UTC).isoformat()
+        signals = []
+        for index in (10, 11):
+            signals.append({
+                "symbol": "XAUUSD", "signal_id": f"-10011:{index}",
+                "group_id": "-10011:10", "status": "ACTIVE", "direction": "BUY",
+                "entry_low": 4150, "entry_high": 4153,
+                "current_sl": 4140, "sl_mode": "PRICE",
+                "tps": {"1": 4160}, "layer_max": 4145,
+                "opened_at": stamp,
+                "history": [
+                    {"kind": "opened", "message_id": index},
+                    {"kind": "add_layer", "message_id": 20, "timestamp": stamp},
+                ],
+            })
+        self.path.write_text(json.dumps({"signals": signals}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        layers = [line for line in lines if line.startswith("L|")]
+        self.assertEqual(len(layers), 1)
+        self.assertTrue(layers[0].endswith("|-10011:10,-10011:11"))
 
     def test_provider_stop_amendment_is_timestamped(self):
         timestamp = datetime.now(UTC).isoformat()
