@@ -175,6 +175,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             return
         state = _json(self.config.signal_state_path)
         lines = ["DKDEMO2"]
+        layer_messages_by_group: dict[str, set[int]] = {}
         for signal in state.get("signals", []):
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
                 continue
@@ -231,8 +232,13 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                         str(int(datetime.fromisoformat(str(action["timestamp"]).replace("Z", "+00:00")).timestamp())),
                     ]))
                 elif action["kind"] == "add_layer":
-                    # Observation-only: an EA change is needed to account for
-                    # additional positions in native SL, close and telemetry paths.
+                    # Group-wide dedup: a BOTH / ADDING instruction may appear
+                    # in several sibling signals, but may authorize only one layer.
+                    group_id = str(signal.get("group_id") or ident)
+                    seen = layer_messages_by_group.setdefault(group_id, set())
+                    if mid in seen or len(seen) >= 3:
+                        continue
+                    seen.add(mid)
                     lines.append("|".join([
                         "L", ident, str(mid), "10", "3",
                         str(signal.get("layer_max") or 0),
