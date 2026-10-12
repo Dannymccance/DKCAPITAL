@@ -496,6 +496,47 @@ void TryEntry(const string id,const string status,const string direction,
    }
    else Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
 }
+bool LayerSlotUsed(const string id,int leg)
+{
+   if(leg<4 || leg>6) return true;
+   if(GlobalVariableCheck(IDKey(id,"LAYER_SLOT_"+IntegerToString(leg))) ||
+      TicketForLeg(id,leg)>0) return true;
+   if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return true;
+   ulong magic=LegMagic(id,leg);
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+      ulong d=HistoryDealGetTicket(i);
+      if((ulong)HistoryDealGetInteger(d,DEAL_MAGIC)==magic &&
+         HistoryDealGetInteger(d,DEAL_ENTRY)==DEAL_ENTRY_IN) return true;
+   }
+   return false;
+}
+bool LayerGroupCapacity(const string groupIds,double planned)
+{
+   string ids[];
+   int n=StringSplit(groupIds,',',ids);
+   if(n<1 || n>20) return false;
+   double groupRisk=0;
+   int slotsUsed=0;
+   for(int j=0;j<n;j++)
+   {
+      if(StringLen(ids[j])<3) return false;
+      for(int leg=4;leg<=6;leg++)
+         if(LayerSlotUsed(ids[j],leg)) slotsUsed++;
+      ulong root=GroupBase(ids[j]);
+      for(int p=PositionsTotal()-1;p>=0;p--)
+      {
+         ulong t=PositionGetTicket(p);
+         if(t<=0 || PositionGetString(POSITION_SYMBOL)!=GoldSymbol) continue;
+         ulong magic=(ulong)PositionGetInteger(POSITION_MAGIC);
+         if(magic-magic%10!=root) continue;
+         double risk=PositionRiskGBP();
+         if(risk<0) return false;
+         groupRisk+=risk;
+      }
+   }
+   return slotsUsed<3 && groupRisk+planned<=MaxGroupRiskGBP+1e-7;
+}
 double InitialLots(const string id)
 {
    ulong root=GroupBase(id);double total=0;
@@ -512,7 +553,7 @@ double InitialLots(const string id)
 }
 void TryLayer(const string id,long mid,const string status,const string direction,
               double sl,const string slMode,double t1,double t2,double t3,
-              double limit,long instructionTime)
+              double limit,long instructionTime,const string groupIds)
 {
    if(!EnableProviderLayers || !EnableNewEntries || !TradeAllowed() ||
       status!="ACTIVE" || mid<=0 || slMode!="PRICE") return;
@@ -543,14 +584,14 @@ void TryLayer(const string id,long mid,const string status,const string directio
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
    double planned=RiskGBP(buy,lots,fill,sl);
    if(planned<0 || planned>MaxGroupRiskGBP-groupRisk ||
-      planned>MaxPortfolioRiskGBP-portfolio) return;
+      planned>MaxPortfolioRiskGBP-portfolio ||
+      !LayerGroupCapacity(groupIds,planned)) return;
    double margin=0;
    if(!OrderCalcMargin(buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,GoldSymbol,lots,fill,margin)
       || margin<0 || AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
    int slot=0;
    for(int leg=4;leg<=6;leg++)
-      if(!GlobalVariableCheck(IDKey(id,"LAYER_SLOT_"+IntegerToString(leg))) &&
-         TicketForLeg(id,leg)==0)
+      if(!LayerSlotUsed(id,leg))
       {slot=leg;break;}
    if(slot==0) return;
    if(TPLegBrokerConfirmed(id,3)) return;
@@ -789,14 +830,14 @@ void ProcessFeed(const string content)
       else if(fields==5 && f[0]=="W")
          ApplyProviderStop(f[1],(long)StringToInteger(f[2]),
                            StringToDouble(f[3]),(long)StringToInteger(f[4]));
-      else if(fields==7 && f[0]=="L" && f[3]=="10" && f[4]=="3")
+      else if(fields==8 && f[0]=="L" && f[3]=="10" && f[4]=="3")
       {
          for(int j=0;j<ArraySize(ids);j++)
             if(ids[j]==f[1])
             {
                TryLayer(f[1],(long)StringToInteger(f[2]),statuses[j],
                         directions[j],stops[j],modes[j],t1s[j],t2s[j],t3s[j],
-                        StringToDouble(f[5]),(long)StringToInteger(f[6]));
+                        StringToDouble(f[5]),(long)StringToInteger(f[6]),f[7]);
                break;
             }
       }
