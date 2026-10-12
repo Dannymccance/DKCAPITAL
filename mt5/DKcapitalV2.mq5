@@ -422,6 +422,77 @@ void TryEntry(const string id,const string status,const string direction,
    }
    else Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
 }
+double InitialLots(const string id)
+{
+   ulong root=GroupBase(id);double total=0;
+   if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return 0;
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
+      if(magic>=root+1 && magic<=root+3 &&
+         HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+         total+=HistoryDealGetDouble(deal,DEAL_VOLUME);
+   }
+   return total;
+}
+void TryLayer(const string id,long mid,const string status,const string direction,
+              double sl,const string slMode,double t1,double t2,
+              double limit,long opened)
+{
+   if(!EnableProviderLayers || !EnableNewEntries || !TradeAllowed() ||
+      status!="ACTIVE" || mid<=0 || slMode!="PRICE") return;
+   long age=(long)TimeGMT()-opened;
+   if(age<0 || age>MaximumSignalAgeSeconds) return;
+   bool buy=direction=="BUY";
+   if(!buy && direction!="SELL") return;
+   string dedup=IDKey(id,"LAYER_MSG_"+IntegerToString(mid));
+   if(GlobalVariableCheck(dedup)) return;
+   double original=InitialLots(id);
+   if(original<=0) return;
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0 ||
+      q.ask-q.bid>MaxSpreadUSD ||
+      (long)TimeTradeServer()-(long)q.time>30) return;
+   double fill=buy?q.ask:q.bid;
+   if(limit>0 && (buy ? fill<limit : fill>limit)) return;
+   if(!StopValid(buy,sl,q)) return;
+   double lots=FloorLots(original*0.10);
+   if(lots<LotMin()) lots=LotMin();
+   if(lots>original*0.10+LotStep()+1e-7) return;
+   double portfolio=0,groupRisk=0;
+   int groups=0;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
+   double planned=RiskGBP(buy,lots,fill,sl);
+   if(planned<0 || planned>MaxGroupRiskGBP-groupRisk ||
+      planned>MaxPortfolioRiskGBP-portfolio) return;
+   double margin=0;
+   if(!OrderCalcMargin(buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,GoldSymbol,lots,fill,margin)
+      || margin<0 || AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
+   int slot=0;
+   for(int leg=4;leg<=6;leg++)
+      if(!GlobalVariableCheck(IDKey(id,"LAYER_SLOT_"+IntegerToString(leg))))
+      {slot=leg;break;}
+   if(slot==0) return;
+   double target=ValidTP(buy,TP1BrokerConfirmed(id)?t2:t1,q);
+   if(target<=0) return;
+   // Durable reservation before order placement prevents restart duplicates.
+   GlobalVariableSet(IDKey(id,"LAYER_SLOT_"+IntegerToString(slot)),mid);
+   GlobalVariableSet(dedup,1);
+   GlobalVariablesFlush();
+   trade.SetExpertMagicNumber(LegMagic(id,slot));
+   bool sent=buy?trade.Buy(lots,GoldSymbol,0,NormalizePrice(sl),target,"DK2 layer"):
+                 trade.Sell(lots,GoldSymbol,0,NormalizePrice(sl),target,"DK2 layer");
+   ulong ticket=TicketForLeg(id,slot);
+   if(!sent || !BrokerDone() || ticket==0 || !PositionSelectByTicket(ticket)
+      || PositionGetDouble(POSITION_SL)<=0)
+   {
+      Print("DK2 LAYER ALERT confirm failed id=",id," mid=",mid,
+            " retcode=",trade.ResultRetcode());
+      return;
+   }
+   Print("DK2 layer confirmed id=",id," slot=",slot," lots=",lots);
+}
 bool ActionKeySeen(const string id,const long mid,const string kind)
 {
    string k=IDKey(id,kind+"_"+IntegerToString(mid));
@@ -606,6 +677,9 @@ void ProcessFeed(const string content)
    int count=StringSplit(content,'\n',lines);
    if(count<1 || StringFind(lines[0],"DKDEMO2")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
+   string ids[],statuses[],directions[],modes[];
+   double stops[],t1s[],t2s[];
+   long openedTimes[];
    for(int i=1;i<count;i++)
    {
       string f[];StringTrimLeft(lines[i]);StringTrimRight(lines[i]);
@@ -621,6 +695,25 @@ void ProcessFeed(const string content)
             StringToDouble(f[9]),StringToDouble(f[10]));
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
             StringToDouble(f[8]),StringToDouble(f[9]),StringToDouble(f[10]));
+         int n=ArraySize(ids);
+         ArrayResize(ids,n+1);ArrayResize(statuses,n+1);
+         ArrayResize(directions,n+1);ArrayResize(modes,n+1);
+         ArrayResize(stops,n+1);ArrayResize(t1s,n+1);
+         ArrayResize(t2s,n+1);ArrayResize(openedTimes,n+1);
+         ids[n]=f[1];statuses[n]=f[2];directions[n]=f[3];modes[n]=f[7];
+         stops[n]=StringToDouble(f[6]);t1s[n]=StringToDouble(f[8]);
+         t2s[n]=StringToDouble(f[9]);openedTimes[n]=(long)StringToInteger(f[11]);
+      }
+      else if(fields==6 && f[0]=="L" && f[3]=="10" && f[4]=="3")
+      {
+         for(int j=0;j<ArraySize(ids);j++)
+            if(ids[j]==f[1])
+            {
+               TryLayer(f[1],(long)StringToInteger(f[2]),statuses[j],
+                        directions[j],stops[j],modes[j],t1s[j],t2s[j],
+                        StringToDouble(f[5]),openedTimes[j]);
+               break;
+            }
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
