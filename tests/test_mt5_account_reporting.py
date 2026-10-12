@@ -151,12 +151,12 @@ class GatewayTelemetryTests(unittest.TestCase):
             "history": [
                 {"kind": "opened", "message_id": 222},
                 {"kind": "trade_update", "message_id": 223, "layer_max": 4145},
-                {"kind": "add_layer", "message_id": 224},
+                {"kind": "add_layer", "message_id": 224, "timestamp": datetime.now(UTC).isoformat()},
             ],
         }]}))
         with self.call("/v2/demo/feed") as response:
             lines = response.read().decode().splitlines()
-        self.assertIn("L|-10011:222|224|10|3|4145", lines)
+        self.assertTrue(any(line.startswith("L|-10011:222|224|10|3|4145|") for line in lines))
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
 
     def test_feed_exposes_only_explicit_provider_close(self):
