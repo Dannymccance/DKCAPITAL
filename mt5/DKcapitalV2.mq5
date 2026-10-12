@@ -447,8 +447,10 @@ double OriginalVolume(const string id)
    return total;
 }
 // Broker history preserves the one-layer rule if terminal globals are lost.
-bool LayerPreviouslyAttempted(const string id)
+bool LayerPreviouslyAttempted(const string id,const string groupId)
 {
+   // Limit additions across all original signals in the same GWS group.
+   if(GlobalVariableCheck(IDKey(groupId,"GROUP_LAYER_ATTEMPT"))) return true;
    if(GlobalVariableCheck(IDKey(id,"LAYER_ATTEMPT"))) return true;
    if(TicketForLeg(id,LAYER_LEG)>0) return true;
    if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return true;
@@ -465,14 +467,15 @@ bool LayerPreviouslyAttempted(const string id)
 // The permission boundary is an upper BUY price or lower SELL price.
 void TryLayer(const string id,const long mid,const double percentage,
               const int maximum,const double boundary,const long sentAt,
-              const string status,const string direction,const double tp2)
+              const string groupId,const string status,const string direction,
+              const double tp2)
 {
    if(!EnableNewEntries || !TradeAllowed() || status!="ACTIVE" ||
       mid<=0 || maximum!=1 || MathAbs(percentage-10.0)>1e-8 ||
-      (direction!="BUY" && direction!="SELL")) return;
+      groupId=="" || (direction!="BUY" && direction!="SELL")) return;
    long age=(long)TimeGMT()-sentAt;
    if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds ||
-      IsUKFriday() || LayerPreviouslyAttempted(id)) return;
+      IsUKFriday() || LayerPreviouslyAttempted(id,groupId)) return;
    bool buy=direction=="BUY";
    MqlTick q;
    if(!SymbolInfoTick(GoldSymbol,q) || q.bid<=0 || q.ask<=0 ||
@@ -525,6 +528,7 @@ void TryLayer(const string id,const long mid,const double percentage,
    // Persist before submission: a result of uncertain status needs manual
    // reconciliation, never a second automatic order.
    GlobalVariableSet(IDKey(id,"LAYER_ATTEMPT"),(double)TimeGMT());
+   GlobalVariableSet(IDKey(groupId,"GROUP_LAYER_ATTEMPT"),(double)TimeGMT());
    GlobalVariablesFlush();
    trade.SetExpertMagicNumber(LegMagic(id,LAYER_LEG));
    bool submitted=buy?
@@ -753,7 +757,7 @@ void ProcessFeed(const string content)
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
-      else if(fields==7 && f[0]=="L")
+      else if(fields==8 && f[0]=="L")
       {
          // A layer needs a matching signal record in this exact feed response.
          for(int j=1;j<i;j++)
@@ -763,7 +767,7 @@ void ProcessFeed(const string content)
                prior[0]!="S" || prior[1]!=f[1]) continue;
             TryLayer(f[1],(long)StringToInteger(f[2]),StringToDouble(f[3]),
                      (int)StringToInteger(f[4]),StringToDouble(f[5]),
-                     (long)StringToInteger(f[6]),prior[2],prior[3],
+                     (long)StringToInteger(f[6]),f[7],prior[2],prior[3],
                      StringToDouble(prior[9]));
             break;
          }
