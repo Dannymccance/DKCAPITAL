@@ -1338,114 +1338,58 @@ def build_bot(settings: Settings) -> commands.Bot:
 
     async def sync_internal_signals() -> None:
         state = _load_json(settings.signal_state_path)
-        signals = list(state.get("signals") or [])
+        signals = [s for s in (state.get("signals") or [])
+                   if str(s.get("symbol") or "").upper() == "XAUUSD"]
         broker_snapshot = _load_json(mt5_snapshot)
         registry = _load_json(settings.discord_internal_signals_state_path)
-
         if not registry.get("initialized"):
-            registry = {
-                "initialized": True,
-                "watermark": datetime.now(UTC).isoformat(),
+            _write_json(settings.discord_internal_signals_state_path, {
+                "initialized": True, "watermark": datetime.now(UTC).isoformat(),
                 "messages": {},
-            }
-            _write_json(settings.discord_internal_signals_state_path, registry)
-            logger.info(
-                "Internal signal feed initialized channel=%s watermark=%s",
-                settings.discord_internal_signals_channel_id,
-                registry["watermark"],
-            )
+            })
             return
-
-        channel_id = settings.discord_internal_signals_channel_id
         try:
-            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+            channel = bot.get_channel(settings.discord_internal_signals_channel_id) or await bot.fetch_channel(settings.discord_internal_signals_channel_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            logger.exception("Unable to access internal signal channel %s", channel_id)
+            logger.exception("Unable to access MT5 signal channel")
             return
-
-        if not hasattr(channel, "send"):
-            logger.error("Configured internal signal channel %s is not messageable", channel_id)
-            return
-
         messages = registry.setdefault("messages", {})
         watermark = str(registry.get("watermark") or "")
         changed = False
-
-        # First update messages we have already published.
-        for signal in signals:
+        for signal in sorted(signals, key=lambda x: str(x.get("opened_at") or "")):
             signal_id = str(signal.get("signal_id") or "")
-            if not signal_id or signal_id not in messages:
+            if not signal_id:
                 continue
-
-            record = messages.get(signal_id)
-            if isinstance(record, int):
-                record = {"message_id": record, "fingerprint": ""}
-            elif not isinstance(record, dict):
-                record = {}
-
-            message_id = record.get("message_id")
-            broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
+            prior = messages.get(signal_id)
+            if not prior and str(signal.get("opened_at") or "") <= watermark:
+                continue
+            if isinstance(prior, int):
+                prior = {"message_id": prior}
+            prior = prior if isinstance(prior, dict) else {}
+            broker_state = broker_signal_state(signal_id, broker_snapshot)
             fingerprint = json.dumps(signal, sort_keys=True, default=str) + "|" + json.dumps(broker_state, sort_keys=True)
-            if message_id and record.get("fingerprint") == fingerprint:
+            if prior.get("message_id") and prior.get("fingerprint") == fingerprint:
                 continue
-
             try:
-                if message_id:
-                    message = await channel.fetch_message(int(message_id))
-                    await message.edit(
-                        embed=mt5mt5_signal_embed(signal, broker_state)
+                if prior.get("message_id"):
+                    try:
+                        msg = await channel.fetch_message(int(prior["message_id"]))
+                        await msg.edit(embed=mt5_signal_embed(signal, broker_state))
+                    except discord.NotFound:
+                        msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
                 else:
-                    message = await channel.send(
-                        embed=mt5mt5_signal_embed(signal, broker_state)
-                messages[signal_id] = {
-                    "message_id": message.id,
-                    "fingerprint": fingerprint,
-                }
-                changed = True
-            except discord.NotFound:
-                message = await channel.send(
-                    embed=mt5mt5_signal_embed(signal, broker_state)
-                messages[signal_id] = {
-                    "message_id": message.id,
-                    "fingerprint": fingerprint,
-                }
-                changed = True
+                    msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
             except (discord.Forbidden, discord.HTTPException):
-                logger.exception("Failed updating internal signal %s", signal_id)
-
-        # Then publish new signals after the persisted watermark. Historical
-        # backfill from before the feed was enabled is intentionally not dumped.
-        for signal in sorted(signals, key=lambda item: str(item.get("opened_at") or "")):
-            signal_id = str(signal.get("signal_id") or "")
-            opened_at = str(signal.get("opened_at") or "")
-            if not signal_id or signal_id in messages:
-                continue
-            if not opened_at or (watermark and opened_at <= watermark):
-                continue
-
-            broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
-            try:
-                message = await channel.send(
-                    embed=mt5mt5_signal_embed(signal, broker_state)
-            except (discord.Forbidden, discord.HTTPException):
-                logger.exception("Failed publishing internal signal %s", signal_id)
+                logger.exception("MT5 signal card sync failed signal=%s", signal_id)
                 break
-
-            fingerprint = json.dumps(signal, sort_keys=True, default=str)
-            fingerprint += "|" + json.dumps(broker_state, sort_keys=True)
-            messages[signal_id] = {"message_id": message.id, "fingerprint": fingerprint}
-            watermark = opened_at
-            registry["watermark"] = watermark
+            messages[signal_id] = {"message_id": msg.id, "fingerprint": fingerprint}
+            if str(signal.get("opened_at") or "") > watermark:
+                watermark = str(signal["opened_at"])
+                registry["watermark"] = watermark
             changed = True
-            logger.info(
-                "Published internal signal signal_id=%s channel=%s message=%s",
-                signal_id,
-                channel_id,
-                message.id,
-            )
-
-        if changed:
             _write_json(settings.discord_internal_signals_state_path, registry)
+        if changed:
+            logger.info("MT5 broker signal cards synchronized")
 
     @tasks.loop(minutes=1)
     async def internal_signal_loop() -> None:
