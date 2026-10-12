@@ -237,9 +237,12 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                             continue
                     except (KeyError, ValueError, TypeError, OverflowError):
                         continue
+                    group_id = str(signal.get("group_id") or ident)
+                    if not re.fullmatch(r"[-0-9:]{1,64}", group_id):
+                        continue
                     lines.append("|".join([
                         "L", ident, str(mid), "10", "1",
-                        str(boundary), str(int(action_at.timestamp())),
+                        str(boundary), str(int(action_at.timestamp())), group_id,
                     ]))
                 else:
                     lines.append("|".join(["A", ident, str(mid),
