@@ -221,11 +221,25 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 except (ValueError, TypeError):
                     continue
                 if action["kind"] == "add_layer":
-                    # Observation-only: an EA change is needed to account for
-                    # additional positions in native SL, close and telemetry paths.
+                    # V2 layer instructions are executable only for GWS-style
+                    # signals. The EA independently checks freshness, MT5 fills,
+                    # native SL, better entry, size, and all risk budgets.
+                    if signal.get("source_style") != "gws":
+                        continue
+                    try:
+                        action_at = datetime.fromisoformat(
+                            str(action["timestamp"]).replace("Z", "+00:00")
+                        )
+                        if action_at.tzinfo is None:
+                            continue
+                        boundary = float(action.get("layer_max") or 0)
+                        if not __import__("math").isfinite(boundary) or boundary < 0:
+                            continue
+                    except (KeyError, ValueError, TypeError, OverflowError):
+                        continue
                     lines.append("|".join([
-                        "L", ident, str(mid), "10", "3",
-                        str(signal.get("layer_max") or 0),
+                        "L", ident, str(mid), "10", "1",
+                        str(boundary), str(int(action_at.timestamp())),
                     ]))
                 else:
                     lines.append("|".join(["A", ident, str(mid),
