@@ -239,10 +239,20 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     if mid in seen or len(seen) >= 3:
                         continue
                     seen.add(mid)
+                    members = sorted({
+                        str(member.get("signal_id"))
+                        for member in state.get("signals", [])
+                        if isinstance(member, dict) and member.get("symbol") == "XAUUSD"
+                        and str(member.get("group_id") or member.get("signal_id")) == group_id
+                        and re.fullmatch(r"[-0-9:]{1,64}", str(member.get("signal_id") or ""))
+                    })
+                    if not members or len(members) > 20:
+                        continue
                     lines.append("|".join([
                         "L", ident, str(mid), "10", "3",
                         str(signal.get("layer_max") or 0),
                         str(int(datetime.fromisoformat(str(action["timestamp"]).replace("Z", "+00:00")).timestamp())),
+                        ",".join(members),
                     ]))
                 else:
                     lines.append("|".join(["A", ident, str(mid),
