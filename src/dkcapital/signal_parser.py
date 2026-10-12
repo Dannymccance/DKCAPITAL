@@ -93,7 +93,7 @@ def _explicit_sl(text: str) -> float | None:
         r"SL(?:'S)?(?:\s+MOVE(?:D)?(?:\s+AGAIN)?|\s+ONE\s+MORE\s+TIME)?"
         r"\s+TO\s+(?:THIS\s+)?(\d+(?:\.\d+)?)\b",
         r"\bSL\s+ALSO\s+(\d+(?:\.\d+)?)\b",
-        r"\b(?:MOVE|SET|ADJUST|TRAIL)\s+(?:YOUR\s+|THE\s+)?"
+        r"\b(?:MOVE|SET|ADJUST|TRAIL)\s+(?:(?:BOTH|ALL|YOUR|THE)\s+)?"
         r"(?:STOP\s*LOSS|STOP|SL)\s+(?:TO|AT|@)\s+(?:THIS\s+)?(\d+(?:\.\d+)?)\b",
         r"\b(?:STOP\s*LOSS|STOP|SL)\s+(?:TO|AT|@)\s+(?:THIS\s+)?(\d+(?:\.\d+)?)\b",
         r"\b(?:STOP\s*LOSS|SL)\s*:\s*(\d+(?:\.\d+)?)\b",
