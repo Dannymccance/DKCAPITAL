@@ -53,6 +53,9 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("LegMagic(id,LAYER_LEG)", layer)
         self.assertIn("GROUP_LAYER_ATTEMPT", code)
         self.assertIn("EnableNewEntries", layer)
+        self.assertIn("EnableLayerEntries", layer)
+        self.assertIn("LayerMarker(groupId)", code)
+        self.assertIn("HistoryDealGetString(deal,DEAL_COMMENT)", code)
 
     def test_layer_is_in_all_lifecycle_paths(self):
         code = SOURCE.read_text(encoding="utf-8")
