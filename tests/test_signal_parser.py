@@ -489,6 +489,22 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(state.signals["1:1"].current_sl, 4195)
 
+
+    def test_gws_move_both_sl_and_layer_permission(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(100, "BUY XAUUSD AT 4169 - 4166\\nSL 4160", minute=0))
+        state.ingest_event(event(101, "BUY XAUUSD AT 4164 - 4161\\nSL 4155", minute=1))
+        state.ingest_event(event(102, "WE MOVE BOTH SL TO 4148.50 (Last SL for buyers)", minute=2))
+        self.assertEqual(state.signals["1:100"].current_sl, 4148.5)
+        self.assertEqual(state.signals["1:101"].current_sl, 4148.5)
+        state.ingest_event(event(103, "ALLOWED TO LAYER UNTIL MAX 4150", minute=3))
+        self.assertEqual(state.signals["1:100"].layer_max, 4150)
+        self.assertEqual(state.signals["1:101"].layer_max, 4150)
+        # Permission to layer must not itself create new signals or broker entries.
+        self.assertEqual(len(state.signals), 2)
+        self.assertEqual(state.signals["1:100"].layers, 1)
+        self.assertEqual(state.signals["1:101"].layers, 1)
+
     def test_group_management_updates_both_positions(self) -> None:
         state = SignalState()
         state.ingest_event(
