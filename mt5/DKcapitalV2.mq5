@@ -44,7 +44,7 @@ ulong GroupBase(const string id) { return MAGIC_BASE + (ulong)Hash(id)*10; }
 ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
-   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+3 &&
+   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+6 &&
           magic%10>=1 && magic%10<=6;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
@@ -438,11 +438,11 @@ double InitialLots(const string id)
 }
 void TryLayer(const string id,long mid,const string status,const string direction,
               double sl,const string slMode,double t1,double t2,
-              double limit,long opened)
+              double limit,long instructionTime)
 {
    if(!EnableProviderLayers || !EnableNewEntries || !TradeAllowed() ||
       status!="ACTIVE" || mid<=0 || slMode!="PRICE") return;
-   long age=(long)TimeGMT()-opened;
+   long age=(long)TimeGMT()-instructionTime;
    if(age<0 || age>MaximumSignalAgeSeconds) return;
    bool buy=direction=="BUY";
    if(!buy && direction!="SELL") return;
@@ -704,14 +704,14 @@ void ProcessFeed(const string content)
          stops[n]=StringToDouble(f[6]);t1s[n]=StringToDouble(f[8]);
          t2s[n]=StringToDouble(f[9]);openedTimes[n]=(long)StringToInteger(f[11]);
       }
-      else if(fields==6 && f[0]=="L" && f[3]=="10" && f[4]=="3")
+      else if(fields==7 && f[0]=="L" && f[3]=="10" && f[4]=="3")
       {
          for(int j=0;j<ArraySize(ids);j++)
             if(ids[j]==f[1])
             {
                TryLayer(f[1],(long)StringToInteger(f[2]),statuses[j],
                         directions[j],stops[j],modes[j],t1s[j],t2s[j],
-                        StringToDouble(f[5]),openedTimes[j]);
+                        StringToDouble(f[5]),(long)StringToInteger(f[6]));
                break;
             }
       }
