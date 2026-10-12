@@ -45,7 +45,7 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
         if not isinstance(item, dict) or item.get("group") != group:
             continue
         leg = int(item.get("magic", 0)) % 10
-        if leg not in (1, 2, 3):
+        if leg not in (1, 2, 3, 4):
             continue
         if item.get("entry_type") == "IN":
             by_leg[leg]["entries"].append(item)
@@ -54,15 +54,16 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
     for item in telemetry.get("positions", []):
         if isinstance(item, dict) and item.get("group") == group:
             leg = int(item.get("leg") or 0)
-            if leg in (1, 2, 3):
+            if leg in (1, 2, 3, 4):
                 positions[leg] = item
     legs: dict[int, dict[str, Any]] = {}
-    for leg in (1, 2, 3):
+    for leg in (1, 2, 3, 4):
         entries = by_leg[leg]["entries"]
         exits = by_leg[leg]["exits"]
         pos = positions.get(leg)
         if not entries and not pos:
-            legs[leg] = {"status": "Not filled on MT5", "entry": None}
+            if leg != 4:
+                legs[leg] = {"status": "Not filled on MT5", "entry": None}
             continue
         if entries:
             lots = sum(float(d["lots"]) for d in entries)
@@ -120,14 +121,17 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     embed.add_field(name="Telegram entry zone", value=entry, inline=True)
     embed.add_field(name="MT5 broker status", value=state["status"], inline=True)
     rows = []
-    for leg in (1, 2, 3):
+    for leg in (1, 2, 3, 4):
         item = state["legs"].get(leg)
+        if leg == 4 and (item is None or item.get("entry") is None):
+            continue
         if item is None or item["entry"] is None:
             rows.append(f"⬜ TP{leg} leg — **Not filled on MT5**")
             continue
         status = item["status"]
         mark = "✅"  # Confirmed broker entry fill; closing reason shown separately.
-        line = f"{mark} **TP{leg} leg** — {item['lots']:.2f} lots, fill **{item['entry']:.2f}**"
+        label = "10% layer (TP2)" if leg == 4 else f"TP{leg} leg"
+        line = f"{mark} **{label}** — {item['lots']:.2f} lots, fill **{item['entry']:.2f}**"
         line += f"\n{status}"
         if item.get("exit_price") is not None:
             line += f" | exit {item['exit_price']:.2f}"
@@ -136,7 +140,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
         if item.get("tp") is not None:
             line += f" | TP {item['tp']:.2f}"
         rows.append(line)
-    embed.add_field(name="Broker-confirmed fills (three legs)", value="\n".join(rows)[:1024], inline=False)
+    embed.add_field(name="Broker-confirmed fills (with optional 10% layer)", value="\n".join(rows)[:1024], inline=False)
     targets = signal.get("tps") or {}
     if targets:
         embed.add_field(
