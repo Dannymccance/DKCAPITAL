@@ -208,7 +208,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 str(int(opened.timestamp())),
             ]))
             for action in signal.get("history", []):
-                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close"):
+                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer"):
                     continue
                 mid = action.get("message_id")
                 try:
@@ -220,8 +220,16 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                         continue
                 except (ValueError, TypeError):
                     continue
-                lines.append("|".join(["A", ident, str(mid),
-                                      str(action["kind"]).upper(), str(pct)]))
+                if action["kind"] == "add_layer":
+                    # Observation-only: an EA change is needed to account for
+                    # additional positions in native SL, close and telemetry paths.
+                    lines.append("|".join([
+                        "L", ident, str(mid), "10", "3",
+                        str(signal.get("layer_max") or 0),
+                    ]))
+                else:
+                    lines.append("|".join(["A", ident, str(mid),
+                                          str(action["kind"]).upper(), str(pct)]))
         self._write_text(HTTPStatus.OK, "\n".join(lines) + "\n")
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
