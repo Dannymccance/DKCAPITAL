@@ -68,11 +68,12 @@ class ReportingUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
 
-    def test_weekly_pips_uses_trio_total_volume_not_threefold(self):
+    def test_weekly_pips_counts_each_signal_once(self):
         snapshot = normalize_telemetry(example(), LOGIN)
         result = summarize(snapshot)
-        # TP1 0.03 of initial 0.10 lots, $1 move / $0.01 per pip.
-        self.assertEqual(result["week_realized_pips"], 30.0)
+        # A single closed leg's $1 move counts once per signal.
+        self.assertEqual(result["week_realized_pips"], 100.0)
+        self.assertEqual(result["week_closed_signals"], 1)
         self.assertEqual(result["week_realized_gbp"], 1.9)
         self.assertEqual(result["floating_gbp"], 25)
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
