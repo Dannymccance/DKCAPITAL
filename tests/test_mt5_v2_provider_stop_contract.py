@@ -43,7 +43,7 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("MathAbs(percentage-10.0)", layer)
         self.assertIn("maximum!=1", layer)
         self.assertIn("referenceLots*0.10", layer)
-        self.assertIn("LayerPreviouslyAttempted(id)", layer)
+        self.assertIn("LayerPreviouslyAttempted(id,groupId)", layer)
         self.assertIn("MaximumSignalAgeSeconds", layer)
         self.assertIn("StopValid(buy,protectiveSL,q)", layer)
         self.assertIn("MaxGroupRiskGBP*LAYER_GROUP_RISK_SHARE", layer)
@@ -51,6 +51,7 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("portfolio+plannedRisk>MaxPortfolioRiskGBP", layer)
         self.assertIn("GlobalVariablesFlush()", layer)
         self.assertIn("LegMagic(id,LAYER_LEG)", layer)
+        self.assertIn("GROUP_LAYER_ATTEMPT", code)
         self.assertIn("EnableNewEntries", layer)
 
     def test_layer_is_in_all_lifecycle_paths(self):
