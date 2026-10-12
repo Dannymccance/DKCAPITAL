@@ -17,6 +17,8 @@ from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
+from dkcapital.telegram_discord_mirror import sync_mirror
+from dkcapital.weekly_record import close_time, record_due, weekly_record
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -1104,7 +1106,8 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
             f"Today: **£{summary['today_realized_gbp']:+,.2f}**\n"
             f"This week: **£{summary['week_realized_gbp']:+,.2f}**\n"
             f"This week: **{summary['week_realized_pips']:+,.1f} pips** "
-            "(volume-weighted)\n"
+            "(one price move per signal)\n"
+            f"Signals with MT5 exits this week: {summary['week_closed_signals']}\n"
             f"Closing deals this week: {summary['week_closed_legs']}"
         ), inline=False,
     )
@@ -1153,6 +1156,10 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
     mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
+    weekly_channel_id = int(os.getenv("DISCORD_WEEKLY_RECORD_CHANNEL_ID", "0"))
+    weekly_state_path = Path(os.getenv("WEEKLY_RECORD_STATE_PATH", "/app/data/weekly-record-state.json"))
+    telegram_mirror_channel_id = int(os.getenv("DISCORD_TELEGRAM_CHATS_CHANNEL_ID", "0"))
+    telegram_mirror_state_path = Path(os.getenv("TELEGRAM_MIRROR_STATE_PATH", "/app/data/telegram-mirror-state.json"))
 
     async def update_mt5_account1() -> None:
         if not mt5_channel_id and not mt5_alert_id:
@@ -1337,184 +1344,136 @@ def build_bot(settings: Settings) -> commands.Bot:
 
     async def sync_internal_signals() -> None:
         state = _load_json(settings.signal_state_path)
-        signals = list(state.get("signals") or [])
-        active_gold = any(
-            str(signal.get("symbol") or "") == "XAUUSD"
-            and str(signal.get("status") or "") == "ACTIVE"
-            for signal in signals
-        )
-        paper_state = _load_json(settings.paper_state_path)
-        spot_quote = (
-            _paper_market_quote(paper_state)
-            if active_gold
-            else None
-        )
+        signals = [s for s in (state.get("signals") or [])
+                   if str(s.get("symbol") or "").upper() == "XAUUSD"]
         broker_snapshot = _load_json(mt5_snapshot)
         registry = _load_json(settings.discord_internal_signals_state_path)
-
         if not registry.get("initialized"):
-            registry = {
-                "initialized": True,
-                "watermark": datetime.now(UTC).isoformat(),
+            _write_json(settings.discord_internal_signals_state_path, {
+                "initialized": True, "watermark": datetime.now(UTC).isoformat(),
                 "messages": {},
-            }
-            _write_json(settings.discord_internal_signals_state_path, registry)
-            logger.info(
-                "Internal signal feed initialized channel=%s watermark=%s",
-                settings.discord_internal_signals_channel_id,
-                registry["watermark"],
-            )
+            })
             return
-
-        channel_id = settings.discord_internal_signals_channel_id
         try:
-            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+            channel = bot.get_channel(settings.discord_internal_signals_channel_id) or await bot.fetch_channel(settings.discord_internal_signals_channel_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            logger.exception("Unable to access internal signal channel %s", channel_id)
+            logger.exception("Unable to access MT5 signal channel")
             return
-
-        if not hasattr(channel, "send"):
-            logger.error("Configured internal signal channel %s is not messageable", channel_id)
-            return
-
         messages = registry.setdefault("messages", {})
         watermark = str(registry.get("watermark") or "")
         changed = False
-
-        # First update messages we have already published.
-        for signal in signals:
+        for signal in sorted(signals, key=lambda x: str(x.get("opened_at") or "")):
             signal_id = str(signal.get("signal_id") or "")
-            if not signal_id or signal_id not in messages:
+            if not signal_id:
                 continue
-
-            record = messages.get(signal_id)
-            if isinstance(record, int):
-                record = {"message_id": record, "fingerprint": ""}
-            elif not isinstance(record, dict):
-                record = {}
-
-            message_id = record.get("message_id")
-            signal_spot = (
-                spot_quote
-                if str(signal.get("symbol") or "") == "XAUUSD"
-                and str(signal.get("status") or "") == "ACTIVE"
-                else None
-            )
-            paper_position = _paper_position_for_signal(
-                paper_state,
-                signal_id,
-            )
-            fingerprint = _signal_fingerprint(
-                signal,
-                signal_spot,
-                paper_position,
-            )
-            broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
-            if broker_state is not None:
-                fingerprint += "|" + json.dumps(broker_state, sort_keys=True)
-            if message_id and record.get("fingerprint") == fingerprint:
+            prior = messages.get(signal_id)
+            if not prior and str(signal.get("opened_at") or "") <= watermark:
                 continue
-
+            if isinstance(prior, int):
+                prior = {"message_id": prior}
+            prior = prior if isinstance(prior, dict) else {}
+            broker_state = broker_signal_state(signal_id, broker_snapshot)
+            fingerprint = json.dumps(signal, sort_keys=True, default=str) + "|" + json.dumps(broker_state, sort_keys=True)
+            if prior.get("message_id") and prior.get("fingerprint") == fingerprint:
+                continue
             try:
-                if message_id:
-                    message = await channel.fetch_message(int(message_id))
-                    await message.edit(
-                        embed=_signal_embed(
-                            signal,
-                            spot_quote=signal_spot,
-                            paper_position=paper_position,
-                            pip_size=settings.paper_xau_pip_size,
-                            timezone_name=settings.display_timezone,
-                            broker_state=broker_state,
-                        )
-                    )
+                if prior.get("message_id"):
+                    try:
+                        msg = await channel.fetch_message(int(prior["message_id"]))
+                        await msg.edit(embed=mt5_signal_embed(signal, broker_state))
+                    except discord.NotFound:
+                        msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
                 else:
-                    message = await channel.send(
-                        embed=_signal_embed(
-                            signal,
-                            spot_quote=signal_spot,
-                            paper_position=paper_position,
-                            pip_size=settings.paper_xau_pip_size,
-                            timezone_name=settings.display_timezone,
-                            broker_state=broker_state,
-                        )
-                    )
-                messages[signal_id] = {
-                    "message_id": message.id,
-                    "fingerprint": fingerprint,
-                }
-                changed = True
-            except discord.NotFound:
-                message = await channel.send(
-                    embed=_signal_embed(
-                        signal,
-                        spot_quote=signal_spot,
-                        paper_position=paper_position,
-                        pip_size=settings.paper_xau_pip_size,
-                        timezone_name=settings.display_timezone,
-                            broker_state=broker_state,
-                    )
-                )
-                messages[signal_id] = {
-                    "message_id": message.id,
-                    "fingerprint": fingerprint,
-                }
-                changed = True
+                    msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
             except (discord.Forbidden, discord.HTTPException):
-                logger.exception("Failed updating internal signal %s", signal_id)
-
-        # Then publish new signals after the persisted watermark. Historical
-        # backfill from before the feed was enabled is intentionally not dumped.
-        for signal in sorted(signals, key=lambda item: str(item.get("opened_at") or "")):
-            signal_id = str(signal.get("signal_id") or "")
-            opened_at = str(signal.get("opened_at") or "")
-            if not signal_id or signal_id in messages:
-                continue
-            if not opened_at or (watermark and opened_at <= watermark):
-                continue
-
-            signal_spot = (
-                spot_quote
-                if str(signal.get("symbol") or "") == "XAUUSD"
-                and str(signal.get("status") or "") == "ACTIVE"
-                else None
-            )
-            paper_position = _paper_position_for_signal(
-                paper_state,
-                signal_id,
-            )
-            broker_state = broker_signal_state(signal_id, broker_snapshot) if str(signal.get("symbol") or "") == "XAUUSD" else None
-            try:
-                message = await channel.send(
-                    embed=_signal_embed(
-                        signal,
-                        spot_quote=signal_spot,
-                        paper_position=paper_position,
-                        pip_size=settings.paper_xau_pip_size,
-                        timezone_name=settings.display_timezone,
-                            broker_state=broker_state,
-                    )
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                logger.exception("Failed publishing internal signal %s", signal_id)
+                logger.exception("MT5 signal card sync failed signal=%s", signal_id)
                 break
-
-            fingerprint = _signal_fingerprint(signal, signal_spot, paper_position)
-            if broker_state is not None:
-                fingerprint += "|" + json.dumps(broker_state, sort_keys=True)
-            messages[signal_id] = {"message_id": message.id, "fingerprint": fingerprint}
-            watermark = opened_at
-            registry["watermark"] = watermark
+            messages[signal_id] = {"message_id": msg.id, "fingerprint": fingerprint}
+            if str(signal.get("opened_at") or "") > watermark:
+                watermark = str(signal["opened_at"])
+                registry["watermark"] = watermark
             changed = True
-            logger.info(
-                "Published internal signal signal_id=%s channel=%s message=%s",
-                signal_id,
-                channel_id,
-                message.id,
-            )
-
-        if changed:
             _write_json(settings.discord_internal_signals_state_path, registry)
+        if changed:
+            logger.info("MT5 broker signal cards synchronized")
+
+    async def update_weekly_record() -> None:
+        if not weekly_channel_id:
+            return
+        snapshot = _load_json(mt5_snapshot)
+        if not snapshot:
+            return
+        now = datetime.now(UTC)
+        state = _load_json(weekly_state_path)
+        close = close_time(now)
+        week_key = close.astimezone(ZoneInfo("Europe/Isle_of_Man")).strftime("%Y-%m-%d")
+        # Remember the opening observation for the next week's reporting;
+        # do not claim a fabricated starting balance if it was missed.
+        current_monday = (now.astimezone(ZoneInfo("Europe/Isle_of_Man")) -
+                          __import__("datetime").timedelta(days=now.astimezone(ZoneInfo("Europe/Isle_of_Man")).weekday())).date().isoformat()
+        opening = state.setdefault("openings", {})
+        if current_monday not in opening:
+            opening[current_monday] = float(snapshot.get("balance", 0))
+            _write_json(weekly_state_path, state)
+        if not record_due(now):
+            return
+        if week_key in state.get("published", {}):
+            return
+        monday = (close.astimezone(ZoneInfo("Europe/Isle_of_Man")) -
+                  __import__("datetime").timedelta(days=4)).date().isoformat()
+        try:
+            record = weekly_record(
+                snapshot, now=now, pip_size=mt5_pip_size,
+                starting_balance=opening.get(monday),
+            )
+        except (ValueError, TypeError, KeyError):
+            logger.warning("Weekly report awaiting broker snapshot near Friday close")
+            return
+        start = record["starting_balance"]
+        start_text = f"£{start:,.2f} (first recorded balance this week)" if start is not None else "Not recorded"
+        embed = discord.Embed(
+            title=f"DK Capital | Weekly Record | {week_key}",
+            description="MT5 broker-confirmed XAUUSD demo performance",
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="Starting balance", value=start_text, inline=False)
+        embed.add_field(name="Ending balance", value=f"£{record['ending_balance']:,.2f}", inline=True)
+        embed.add_field(name="Weekly P&L", value=f"£{record['realized_pnl']:+,.2f}", inline=True)
+        embed.add_field(name="Weekly pips", value=f"{record['weekly_pips']:+,.1f} (once per signal)", inline=False)
+        embed.add_field(name="Trades taken", value=str(record["trades_taken"]), inline=True)
+        embed.add_field(name="Signals with exits", value=str(record["closed_signals"]), inline=True)
+        embed.set_footer(text="Broker deals only | Friday 17:00 New York market close | GBP")
+        channel = bot.get_channel(weekly_channel_id) or await bot.fetch_channel(weekly_channel_id)
+        message = await channel.send(embed=embed)
+        state.setdefault("published", {})[week_key] = message.id
+        _write_json(weekly_state_path, state)
+
+    @tasks.loop(minutes=1)
+    async def weekly_record_loop() -> None:
+        try:
+            await update_weekly_record()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException, OSError):
+            logger.exception("Weekly record publication failed")
+
+    @weekly_record_loop.before_loop
+    async def before_weekly_record_loop() -> None:
+        await bot.wait_until_ready()
+
+    @tasks.loop(seconds=5)
+    async def telegram_mirror_loop() -> None:
+        if telegram_mirror_channel_id:
+            try:
+                await sync_mirror(
+                    bot, channel_id=telegram_mirror_channel_id,
+                    event_log=settings.telegram_event_log_path,
+                    state_path=telegram_mirror_state_path,
+                )
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException, OSError):
+                logger.exception("Telegram to Discord mirror failed")
+
+    @telegram_mirror_loop.before_loop
+    async def before_telegram_mirror_loop() -> None:
+        await bot.wait_until_ready()
 
     @tasks.loop(minutes=1)
     async def internal_signal_loop() -> None:
@@ -1570,6 +1529,10 @@ def build_bot(settings: Settings) -> commands.Bot:
             paper_dashboard_loop.start()
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
+        if weekly_channel_id and not weekly_record_loop.is_running():
+            weekly_record_loop.start()
+        if telegram_mirror_channel_id and not telegram_mirror_loop.is_running():
+            telegram_mirror_loop.start()
 
     @bot.tree.command(name="ping", description="Check whether the DK Capital bot is online.")
     async def ping(interaction: discord.Interaction) -> None:

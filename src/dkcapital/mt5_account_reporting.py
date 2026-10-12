@@ -137,8 +137,10 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         by_position[d["position_id"]].append(d)
         if d["entry_type"] == "IN":
             group_total_lots[d["group"]] += d["lots"]
-    today_cash = weekly_cash = weekly_pips = 0.0
+    today_cash = weekly_cash = 0.0
     weekly_closes = 0
+    # Treat the three MT5 legs as one provider signal, not three trades.
+    group_exits: dict[int, list[tuple[float, float, float]]] = defaultdict(list)
     for position_deals in by_position.values():
         entry_deals = [d for d in position_deals if d["entry_type"] == "IN"]
         opened_volume = sum(d["lots"] for d in entry_deals)
@@ -159,13 +161,18 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
                 today_cash += cash
             if d["entry_type"] != "OUT" or ts < week_start:
                 continue
-            group_initial = group_total_lots.get(d["group"], 0)
-            if group_initial > 0:
-                weekly_pips += (
-                    d["lots"] / group_initial *
-                    (d["price"] - entry_price) * direction / pip_size
-                )
+            group_exits[d["group"]].append((
+                d["lots"], (d["price"] - entry_price) * direction / pip_size,
+                entry_price,
+            ))
             weekly_closes += 1
+    # Each signal contributes one volume-averaged price move, independent of
+    # how many TP legs or partial-close deals MT5 produced.
+    weekly_pips = sum(
+        sum(lots * pips for lots, pips, _ in exits) /
+        sum(lots for lots, _, _ in exits)
+        for exits in group_exits.values() if sum(lots for lots, _, _ in exits) > 0
+    )
     positions = []
     groups: dict[int, float] = defaultdict(float)
     risk_unknown = False
@@ -189,7 +196,7 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         "today_realized_gbp": round(today_cash, 2),
         "week_realized_gbp": round(weekly_cash, 2),
         "week_realized_pips": round(weekly_pips, 1),
-        "week_closed_legs": weekly_closes, "pip_size": pip_size,
+        "week_closed_legs": weekly_closes, "week_closed_signals": len(group_exits), "pip_size": pip_size,
         "positions": positions,
         "feed_http": snapshot.get("feed_http", 0),
         "entry_enabled": snapshot.get("entry_enabled", False),
