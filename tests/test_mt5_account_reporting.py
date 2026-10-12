@@ -140,6 +140,25 @@ class GatewayTelemetryTests(unittest.TestCase):
         with self.call("/v2/demo/account1") as r:
             self.assertEqual(json.load(r)["login"], LOGIN)
 
+    def test_feed_encodes_layer_permission_as_nonexecuting_instruction(self):
+        self.path.write_text(json.dumps({"signals": [{
+            "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "status": "ACTIVE", "direction": "BUY",
+            "entry_low": 4150, "entry_high": 4153,
+            "current_sl": 4140, "sl_mode": "PRICE",
+            "tps": {"1": 4160}, "layer_max": 4145,
+            "opened_at": datetime.now(UTC).isoformat(),
+            "history": [
+                {"kind": "opened", "message_id": 222},
+                {"kind": "trade_update", "message_id": 223, "layer_max": 4145},
+                {"kind": "add_layer", "message_id": 224},
+            ],
+        }]}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        self.assertIn("L|-10011:222|224|10|3|4145", lines)
+        self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
+
     def test_feed_exposes_only_explicit_provider_close(self):
         self.path.write_text(json.dumps({"signals":[{
             "symbol":"XAUUSD","signal_id":"-10011:222","status":"COMPLETED",
