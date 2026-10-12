@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.01"
+#property version "2.02"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -23,6 +23,8 @@ input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
 input int DeviationPoints = 35;
+input bool EnableProviderLayers = false; // DEMO-only: enable after MetaEditor and broker verification.
+input bool EnableProviderStopAmendments = false; // Explicit wider SL changes require separate broker acceptance.
 
 CTrade trade;
 bool in_cycle = false;
@@ -43,8 +45,8 @@ ulong GroupBase(const string id) { return MAGIC_BASE + (ulong)Hash(id)*10; }
 ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
-   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+3 &&
-          magic%10>=1 && magic%10<=3;
+   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+6 &&
+          magic%10>=1 && magic%10<=6;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
@@ -246,16 +248,17 @@ bool CloseTicket(ulong ticket)
 bool CloseGroup(const string id)
 {
    bool ok=true;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket>0 && !CloseTicket(ticket)) ok=false;
    }
    return ok;
 }
-bool TP1BrokerConfirmed(const string id)
+bool TPLegBrokerConfirmed(const string id,int leg)
 {
-   ulong magic=LegMagic(id,1);
+   if(leg<1 || leg>3) return false;
+   ulong magic=LegMagic(id,leg);
    if(TicketForLeg(id,1)>0) return false;
    if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return false;
    ulong openedId=0;
@@ -280,14 +283,86 @@ bool TP1BrokerConfirmed(const string id)
    }
    return false;
 }
+
+bool SafeStopBudget(const string id,const ulong ticket,bool buy,double candidate)
+{
+   if(!PositionSelectByTicket(ticket)) return false;
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q) || !StopValid(buy,candidate,q)) return false;
+   double oldRisk=PositionRiskGBP();
+   double newRisk=RiskGBP(buy,PositionGetDouble(POSITION_VOLUME),
+                          PositionGetDouble(POSITION_PRICE_OPEN),candidate);
+   if(oldRisk<0 || newRisk<0) return false;
+   double portfolio=0,groupRisk=0;int groups=0;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return false;
+   return portfolio-oldRisk+newRisk<=MaxPortfolioRiskGBP+1e-7 &&
+          groupRisk-oldRisk+newRisk<=MaxGroupRiskGBP+1e-7;
+}
+bool ApplyProviderStop(const string id,long mid,double candidate,long instructionTime)
+{
+   if(!EnableProviderStopAmendments || mid<=0 || !DemoIdentity() || !TradeAllowed()) return false;
+   long age=(long)TimeGMT()-instructionTime;
+   if(age<0 || age>MaximumSignalAgeSeconds) return false;
+   string key=IDKey(id,"STOP_MSG_"+IntegerToString(mid));
+   if(GlobalVariableCheck(key)) return true;
+   double delta=0,group=0,portfolio=0;int groups=0;
+   if(!Exposure(portfolio,group,GroupBase(id),groups)) return false;
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q)) return false;
+   int matched=0;
+   for(int leg=1;leg<=6;leg++)
+   {
+      ulong t=TicketForLeg(id,leg);
+      if(t==0 || !PositionSelectByTicket(t)) continue;
+      matched++;
+      bool buy=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY;
+      if(!StopValid(buy,candidate,q)) return false;
+      double previous=PositionRiskGBP();
+      double next=RiskGBP(buy,PositionGetDouble(POSITION_VOLUME),
+                          PositionGetDouble(POSITION_PRICE_OPEN),candidate);
+      if(previous<0 || next<0) return false;
+      delta+=next-previous;
+   }
+   if(matched==0 || portfolio+delta>MaxPortfolioRiskGBP+1e-7 ||
+      group+delta>MaxGroupRiskGBP+1e-7)
+   {
+      Print("DK2 PROVIDER SL BLOCK: group/portfolio risk id=",id,
+            " SL=",candidate);
+      return false;
+   }
+   bool applied=true;
+   for(int leg=1;leg<=6;leg++)
+   {
+      ulong t=TicketForLeg(id,leg);
+      if(t==0 || !PositionSelectByTicket(t)) continue;
+      double current=PositionGetDouble(POSITION_SL);
+      if(MathAbs(current-candidate)<SymbolInfoDouble(GoldSymbol,SYMBOL_POINT)*0.5)
+         continue;
+      trade.SetExpertMagicNumber(LegMagic(id,leg));
+      if(!trade.PositionModify(t,NormalizePrice(candidate),
+                               PositionGetDouble(POSITION_TP)) || !BrokerDone())
+      {applied=false;Print("DK2 PROVIDER SL ALERT modify failed ticket=",t);}
+   }
+   if(applied)
+   {
+      GlobalVariableSet(IDKey(id,"PROVIDER_SL_OVERRIDE"),candidate);
+      GlobalVariableSet(key,1);
+      GlobalVariablesFlush();
+      Print("DK2 provider SL confirmed id=",id," price=",candidate);
+   }
+   return applied;
+}
 void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3)
 {
    bool buy=direction=="BUY";
-   bool tp1Confirmed=TP1BrokerConfirmed(id);
+   bool tp1Confirmed=TPLegBrokerConfirmed(id,1);
+   double providerOverride=0;
+   if(GlobalVariableCheck(IDKey(id,"PROVIDER_SL_OVERRIDE")))
+      providerOverride=GlobalVariableGet(IDKey(id,"PROVIDER_SL_OVERRIDE"));
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
@@ -304,6 +379,7 @@ void ManageLegs(const string id,const string direction,const double stop,
       else if(BetterStop(buy,stop,wantedSL) && StopValid(buy,stop,quote))
          wantedSL=NormalizePrice(stop);
       double rawTP=leg==1?tp1:(leg==2?tp2:tp3);
+       if(leg>=4) rawTP=TPLegBrokerConfirmed(id,2)?tp3:(tp1Confirmed?tp2:tp1);
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -420,6 +496,125 @@ void TryEntry(const string id,const string status,const string direction,
    }
    else Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
 }
+bool LayerSlotUsed(const string id,int leg)
+{
+   if(leg<4 || leg>6) return true;
+   if(GlobalVariableCheck(IDKey(id,"LAYER_SLOT_"+IntegerToString(leg))) ||
+      TicketForLeg(id,leg)>0) return true;
+   if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return true;
+   ulong magic=LegMagic(id,leg);
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+      ulong d=HistoryDealGetTicket(i);
+      if((ulong)HistoryDealGetInteger(d,DEAL_MAGIC)==magic &&
+         HistoryDealGetInteger(d,DEAL_ENTRY)==DEAL_ENTRY_IN) return true;
+   }
+   return false;
+}
+bool LayerGroupCapacity(const string groupIds,double planned)
+{
+   string ids[];
+   int n=StringSplit(groupIds,',',ids);
+   if(n<1 || n>20) return false;
+   double groupRisk=0;
+   int slotsUsed=0;
+   for(int j=0;j<n;j++)
+   {
+      if(StringLen(ids[j])<3) return false;
+      for(int leg=4;leg<=6;leg++)
+         if(LayerSlotUsed(ids[j],leg)) slotsUsed++;
+      ulong root=GroupBase(ids[j]);
+      for(int p=PositionsTotal()-1;p>=0;p--)
+      {
+         ulong t=PositionGetTicket(p);
+         if(t<=0 || PositionGetString(POSITION_SYMBOL)!=GoldSymbol) continue;
+         ulong magic=(ulong)PositionGetInteger(POSITION_MAGIC);
+         if(magic-magic%10!=root) continue;
+         double risk=PositionRiskGBP();
+         if(risk<0) return false;
+         groupRisk+=risk;
+      }
+   }
+   return slotsUsed<3 && groupRisk+planned<=MaxGroupRiskGBP+1e-7;
+}
+double InitialLots(const string id)
+{
+   ulong root=GroupBase(id);double total=0;
+   if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return 0;
+   for(int i=0;i<HistoryDealsTotal();i++)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
+      if(magic>=root+1 && magic<=root+3 &&
+         HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+         total+=HistoryDealGetDouble(deal,DEAL_VOLUME);
+   }
+   return total;
+}
+void TryLayer(const string id,long mid,const string status,const string direction,
+              double sl,const string slMode,double t1,double t2,double t3,
+              double limit,long instructionTime,const string groupIds)
+{
+   if(!EnableProviderLayers || !EnableNewEntries || !TradeAllowed() ||
+      status!="ACTIVE" || mid<=0 || slMode!="PRICE") return;
+   long age=(long)TimeGMT()-instructionTime;
+   if(age<0 || age>MaximumSignalAgeSeconds) return;
+   bool buy=direction=="BUY";
+   if(!buy && direction!="SELL") return;
+   string dedup=IDKey(id,"LAYER_MSG_"+IntegerToString(mid));
+   if(GlobalVariableCheck(dedup)) return;
+   double original=InitialLots(id);
+   if(original<=0) return;
+   bool originalStillOpen=false;
+   for(int leg=1;leg<=3;leg++)
+      if(TicketForLeg(id,leg)>0) originalStillOpen=true;
+   if(!originalStillOpen) return; // Do not resurrect a previously closed signal.
+   MqlTick q;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0 ||
+      q.ask-q.bid>MaxSpreadUSD ||
+      (long)TimeTradeServer()-(long)q.time>30) return;
+   double fill=buy?q.ask:q.bid;
+   if(limit>0 && (buy ? fill<limit : fill>limit)) return;
+   if(!StopValid(buy,sl,q)) return;
+   double lots=FloorLots(original*0.10);
+   if(lots<LotMin()) lots=LotMin();
+   if(lots>original*0.10+LotStep()+1e-7) return;
+   double portfolio=0,groupRisk=0;
+   int groups=0;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
+   double planned=RiskGBP(buy,lots,fill,sl);
+   if(planned<0 || planned>MaxGroupRiskGBP-groupRisk ||
+      planned>MaxPortfolioRiskGBP-portfolio ||
+      !LayerGroupCapacity(groupIds,planned)) return;
+   double margin=0;
+   if(!OrderCalcMargin(buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,GoldSymbol,lots,fill,margin)
+      || margin<0 || AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
+   int slot=0;
+   for(int leg=4;leg<=6;leg++)
+      if(!LayerSlotUsed(id,leg))
+      {slot=leg;break;}
+   if(slot==0) return;
+   if(TPLegBrokerConfirmed(id,3)) return;
+   double nextTarget=TPLegBrokerConfirmed(id,2)?t3:(TPLegBrokerConfirmed(id,1)?t2:t1);
+   double target=ValidTP(buy,nextTarget,q);
+   if(target<=0) return;
+   // Durable reservation before order placement prevents restart duplicates.
+   GlobalVariableSet(IDKey(id,"LAYER_SLOT_"+IntegerToString(slot)),mid);
+   GlobalVariableSet(dedup,1);
+   GlobalVariablesFlush();
+   trade.SetExpertMagicNumber(LegMagic(id,slot));
+   bool sent=buy?trade.Buy(lots,GoldSymbol,0,NormalizePrice(sl),target,"DK2 layer"):
+                 trade.Sell(lots,GoldSymbol,0,NormalizePrice(sl),target,"DK2 layer");
+   ulong ticket=TicketForLeg(id,slot);
+   if(!sent || !BrokerDone() || ticket==0 || !PositionSelectByTicket(ticket)
+      || PositionGetDouble(POSITION_SL)<=0)
+   {
+      Print("DK2 LAYER ALERT confirm failed id=",id," mid=",mid,
+            " retcode=",trade.ResultRetcode());
+      return;
+   }
+   Print("DK2 layer confirmed id=",id," slot=",slot," lots=",lots);
+}
 bool ActionKeySeen(const string id,const long mid,const string kind)
 {
    string k=IDKey(id,kind+"_"+IntegerToString(mid));
@@ -441,7 +636,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
    // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -458,7 +653,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    }
    double target=GlobalVariableGet(targetKey);
    double needed=FloorLots(total-target);
-   for(int leg=3;leg>=1 && needed>=LotMin()-1e-8;leg--)
+   for(int leg=6;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
       ulong t=TicketForLeg(id,leg);
       if(t==0 || !PositionSelectByTicket(t)) continue;
@@ -473,7 +668,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       needed=FloorLots(needed-part);
    }
    double current=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=6;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -604,6 +799,9 @@ void ProcessFeed(const string content)
    int count=StringSplit(content,'\n',lines);
    if(count<1 || StringFind(lines[0],"DKDEMO2")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
+   string ids[],statuses[],directions[],modes[];
+   double stops[],t1s[],t2s[],t3s[];
+   long openedTimes[];
    for(int i=1;i<count;i++)
    {
       string f[];StringTrimLeft(lines[i]);StringTrimRight(lines[i]);
@@ -619,6 +817,29 @@ void ProcessFeed(const string content)
             StringToDouble(f[9]),StringToDouble(f[10]));
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
             StringToDouble(f[8]),StringToDouble(f[9]),StringToDouble(f[10]));
+         int n=ArraySize(ids);
+         ArrayResize(ids,n+1);ArrayResize(statuses,n+1);
+         ArrayResize(directions,n+1);ArrayResize(modes,n+1);
+         ArrayResize(stops,n+1);ArrayResize(t1s,n+1);
+         ArrayResize(t2s,n+1);ArrayResize(t3s,n+1);ArrayResize(openedTimes,n+1);
+         ids[n]=f[1];statuses[n]=f[2];directions[n]=f[3];modes[n]=f[7];
+         stops[n]=StringToDouble(f[6]);t1s[n]=StringToDouble(f[8]);
+         t2s[n]=StringToDouble(f[9]);t3s[n]=StringToDouble(f[10]);
+         openedTimes[n]=(long)StringToInteger(f[11]);
+      }
+      else if(fields==5 && f[0]=="W")
+         ApplyProviderStop(f[1],(long)StringToInteger(f[2]),
+                           StringToDouble(f[3]),(long)StringToInteger(f[4]));
+      else if(fields==8 && f[0]=="L" && f[3]=="10" && f[4]=="3")
+      {
+         for(int j=0;j<ArraySize(ids);j++)
+            if(ids[j]==f[1])
+            {
+               TryLayer(f[1],(long)StringToInteger(f[2]),statuses[j],
+                        directions[j],stops[j],modes[j],t1s[j],t2s[j],t3s[j],
+                        StringToDouble(f[5]),(long)StringToInteger(f[6]),f[7]);
+               break;
+            }
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));

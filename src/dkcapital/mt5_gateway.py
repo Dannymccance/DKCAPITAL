@@ -175,6 +175,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             return
         state = _json(self.config.signal_state_path)
         lines = ["DKDEMO2"]
+        layer_messages_by_group: dict[str, set[int]] = {}
         for signal in state.get("signals", []):
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
                 continue
@@ -208,7 +209,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 str(int(opened.timestamp())),
             ]))
             for action in signal.get("history", []):
-                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer"):
+                if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer", "trade_update"):
                     continue
                 mid = action.get("message_id")
                 try:
@@ -220,12 +221,38 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                         continue
                 except (ValueError, TypeError):
                     continue
-                if action["kind"] == "add_layer":
-                    # Observation-only: an EA change is needed to account for
-                    # additional positions in native SL, close and telemetry paths.
+                if action["kind"] == "trade_update":
+                    if action.get("sl_after") is None:
+                        continue
+                    changed_sl = float(action["sl_after"])
+                    if not __import__("math").isfinite(changed_sl) or changed_sl <= 0:
+                        continue
+                    lines.append("|".join([
+                        "W", ident, str(mid), str(changed_sl),
+                        str(int(datetime.fromisoformat(str(action["timestamp"]).replace("Z", "+00:00")).timestamp())),
+                    ]))
+                elif action["kind"] == "add_layer":
+                    # Group-wide dedup: a BOTH / ADDING instruction may appear
+                    # in several sibling signals, but may authorize only one layer.
+                    group_id = str(signal.get("group_id") or ident)
+                    seen = layer_messages_by_group.setdefault(group_id, set())
+                    if mid in seen or len(seen) >= 3:
+                        continue
+                    seen.add(mid)
+                    members = sorted({
+                        str(member.get("signal_id"))
+                        for member in state.get("signals", [])
+                        if isinstance(member, dict) and member.get("symbol") == "XAUUSD"
+                        and str(member.get("group_id") or member.get("signal_id")) == group_id
+                        and re.fullmatch(r"[-0-9:]{1,64}", str(member.get("signal_id") or ""))
+                    })
+                    if not members or len(members) > 20:
+                        continue
                     lines.append("|".join([
                         "L", ident, str(mid), "10", "3",
                         str(signal.get("layer_max") or 0),
+                        str(int(datetime.fromisoformat(str(action["timestamp"]).replace("Z", "+00:00")).timestamp())),
+                        ",".join(members),
                     ]))
                 else:
                     lines.append("|".join(["A", ident, str(mid),

@@ -79,6 +79,25 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
         self.assertEqual(result["positions"][0]["floating_pips"], 100.0)
 
+    def test_layer_broker_position_and_deal_count_in_risk(self):
+        data = example()
+        layer_magic = MAGIC + 4
+        data["positions"].append({
+            "ticket": 5, "magic": layer_magic, "side": "BUY",
+            "lots": 0.01, "entry": 4099, "sl": 4090, "tp": 4105,
+            "profit": 1.0, "swap": 0.0, "risk_gbp": 3.5,
+        })
+        data["deals"].append({
+            "ticket": 105, "position_id": 15, "magic": layer_magic,
+            "entry_type": "IN", "side": "BUY", "lots": 0.01,
+            "price": 4099, "profit": 0, "commission": -0.05,
+            "swap": 0, "time": datetime.now(UTC).isoformat(),
+        })
+        result = summarize(normalize_telemetry(data, LOGIN))
+        self.assertEqual(len(result["positions"]), 2)
+        self.assertEqual(result["portfolio_risk_gbp"], 5.0)
+        self.assertEqual(result["week_closed_signals"], 1)
+
     def test_missing_stop_marked_unknown(self):
         data = example()
         data["positions"][0]["sl"] = 0
@@ -151,13 +170,56 @@ class GatewayTelemetryTests(unittest.TestCase):
             "history": [
                 {"kind": "opened", "message_id": 222},
                 {"kind": "trade_update", "message_id": 223, "layer_max": 4145},
-                {"kind": "add_layer", "message_id": 224},
+                {"kind": "add_layer", "message_id": 224, "timestamp": datetime.now(UTC).isoformat()},
             ],
         }]}))
         with self.call("/v2/demo/feed") as response:
             lines = response.read().decode().splitlines()
-        self.assertIn("L|-10011:222|224|10|3|4145", lines)
+        self.assertTrue(any(line.startswith("L|-10011:222|224|10|3|4145|") and line.endswith("|-10011:222") for line in lines))
         self.assertFalse(any(line.startswith("A|-10011:222|224|") for line in lines))
+
+    def test_one_layer_instruction_per_provider_group(self):
+        stamp = datetime.now(UTC).isoformat()
+        signals = []
+        for index in (10, 11):
+            signals.append({
+                "symbol": "XAUUSD", "signal_id": f"-10011:{index}",
+                "group_id": "-10011:10", "status": "ACTIVE", "direction": "BUY",
+                "entry_low": 4150, "entry_high": 4153,
+                "current_sl": 4140, "sl_mode": "PRICE",
+                "tps": {"1": 4160}, "layer_max": 4145,
+                "opened_at": stamp,
+                "history": [
+                    {"kind": "opened", "message_id": index},
+                    {"kind": "add_layer", "message_id": 20, "timestamp": stamp},
+                ],
+            })
+        self.path.write_text(json.dumps({"signals": signals}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        layers = [line for line in lines if line.startswith("L|")]
+        self.assertEqual(len(layers), 1)
+        self.assertTrue(layers[0].endswith("|-10011:10,-10011:11"))
+
+    def test_provider_stop_amendment_is_timestamped(self):
+        timestamp = datetime.now(UTC).isoformat()
+        self.path.write_text(json.dumps({"signals": [{
+            "symbol": "XAUUSD", "signal_id": "-10011:222",
+            "status": "ACTIVE", "direction": "BUY",
+            "entry_low": 4150, "entry_high": 4153,
+            "current_sl": 4148.5, "sl_mode": "PRICE",
+            "tps": {"1": 4160}, "layer_max": None,
+            "opened_at": timestamp,
+            "history": [
+                {"kind": "opened", "message_id": 222},
+                {"kind": "trade_update", "message_id": 225,
+                 "timestamp": timestamp, "sl_after": 4148.5},
+            ],
+        }]}))
+        with self.call("/v2/demo/feed") as response:
+            lines = response.read().decode().splitlines()
+        self.assertTrue(any(line.startswith("W|-10011:222|225|4148.5|") for line in lines))
+        self.assertFalse(any(line.startswith("A|-10011:222|225|") for line in lines))
 
     def test_feed_exposes_only_explicit_provider_close(self):
         self.path.write_text(json.dumps({"signals":[{
