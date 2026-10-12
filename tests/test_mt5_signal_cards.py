@@ -40,6 +40,27 @@ class BrokerSignalCardsTest(unittest.TestCase):
         self.assertIn("4168.25", embed.fields[2].value)
         self.assertIn("CLOSED does not imply TP", embed.footer.text)
 
+    def test_optional_layer_appears_only_with_broker_fill(self):
+        state = broker_signal_state(self.signal, self.snapshot)
+        self.assertNotIn(4, state["legs"])
+        self.snapshot["deals"] = [{
+            "ticket": 40, "position_id": 401,
+            "group": self.group, "magic": self.group * 10 + 4,
+            "entry_type": "IN", "lots": 0.01, "price": 4164.25,
+            "profit": 0, "commission": 0, "swap": 0,
+        }]
+        self.snapshot["positions"] = [{
+            "ticket": 401, "group": self.group, "leg": 4,
+            "magic": self.group * 10 + 4, "side": "BUY",
+            "lots": 0.01, "entry": 4164.25, "sl": 4150, "tp": 4175.5,
+        }]
+        state = broker_signal_state(self.signal, self.snapshot)
+        self.assertEqual(state["legs"][4]["status"], "OPEN")
+        self.assertAlmostEqual(state["legs"][4]["entry"], 4164.25)
+        embed = mt5_signal_embed({"direction": "BUY", "source_style": "gws"}, state)
+        self.assertIn("10% layer (TP2)", embed.fields[2].value)
+        self.assertIn("4164.25", embed.fields[2].value)
+
     def test_stale_telemetry_cannot_confirm_fill(self):
         self.snapshot["received_at"] = "2026-01-01T00:00:00Z"
         state = broker_signal_state(self.signal, self.snapshot)
