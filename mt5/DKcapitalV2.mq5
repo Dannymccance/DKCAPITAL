@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.01"
+#property version "2.02"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
