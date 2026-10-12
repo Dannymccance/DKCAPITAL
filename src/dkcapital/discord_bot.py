@@ -17,6 +17,7 @@ from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
+from dkcapital.telegram_discord_mirror import sync_mirror
 
 logger = logging.getLogger("dkcapital.discord")
 
@@ -1154,6 +1155,8 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
     mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
+    telegram_mirror_channel_id = int(os.getenv("DISCORD_TELEGRAM_CHATS_CHANNEL_ID", "0"))
+    telegram_mirror_state_path = Path(os.getenv("TELEGRAM_MIRROR_STATE_PATH", "/app/data/telegram-mirror-state.json"))
 
     async def update_mt5_account1() -> None:
         if not mt5_channel_id and not mt5_alert_id:
@@ -1391,6 +1394,22 @@ def build_bot(settings: Settings) -> commands.Bot:
         if changed:
             logger.info("MT5 broker signal cards synchronized")
 
+    @tasks.loop(seconds=5)
+    async def telegram_mirror_loop() -> None:
+        if telegram_mirror_channel_id:
+            try:
+                await sync_mirror(
+                    bot, channel_id=telegram_mirror_channel_id,
+                    event_log=settings.telegram_event_log_path,
+                    state_path=telegram_mirror_state_path,
+                )
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException, OSError):
+                logger.exception("Telegram to Discord mirror failed")
+
+    @telegram_mirror_loop.before_loop
+    async def before_telegram_mirror_loop() -> None:
+        await bot.wait_until_ready()
+
     @tasks.loop(minutes=1)
     async def internal_signal_loop() -> None:
         await sync_internal_signals()
@@ -1445,6 +1464,8 @@ def build_bot(settings: Settings) -> commands.Bot:
             paper_dashboard_loop.start()
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
+        if telegram_mirror_channel_id and not telegram_mirror_loop.is_running():
+            telegram_mirror_loop.start()
 
     @bot.tree.command(name="ping", description="Check whether the DK Capital bot is online.")
     async def ping(interaction: discord.Interaction) -> None:
