@@ -1075,7 +1075,9 @@ def _signal_embed(
     return embed
 
 
-def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord.Embed:
+def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
+                        telegram_healthy: bool | None = None,
+                        processor_healthy: bool | None = None) -> discord.Embed:
     """Broker-based Account 1 view; never source/provider paper statistics."""
     summary = summarize(snapshot, pip_size=pip_size)
     stale = summary["stale"]
@@ -1091,11 +1093,17 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float) -> discord
         ),
         color=discord.Color.orange() if stale else discord.Color.blue(),
     )
+    def health(value: bool | None, name: str) -> str:
+        return ("🟢" if value is True else ("🔴" if value is False else "⚪")) + " " + name + ": " + (
+            "Healthy" if value is True else ("Unavailable / stale" if value is False else "Not checked")
+        )
     embed.add_field(
         name="Execution status",
         value=("🟢 MT5 telemetry fresh" if not stale else "🔴 MT5 telemetry stale") +
               "\n" + ("🟢 EA ARMED (DEMO)" if summary.get("entry_enabled") else "🔴 EA DISABLED") +
-              "\n" + ("🟢 Instruction feed connected" if summary.get("feed_http") == 200 else "🔴 Instruction feed disconnected"),
+              "\n" + ("🟢 Instruction feed connected" if summary.get("feed_http") == 200 else "🔴 Instruction feed disconnected") +
+              "\n" + health(telegram_healthy, "Telegram listener") +
+              "\n" + health(processor_healthy, "Signal processor"),
         inline=False,
     )
     prefix = "Last known (stale) " if stale else ""
@@ -1221,7 +1229,23 @@ def build_bot(settings: Settings) -> commands.Bot:
 
         if mt5_channel_id and snapshot and summary:
             config = _load_json(mt5_dashboard_config)
-            embed = _mt5_account1_embed(snapshot, pip_size=mt5_pip_size)
+            recovery_state = _load_json(telegram_recovery_status_path)
+            recovery_stamp = _local_datetime(recovery_state.get("checked_at"), "UTC")
+            telegram_ok = (
+                recovery_stamp is not None
+                and (datetime.now(UTC) - recovery_stamp).total_seconds() <= 180
+                and recovery_state.get("healthy") is True
+            )
+            processor_state = _load_json(Path("/app/data/signal-processor-heartbeat.json"))
+            processor_stamp = _local_datetime(processor_state.get("checked_at"), "UTC")
+            processor_ok = (
+                processor_stamp is not None
+                and (datetime.now(UTC) - processor_stamp).total_seconds() <= 90
+            )
+            embed = _mt5_account1_embed(
+                snapshot, pip_size=mt5_pip_size,
+                telegram_healthy=telegram_ok, processor_healthy=processor_ok,
+            )
             try:
                 channel = bot.get_channel(mt5_channel_id) or await bot.fetch_channel(mt5_channel_id)
                 message_id = config.get("message_id")
