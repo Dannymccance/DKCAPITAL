@@ -24,6 +24,7 @@ input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
 input int DeviationPoints = 35;
 input bool EnableProviderLayers = false; // DEMO-only: enable after MetaEditor and broker verification.
+input bool EnableProviderStopAmendments = false; // Explicit wider SL changes require separate broker acceptance.
 
 CTrade trade;
 bool in_cycle = false;
@@ -298,7 +299,7 @@ bool SafeStopBudget(const string id,const ulong ticket,bool buy,double candidate
 }
 bool ApplyProviderStop(const string id,long mid,double candidate,long instructionTime)
 {
-   if(mid<=0 || !DemoIdentity() || !TradeAllowed()) return false;
+   if(!EnableProviderStopAmendments || mid<=0 || !DemoIdentity() || !TradeAllowed()) return false;
    long age=(long)TimeGMT()-instructionTime;
    if(age<0 || age>MaximumSignalAgeSeconds) return false;
    string key=IDKey(id,"STOP_MSG_"+IntegerToString(mid));
