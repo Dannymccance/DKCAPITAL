@@ -12,6 +12,7 @@ input string FeedToken = "";
 input string GoldSymbol = "XAUUSD";
 input long ExpectedDemoLogin = 0;
 input bool EnableNewEntries = false; // MUST remain false until accepted on demo.
+input bool EnableLayerEntries = false; // Separate opt-in after broker-side layer tests.
 input double MaxGroupRiskGBP = 75.0;
 input double MaxPortfolioRiskGBP = 150.0;
 input double RiskPaddingGBPPerLeg = 1.0;
@@ -447,19 +448,38 @@ double OriginalVolume(const string id)
    return total;
 }
 // Broker history preserves the one-layer rule if terminal globals are lost.
+string LayerMarker(const string groupId)
+{
+   return "DK2L"+IntegerToString((long)Hash(groupId));
+}
 bool LayerPreviouslyAttempted(const string id,const string groupId)
 {
    // Limit additions across all original signals in the same GWS group.
    if(GlobalVariableCheck(IDKey(groupId,"GROUP_LAYER_ATTEMPT"))) return true;
    if(GlobalVariableCheck(IDKey(id,"LAYER_ATTEMPT"))) return true;
    if(TicketForLeg(id,LAYER_LEG)>0) return true;
+   // Broker history/order comments also deduplicate sibling signals if a
+   // terminal's global-variable store is lost.
+   string marker=LayerMarker(groupId);
+   for(int p=PositionsTotal()-1;p>=0;p--)
+   {
+      ulong position=PositionGetTicket(p);
+      if(position==0) continue;
+      ulong m=(ulong)PositionGetInteger(POSITION_MAGIC);
+      if(Owned(m) && m%10==LAYER_LEG &&
+         StringFind(PositionGetString(POSITION_COMMENT),marker)>=0) return true;
+   }
    if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return true;
    ulong magic=LegMagic(id,LAYER_LEG);
    for(int i=HistoryDealsTotal()-1;i>=0;i--)
    {
       ulong deal=HistoryDealGetTicket(i);
-      if((ulong)HistoryDealGetInteger(deal,DEAL_MAGIC)==magic &&
-         HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN) return true;
+      if(HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
+      ulong m=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
+      if((m==magic) ||
+         (Owned(m) && m%10==LAYER_LEG &&
+          StringFind(HistoryDealGetString(deal,DEAL_COMMENT),marker)>=0))
+         return true;
    }
    return false;
 }
@@ -470,7 +490,7 @@ void TryLayer(const string id,const long mid,const double percentage,
               const string groupId,const string status,const string direction,
               const double tp2)
 {
-   if(!EnableNewEntries || !TradeAllowed() || status!="ACTIVE" ||
+   if(!EnableNewEntries || !EnableLayerEntries || !TradeAllowed() || status!="ACTIVE" ||
       mid<=0 || maximum!=1 || MathAbs(percentage-10.0)>1e-8 ||
       groupId=="" || (direction!="BUY" && direction!="SELL")) return;
    long age=(long)TimeGMT()-sentAt;
@@ -533,9 +553,9 @@ void TryLayer(const string id,const long mid,const double percentage,
    trade.SetExpertMagicNumber(LegMagic(id,LAYER_LEG));
    bool submitted=buy?
       trade.Buy(layerLots,GoldSymbol,0,NormalizePrice(protectiveSL),target,
-                "DK2 10pct layer"):
+                LayerMarker(groupId)):
       trade.Sell(layerLots,GoldSymbol,0,NormalizePrice(protectiveSL),target,
-                 "DK2 10pct layer");
+                 LayerMarker(groupId));
    ulong ticket=TicketForLeg(id,LAYER_LEG);
    if(!submitted || !BrokerDone() || ticket==0 ||
       !PositionSelectByTicket(ticket) ||
