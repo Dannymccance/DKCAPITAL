@@ -14,19 +14,48 @@ logger = logging.getLogger("dkcapital.telegram_mirror")
 
 
 def format_message(event: dict) -> str:
-    source = str(event.get("chat_id") or "unknown")
-    message = str(event.get("message_id") or "unknown")
-    text = str(event.get("text") or "")
-    media = event.get("media_type")
-    if not text:
-        text = "[Media attachment]" if event.get("has_media") else "[Empty message]"
-    if media:
-        text += f"\n[Telegram media: {media}; not copied]"
-    heading = f"**Telegram {source} | message {message}**"
-    if event.get("reply_to_message_id"):
-        heading += f" | reply to {event['reply_to_message_id']}"
-    return (heading + "\n" + text)[:2000]
+    """Concise fallback content, retained for existing consumers."""
+    return str(event.get("text") or "[Empty Telegram message]")
 
+
+def message_embed(event: dict) -> discord.Embed:
+    """A legible, timestamped source-message view without invented attribution."""
+    from datetime import datetime
+
+    source = str(event.get("chat_title") or f"Telegram {event.get('chat_id')}")
+    author = str(event.get("sender_name") or
+                 (f"Telegram user {event['sender_id']}" if event.get("sender_id") else "Channel post (author not provided)"))
+    raw = str(event.get("text") or "")
+    if not raw:
+        raw = "[Media attached]" if event.get("has_media") else "[Empty message]"
+    # A Telegram text message's 4096-character limit fits in one Discord embed.
+    embed = discord.Embed(
+        title=source[:256],
+        description=raw[:4096],
+        color=discord.Color.blue(),
+    )
+    embed.add_field(name="Author", value=author[:1024], inline=True)
+    stamp = event.get("date")
+    if stamp:
+        try:
+            timestamp = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            if timestamp.tzinfo:
+                embed.timestamp = timestamp
+                embed.add_field(name="Sent", value=f"<t:{int(timestamp.timestamp())}:F>", inline=True)
+        except (TypeError, ValueError):
+            embed.add_field(name="Sent", value=str(stamp)[:1024], inline=True)
+    if event.get("edit_date"):
+        try:
+            edited = datetime.fromisoformat(str(event["edit_date"]).replace("Z", "+00:00"))
+            embed.add_field(name="Edited", value=f"<t:{int(edited.timestamp())}:F>", inline=False)
+        except (TypeError, ValueError):
+            embed.add_field(name="Edited", value=str(event["edit_date"])[:1024], inline=False)
+    if event.get("reply_to_message_id"):
+        embed.add_field(name="Reply to Telegram message", value=str(event["reply_to_message_id"]), inline=True)
+    if event.get("has_media"):
+        embed.add_field(name="Attachment", value=f"{event.get('media_type') or 'Telegram media'} (file not mirrored yet)", inline=False)
+    embed.set_footer(text=f"Telegram chat {event.get('chat_id')} | message {event.get('message_id')}")
+    return embed
 
 async def sync_mirror(bot: discord.Client, *, channel_id: int,
                       event_log: Path, state_path: Path) -> None:
@@ -81,13 +110,13 @@ async def sync_mirror(bot: discord.Client, *, channel_id: int,
                                 pass
                             messages.pop(key, None)
                     elif kind in ("new_message", "message_edited"):
-                        body = format_message(event)
+                        embed = message_embed(event)
                         if original:
                             try:
                                 posted = await channel.fetch_message(int(original))
-                                await posted.edit(content=body, allowed_mentions=discord.AllowedMentions.none())
+                                await posted.edit(content=None, embed=embed, allowed_mentions=discord.AllowedMentions.none())
                             except discord.NotFound:
-                                posted = await channel.send(body, allowed_mentions=discord.AllowedMentions.none())
+                                posted = await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
                                 messages[key] = posted.id
                         else:
                             posted = await channel.send(body, allowed_mentions=discord.AllowedMentions.none())
