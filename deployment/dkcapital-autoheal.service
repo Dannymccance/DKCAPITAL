@@ -1,0 +1,10 @@
+[Unit]
+Description=DK Capital bounded recovery of application containers (never MT5)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/host_autoheal.py --apply
+TimeoutStartSec=120

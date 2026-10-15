@@ -1,0 +1,12 @@
+[Unit]
+Description=Probe DK Capital stalled application services every minute
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=false
+Unit=dkcapital-autoheal.service
+
+[Install]
+WantedBy=timers.target

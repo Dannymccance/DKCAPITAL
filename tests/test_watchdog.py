@@ -58,6 +58,28 @@ class WatchdogHealthTests(unittest.TestCase):
         self.assertIn("MT5_ACCOUNT1_NOT_ARMED", problems)
         self.assertIn("MT5_ACCOUNT1_FEED_NOT_HTTP200", problems)
 
+    def test_processor_heartbeat_fresh_but_events_backlogged(self):
+        import os
+        events_path = self.root / "telegram-events.jsonl"
+        events_path.write_text('{"event_type":"new_message"}\n')
+        old_mtime = (self.now - timedelta(minutes=3)).timestamp()
+        os.utime(events_path, (old_mtime, old_mtime))
+        self._write("signal-processor-heartbeat.json", {
+            "checked_at": self.now.isoformat(), "event_log_offset": 0,
+        })
+        self.assertIn(
+            "SIGNAL_PROCESSOR_EVENT_BACKLOG",
+            check_health(self.root, self.now, True),
+        )
+        self._write("signal-processor-heartbeat.json", {
+            "checked_at": self.now.isoformat(),
+            "event_log_offset": events_path.stat().st_size,
+        })
+        self.assertNotIn(
+            "SIGNAL_PROCESSOR_EVENT_BACKLOG",
+            check_health(self.root, self.now, True),
+        )
+
     def test_missing_listener_and_processor_heartbeats(self):
         (self.root / "telegram-recovery-status.json").unlink()
         (self.root / "signal-processor-heartbeat.json").unlink()
