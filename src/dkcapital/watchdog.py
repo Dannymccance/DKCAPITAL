@@ -62,6 +62,21 @@ def check_health(data_dir: Path, now: datetime, gateway_ok: bool) -> set[str]:
     processor = _read(data_dir / "signal-processor-heartbeat.json")
     if _age_seconds(processor.get("checked_at"), now) > 200:
         problems.add("SIGNAL_PROCESSOR_HEARTBEAT_STALE")
+    else:
+        # A heartbeat alone does not prove that new Telegram events have
+        # been consumed by the processor. Alert if the event log has an
+        # unprocessed suffix which remains unsettled for more than 60s.
+        events_path = data_dir / "telegram-events.jsonl"
+        try:
+            offset = int(processor.get("event_log_offset", -1))
+            if (
+                offset >= 0 and events_path.exists()
+                and events_path.stat().st_size > offset
+                and now.timestamp() - events_path.stat().st_mtime > 60
+            ):
+                problems.add("SIGNAL_PROCESSOR_EVENT_BACKLOG")
+        except (ValueError, TypeError, OSError):
+            pass
     return problems
 
 
