@@ -32,10 +32,22 @@ class V2ProviderStopContract(unittest.TestCase):
     def test_risk_caps_resize_lots_not_stop(self):
         code = SOURCE.read_text(encoding="utf-8")
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
-        self.assertIn("MaxGroupRiskGBP*INITIAL_GROUP_RISK_SHARE-groupRisk", entry)
-        self.assertIn("MaxPortfolioRiskGBP-portfolio", entry)
+        self.assertIn("groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk", entry)
+        self.assertIn("portfolioLimit-portfolio", entry)
         self.assertIn("RiskGBP(buy,a,fill,sl)", entry)
         self.assertIn("FloorLots(total-LotStep())", entry)
+
+    def test_balance_scaled_risk_limits_and_full_broker_snapshot(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("RiskReferenceBalanceGBP = 1000.0", code)
+        self.assertIn("return MathMin(balance,equity);", code)
+        self.assertIn("MaxGroupRiskGBP*RiskBalanceGBP()/RiskReferenceBalanceGBP", code)
+        self.assertIn("MaxPortfolioRiskGBP*RiskBalanceGBP()/RiskReferenceBalanceGBP", code)
+        self.assertIn("MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01", code)
+        self.assertIn("broker_positions_total", code)
+        self.assertIn("broker_orders_total", code)
+        self.assertIn("unmanaged_positions_count", code)
+        self.assertIn("broker_positions_protected", code)
 
     def test_one_layer_native_stop_and_broker_checks(self):
         code = SOURCE.read_text(encoding="utf-8")
@@ -46,9 +58,9 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("LayerPreviouslyAttempted(id,groupId)", layer)
         self.assertIn("MaximumSignalAgeSeconds", layer)
         self.assertIn("StopValid(buy,protectiveSL,q)", layer)
-        self.assertIn("MaxGroupRiskGBP*LAYER_GROUP_RISK_SHARE", layer)
-        self.assertIn("groupRisk+plannedRisk>MaxGroupRiskGBP", layer)
-        self.assertIn("portfolio+plannedRisk>MaxPortfolioRiskGBP", layer)
+        self.assertIn("GroupRiskLimitGBP()*LAYER_GROUP_RISK_SHARE", layer)
+        self.assertIn("groupRisk+plannedRisk>GroupRiskLimitGBP()", layer)
+        self.assertIn("portfolio+plannedRisk>PortfolioRiskLimitGBP()", layer)
         self.assertIn("GlobalVariablesFlush()", layer)
         self.assertIn("LegMagic(id,LAYER_LEG)", layer)
         self.assertIn("GROUP_LAYER_ATTEMPT", code)
