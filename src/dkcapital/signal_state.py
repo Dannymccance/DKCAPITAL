@@ -11,6 +11,7 @@ OPEN_STATUSES = {"ACTIVE"}
 GROUP_WINDOW_MINUTES = 180
 AMENDMENT_WINDOW_SECONDS = 30
 DELETED_REPOST_WINDOW_SECONDS = 90
+BARE_SL_CORRECTION_WINDOW_SECONDS = 600
 
 
 def _timestamp(event: dict[str, Any]) -> str:
@@ -194,6 +195,7 @@ class SignalState:
                     action=action,
                     chat_id=chat_id,
                     inherited_targets=inherited_targets,
+                    timestamp=timestamp,
                 )
                 if not targets or (action.kind == "add_layer" and len(targets) != 1):
                     # A provider add must identify one original signal. Replies
@@ -205,8 +207,11 @@ class SignalState:
                             "message_id": message_id,
                             "timestamp": timestamp,
                             "action": action.as_dict(),
-                            "reason": "ambiguous_layer_target"
-                            if action.kind == "add_layer" else "no_target",
+                            "reason": (
+                                "ambiguous_layer_target" if action.kind == "add_layer"
+                                else "unresolved_bare_sl" if self._is_bare_sl_correction(action)
+                                else "no_target"
+                            ),
                         }
                     )
                     continue
@@ -465,12 +470,37 @@ class SignalState:
             return latest.group_id
         return fallback
 
+    @staticmethod
+    def _is_bare_sl_correction(action: ParsedAction) -> bool:
+        """Short unqualified provider SL typo/correction, not a group update."""
+        if (
+            action.kind != "trade_update" or action.sl is None
+            or action.symbol is not None or action.direction is not None
+            or action.scope != "current_group"
+        ):
+            return False
+        normalized = re.sub(r"\s+", " ", action.raw_text.upper()).strip()
+        return bool(re.fullmatch(
+            r"(?:SL|STOP\s+LOSS)\s*[:=@-]?\s*\d+(?:\.\d+)?"
+            r"(?:\s+(?:OF\s*COURSE|OFCOURSE|OFCOURCE|OFCOURSE\*|"
+            r"OFCORSE|CORRECT(?:ED|ION)?|TYPO))?[\s.!*]*",
+            normalized,
+        ))
+
+    @staticmethod
+    def _sl_valid_side(signal: Signal, sl: float) -> bool:
+        return (
+            (signal.direction == "BUY" and 0 < sl < signal.entry_low)
+            or (signal.direction == "SELL" and sl > signal.entry_high)
+        )
+
     def _resolve_targets(
         self,
         *,
         action: ParsedAction,
         chat_id: int,
         inherited_targets: list[str],
+        timestamp: str = "",
     ) -> list[str]:
         active = [
             signal
@@ -498,6 +528,38 @@ class SignalState:
 
         matching = [signal for signal in active if matches(signal)]
         if not matching:
+            return []
+
+        if self._is_bare_sl_correction(action):
+            # A bare provider correction must never silently alter an entire
+            # signal group. Only choose one recent same-provider GWS setup
+            # with missing or wrong-side SL. Keep original opened_at unchanged.
+            candidates = [
+                signal for signal in matching
+                if signal.source_style == "gws"
+                and self._within_seconds(
+                    signal.opened_at, timestamp,
+                    BARE_SL_CORRECTION_WINDOW_SECONDS,
+                )
+                and not (
+                    signal.current_sl is not None
+                    and self._sl_valid_side(signal, signal.current_sl)
+                )
+                and self._sl_valid_side(signal, action.sl)
+            ]
+            if len(candidates) == 1:
+                return [candidates[0].signal_id]
+            if candidates:
+                return []
+            # Where there are no invalid candidates, accept a terse SL
+            # update only for an unambiguous latest single-position group.
+            latest = matching[-1]
+            latest_group = [
+                signal for signal in matching
+                if signal.group_id == latest.group_id
+            ]
+            if len(latest_group) == 1 and self._sl_valid_side(latest, action.sl):
+                return [latest.signal_id]
             return []
 
         if action.scope in {"all_symbol", "all_direction"}:
