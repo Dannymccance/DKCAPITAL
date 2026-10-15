@@ -49,6 +49,21 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("unmanaged_positions_count", code)
         self.assertIn("broker_positions_protected", code)
 
+    def test_pending_orders_inhibit_new_entries_and_are_fully_reported(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        trade_allowed = code.split("bool TradeAllowed()", 1)[1].split("bool BrokerDone()", 1)[0]
+        self.assertIn("OrdersTotal()==0", trade_allowed)
+        attempts = code.split("bool HasBeenAttempted(", 1)[1].split("ulong TicketForLeg(", 1)[0]
+        self.assertIn("OrderGetInteger(ORDER_MAGIC)", attempts)
+        self.assertIn("HistoryOrdersTotal()", attempts)
+        telemetry = code.split("void SendTelemetry()", 1)[1].split("void ProcessFeed(", 1)[0]
+        for key in (
+            "unmanaged_orders_count", "broker_orders_total",
+            "ORDER_VOLUME_CURRENT", "ORDER_PRICE_OPEN", "ORDER_SL",
+            "ORDER_TYPE_BUY_LIMIT", "ORDER_TYPE_SELL_STOP",
+        ):
+            self.assertIn(key, telemetry)
+
     def test_one_layer_native_stop_and_broker_checks(self):
         code = SOURCE.read_text(encoding="utf-8")
         layer = code.split("void TryLayer(", 1)[1].split("bool ActionKeySeen(", 1)[0]

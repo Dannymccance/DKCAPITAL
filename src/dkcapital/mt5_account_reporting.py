@@ -109,6 +109,48 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
         if count == 0 and not protected:
             raise ValueError("empty broker account cannot be unprotected")
 
+    # Pending-order inventory is optional for older EAs, but mandatory for
+    # unattended recovery whenever broker_orders_total is non-zero.
+    order_fields = ("orders", "unmanaged_orders_count")
+    if any(k in payload for k in order_fields):
+        if not all(k in payload for k in order_fields) or not all(present):
+            raise ValueError("incomplete pending order telemetry")
+        orders = payload["orders"]
+        if not isinstance(orders, list) or len(orders) > 200:
+            raise ValueError("invalid pending order list")
+        unmanaged_orders = _integer(payload["unmanaged_orders_count"])
+        out_orders = []
+        seen_orders = set()
+        for order in orders:
+            if not isinstance(order, dict):
+                raise ValueError("invalid pending order")
+            ticket = _integer(order["ticket"], minimum=1)
+            if ticket in seen_orders:
+                raise ValueError("duplicate pending order ticket")
+            seen_orders.add(ticket)
+            magic = _integer(order["magic"])
+            if not (5100000001 <= magic <= 48049672953 and
+                    magic % 10 in (1, 2, 3, 4)):
+                raise ValueError("unowned pending order")
+            if order.get("symbol") != "XAUUSD":
+                raise ValueError("unexpected pending order symbol")
+            order_type = order.get("type")
+            if order_type not in ("BUY_LIMIT", "BUY_STOP", "SELL_LIMIT", "SELL_STOP"):
+                raise ValueError("unsupported pending order type")
+            lots = _number(order["lots"], minimum=1e-6)
+            price = _number(order["price"], minimum=1e-6)
+            sl = _number(order["sl"], minimum=0)
+            tp = _number(order["tp"], minimum=0)
+            out_orders.append({
+                "ticket": ticket, "magic": magic, "symbol": "XAUUSD",
+                "type": order_type, "lots": lots, "price": price,
+                "sl": sl, "tp": tp,
+            })
+        if len(out_orders) + unmanaged_orders != broker_exposure["broker_orders_total"]:
+            raise ValueError("broker pending order counts do not reconcile")
+        broker_exposure["unmanaged_orders_count"] = unmanaged_orders
+        broker_exposure["orders"] = out_orders
+
     out_deals = []
     seen_deals = set()
     for d in deals:

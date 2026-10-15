@@ -88,6 +88,38 @@ class ReportingUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             normalize_telemetry(data, LOGIN)
 
+    def test_pending_order_inventory_round_trip_and_fail_closed(self):
+        data = example()
+        data.update({
+            "broker_positions_total": 1,
+            "unmanaged_positions_count": 0,
+            "broker_positions_protected": True,
+            "broker_orders_total": 1,
+            "unmanaged_orders_count": 0,
+            "orders": [{
+                "ticket": 501, "magic": MAGIC + 1, "symbol": "XAUUSD",
+                "type": "BUY_LIMIT", "lots": 0.02,
+                "price": 4099, "sl": 4080, "tp": 4110,
+            }],
+        })
+        snap = normalize_telemetry(data, LOGIN)
+        self.assertEqual(snap["broker_orders_total"], 1)
+        self.assertEqual(snap["unmanaged_orders_count"], 0)
+        self.assertEqual(snap["orders"][0]["ticket"], 501)
+        for change in (
+            {"orders": []}, {"unmanaged_orders_count": 1},
+            {"orders": [{**data["orders"][0], "symbol": "EURUSD"}]},
+            {"orders": [{**data["orders"][0], "magic": 0}]},
+            {"orders": [{**data["orders"][0], "type": "BUY_STOP_LIMIT"}]},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                normalize_telemetry({**data, **change}, LOGIN)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            normalize_telemetry(
+                {k: v for k, v in data.items() if k != "unmanaged_orders_count"},
+                LOGIN,
+            )
+
     def test_weekly_pips_counts_each_signal_once(self):
         snapshot = normalize_telemetry(example(), LOGIN)
         result = summarize(snapshot)

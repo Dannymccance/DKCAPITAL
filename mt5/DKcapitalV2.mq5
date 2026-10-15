@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.03"
+#property version "2.04"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -66,7 +66,9 @@ bool DemoIdentity()
 }
 bool TradeAllowed()
 {
+   // Do not initiate new entries while any broker order might fill.
    return DemoIdentity() && telemetry_healthy && last_feed_http==200 &&
+          OrdersTotal()==0 &&
           (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) &&
           (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
 }
@@ -221,6 +223,14 @@ bool HasBeenAttempted(const string id)
 {
    if(GlobalVariableCheck(IDKey(id,"ATTEMPT"))) return true;
    ulong root=GroupBase(id);
+   for(int i=OrdersTotal()-1;i>=0;i--)
+   {
+      if(OrderGetTicket(i)>0)
+      {
+         ulong m=(ulong)OrderGetInteger(ORDER_MAGIC);
+         if(Owned(m) && m-m%10==root) return true;
+      }
+   }
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
       if(PositionGetTicket(i)>0)
@@ -232,6 +242,12 @@ bool HasBeenAttempted(const string id)
    // Broker history provides a second deduplication check if globals are lost.
    if(HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+60))
    {
+      for(int i=HistoryOrdersTotal()-1;i>=0;i--)
+      {
+         ulong t=HistoryOrderGetTicket(i);
+         ulong m=(ulong)HistoryOrderGetInteger(t,ORDER_MAGIC);
+         if(Owned(m) && m-m%10==root) return true;
+      }
       for(int i=HistoryDealsTotal()-1;i>=0;i--)
       {
          ulong d=HistoryDealGetTicket(i);
@@ -696,7 +712,37 @@ void SendTelemetry()
          !Owned((ulong)PositionGetInteger(POSITION_MAGIC))) unmanaged++;
    }
    json+=",\"broker_positions_total\":"+IntegerToString(brokerCount);
-   json+=",\"broker_orders_total\":"+IntegerToString(OrdersTotal());
+   // Pending broker orders are account-wide, including unmatched orders.
+   int brokerOrderCount=OrdersTotal(),unmanagedOrders=0;
+   string ordersJson="[";
+   bool firstOrder=true;
+   for(int o=brokerOrderCount-1;o>=0;o--)
+   {
+      ulong orderTicket=OrderGetTicket(o);
+      if(orderTicket==0) {unmanagedOrders++;continue;}
+      ulong orderMagic=(ulong)OrderGetInteger(ORDER_MAGIC);
+      string orderSymbol=OrderGetString(ORDER_SYMBOL);
+      ENUM_ORDER_TYPE orderType=(ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      string orderKind="";
+      if(orderType==ORDER_TYPE_BUY_LIMIT) orderKind="BUY_LIMIT";
+      else if(orderType==ORDER_TYPE_BUY_STOP) orderKind="BUY_STOP";
+      else if(orderType==ORDER_TYPE_SELL_LIMIT) orderKind="SELL_LIMIT";
+      else if(orderType==ORDER_TYPE_SELL_STOP) orderKind="SELL_STOP";
+      if(orderSymbol!=GoldSymbol || !Owned(orderMagic) || orderKind=="")
+      {unmanagedOrders++;continue;}
+      if(!firstOrder) ordersJson+=",";
+      firstOrder=false;
+      ordersJson+="{\"ticket\":"+U(orderTicket)+",\"magic\":"+U(orderMagic);
+      ordersJson+=",\"symbol\":\""+orderSymbol+"\",\"type\":\""+orderKind+"\"";
+      ordersJson+=",\"lots\":"+N(OrderGetDouble(ORDER_VOLUME_CURRENT));
+      ordersJson+=",\"price\":"+N(OrderGetDouble(ORDER_PRICE_OPEN),5);
+      ordersJson+=",\"sl\":"+N(OrderGetDouble(ORDER_SL),5);
+      ordersJson+=",\"tp\":"+N(OrderGetDouble(ORDER_TP),5)+"}";
+   }
+   ordersJson+="]";
+   json+=",\"broker_orders_total\":"+IntegerToString(brokerOrderCount);
+   json+=",\"unmanaged_orders_count\":"+IntegerToString(unmanagedOrders);
+   json+=",\"orders\":"+ordersJson;
    json+=",\"unmanaged_positions_count\":"+IntegerToString(unmanaged);
    json+=",\"broker_positions_protected\":"+(allProtected?"true":"false");
    json+=",\"positions\":[";
@@ -863,7 +909,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.03 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.04 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
