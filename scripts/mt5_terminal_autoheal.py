@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import math
 import os
 import re
 import subprocess
@@ -96,6 +97,60 @@ def recent_unreconciled_signal(data_dir: Path, snapshot_utc: datetime) -> bool:
     return False
 
 
+def pending_order_gate(snapshot: dict) -> tuple[bool, str]:
+    """Allow only complete, recognised, broker-stopped pending XAUUSD entries.
+
+    Older telemetry without per-order details remains safe when there are zero
+    pending orders. With pending exposure it is never sufficient.
+    """
+    total = snapshot["broker_orders_total"]
+    pending = snapshot.get("orders")
+    if total == 0:
+        if pending is not None and (not isinstance(pending, list) or pending):
+            return False, "pending order list disagrees with zero broker orders"
+        if snapshot.get("unmanaged_orders_count", 0) != 0:
+            return False, "unmanaged pending order count disagrees with broker"
+        return True, "no pending orders"
+    unmanaged = snapshot.get("unmanaged_orders_count")
+    if type(unmanaged) is not int or unmanaged != 0:
+        return False, "unknown or unmatched pending orders require manual review"
+    if not isinstance(pending, list) or len(pending) != total:
+        return False, "incomplete broker pending order details"
+    pos_magics = {p.get("magic") for p in snapshot["positions"]
+                  if isinstance(p, dict)}
+    seen_tickets, seen_magics = set(), set()
+    for order in pending:
+        if not isinstance(order, dict):
+            return False, "malformed broker pending order"
+        ticket, magic = order.get("ticket"), order.get("magic")
+        if type(ticket) is not int or ticket <= 0 or ticket in seen_tickets:
+            return False, "missing or duplicate broker pending ticket"
+        if (type(magic) is not int or
+                not 5100000001 <= magic <= 48049672953 or
+                magic % 10 not in (1, 2, 3, 4) or
+                magic in seen_magics or magic in pos_magics):
+            return False, "unknown or conflicting broker pending order magic"
+        if order.get("symbol") != "XAUUSD":
+            return False, "unexpected pending order symbol"
+        kind = order.get("type")
+        if kind not in ("BUY_LIMIT", "BUY_STOP", "SELL_LIMIT", "SELL_STOP"):
+            return False, "unsupported pending order type"
+        try:
+            price, sl, lots = (float(order[k]) for k in ("price", "sl", "lots"))
+            tp = float(order.get("tp", 0))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False, "incomplete pending order risk details"
+        if (not all(math.isfinite(v) for v in (price, sl, lots, tp))
+                or min(price, sl, lots) <= 0 or tp < 0):
+            return False, "pending order missing native protective stop or volume"
+        if (kind.startswith("BUY") and sl >= price or
+                kind.startswith("SELL") and sl <= price):
+            return False, "pending broker stop is on the wrong side of entry"
+        seen_tickets.add(ticket)
+        seen_magics.add(magic)
+    return True, "reconciled owned pending entries with broker-native stops"
+
+
 def recovery_gate(snapshot: dict, *, expected_login: int, now: datetime,
                   signals_ambiguous: bool, gateway_ok: bool,
                   service_active: bool) -> tuple[bool, str]:
@@ -129,8 +184,9 @@ def recovery_gate(snapshot: dict, *, expected_login: int, now: datetime,
     unmanaged = snapshot["unmanaged_positions_count"]
     if count != unmanaged + len(positions):
         return False, "account-wide and owned position counts disagree"
-    if snapshot["broker_orders_total"] != 0:
-        return False, "pending orders require manual reconciliation"
+    pending_ok, pending_reason = pending_order_gate(snapshot)
+    if not pending_ok:
+        return False, pending_reason
     if unmanaged != 0:
         return False, "unmanaged broker positions require manual reconciliation"
     if not snapshot["broker_positions_protected"]:
@@ -140,7 +196,8 @@ def recovery_gate(snapshot: dict, *, expected_login: int, now: datetime,
             return False, "one or more owned positions have no native stop"
     if signals_ambiguous:
         return False, "recent signal or management event could have changed broker exposure"
-    return True, "guarded DEMO restart eligible: complete last-known exposure, no pending orders, all positions stopped"
+    return True, ("guarded DEMO restart eligible: complete last-known exposure; "
+                  + pending_reason + "; all positions stopped")
 
 
 def plan(state: dict, eligible: bool, now_epoch: float) -> tuple[dict, bool, str]:
