@@ -107,6 +107,62 @@ class Mt5RecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(why, "hourly restart budget exhausted")
 
+    def pending_snapshot(self):
+        p = dict(self.snapshot)
+        p["broker_orders_total"] = 1
+        p["unmanaged_orders_count"] = 0
+        p["orders"] = [{
+            "ticket": 7101, "magic": 5100000001, "symbol": "XAUUSD",
+            "type": "BUY_LIMIT", "lots": 0.01,
+            "price": 4100.0, "sl": 4090.0, "tp": 4130.0,
+        }]
+        return p
+
+    def test_protected_owned_pending_order_permits_guarded_recovery(self):
+        p = self.pending_snapshot()
+        allowed, reason = self.gate(p)
+        self.assertTrue(allowed, reason)
+        _, restart, _ = module.plan(
+            {"first_seen": 1000, "attempts": []}, allowed, 1180
+        )
+        self.assertTrue(restart)
+
+    def test_unknown_unprotected_or_malformed_pending_blocks_recovery(self):
+        p = self.pending_snapshot()
+        for field, value in (
+            ("magic", 0), ("symbol", "EURUSD"), ("type", "BUY_STOP_LIMIT"),
+            ("sl", 0), ("sl", 4200), ("lots", 0), ("price", 0),
+            ("ticket", 0), ("tp", float("nan")),
+        ):
+            candidate = {**p, "orders": [{**p["orders"][0], field: value}]}
+            self.assertFalse(self.gate(candidate)[0], field)
+        for change in (
+            {"orders": []},
+            {"unmanaged_orders_count": 1},
+            {"orders": None},
+            {"broker_orders_total": 2},
+        ):
+            self.assertFalse(self.gate({**p, **change})[0], change)
+
+    def test_duplicate_pending_magic_and_existing_leg_conflict(self):
+        p = self.pending_snapshot()
+        order = p["orders"][0]
+        p["broker_orders_total"] = 2
+        p["orders"] = [order, {**order, "ticket": 7102}]
+        self.assertFalse(self.gate(p)[0])
+        p["broker_orders_total"] = 1
+        p["orders"] = [order]
+        p["positions"] = [{"ticket": 7201, "magic": order["magic"], "sl": 4090.0}]
+        p["broker_positions_total"] = 1
+        self.assertFalse(self.gate(p)[0])
+
+    def test_legacy_pending_count_without_inventory_fails_closed(self):
+        p = dict(self.snapshot)
+        p["broker_orders_total"] = 1
+        self.assertFalse(self.gate(p)[0])
+        p["broker_orders_total"] = 0
+        self.assertTrue(self.gate(p)[0])
+
     def test_legacy_telemetry_is_not_eligible(self):
         legacy = dict(self.snapshot)
         for k in (
