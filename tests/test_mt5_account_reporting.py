@@ -69,6 +69,25 @@ class ReportingUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
 
+    def test_accountwide_exposure_telemetry_normalization(self):
+        data = example()
+        data.update({
+            "broker_positions_total": 1,
+            "broker_orders_total": 0,
+            "unmanaged_positions_count": 0,
+            "broker_positions_protected": True,
+        })
+        snapshot = normalize_telemetry(data, LOGIN)
+        self.assertEqual(snapshot["broker_positions_total"], 1)
+        self.assertEqual(snapshot["broker_orders_total"], 0)
+        self.assertTrue(snapshot["broker_positions_protected"])
+        data["unmanaged_positions_count"] = 1
+        with self.assertRaisesRegex(ValueError, "do not reconcile"):
+            normalize_telemetry(data, LOGIN)
+        data.pop("broker_orders_total")
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            normalize_telemetry(data, LOGIN)
+
     def test_weekly_pips_counts_each_signal_once(self):
         snapshot = normalize_telemetry(example(), LOGIN)
         result = summarize(snapshot)
