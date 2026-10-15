@@ -37,7 +37,7 @@ set +e
 timeout --kill-after=5s 90s runuser -u dkmt5 -- env \
   HOME="$HOME_DIR" WINEPREFIX="$HOME_DIR/.wine" WINEDEBUG=-all \
   DISPLAY=:150 XAUTHORITY="$HOME_DIR/.Xauthority" \
-  /usr/lib/wine/wine64 "$EDITOR" "/compile:$SOURCE_WINE" "/include:$INCLUDE_WINE" /log
+  /usr/lib/wine/wine64 "$EDITOR" /portable "/compile:$SOURCE_WINE" "/include:$INCLUDE_WINE" /log
 RC=$?
 set -e
 
@@ -62,6 +62,9 @@ PY
 if [ "$RC" -ne 0 ]; then
   echo "ERROR: MetaEditor returned $RC; production EA unchanged." >&2
   exit 1
+fi
+if [ ! -f "$STAGE/DKcapitalV2.log" ]; then
+  echo "WARNING: compiler generated no staging log. Check MetaEditor process and alternate data path." >&2
 fi
 if [ ! -s "$STAGE/DKcapitalV2.ex5" ]; then
   echo "ERROR: staged .ex5 not created; production EA unchanged." >&2
