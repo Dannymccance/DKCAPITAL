@@ -1,0 +1,12 @@
+[Unit]
+Description=Check DK Capital demo MT5 Account 1 for frozen telemetry
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=false
+Unit=dkcapital-mt5-autoheal.service
+
+[Install]
+WantedBy=timers.target

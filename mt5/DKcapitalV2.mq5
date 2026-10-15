@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.02"
+#property version "2.03"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -15,6 +15,7 @@ input bool EnableNewEntries = false; // MUST remain false until accepted on demo
 input bool EnableLayerEntries = false; // Separate opt-in after broker-side layer tests.
 input double MaxGroupRiskGBP = 75.0;
 input double MaxPortfolioRiskGBP = 150.0;
+input double RiskReferenceBalanceGBP = 1000.0; // Caps above are calibrated at this GBP balance.
 input double RiskPaddingGBPPerLeg = 1.0;
 input double StopSlippageUSD = 0.25;
 input double EntryToleranceUSD = 1.0;
@@ -115,6 +116,22 @@ double RiskGBP(bool buy,double lots,double entry,double sl)
    if(!OrderCalcProfit(side,GoldSymbol,lots,entry,conservative,pnl))
       return -1;
    return MathMax(0,-pnl)+RiskPaddingGBPPerLeg;
+}
+// Conservative scaling uses the lower of balance and equity during drawdowns.
+double RiskBalanceGBP()
+{
+   double balance=AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity)) return 0;
+   return MathMin(balance,equity);
+}
+double GroupRiskLimitGBP()
+{
+   return MaxGroupRiskGBP*RiskBalanceGBP()/RiskReferenceBalanceGBP;
+}
+double PortfolioRiskLimitGBP()
+{
+   return MaxPortfolioRiskGBP*RiskBalanceGBP()/RiskReferenceBalanceGBP;
 }
 double PositionRiskGBP()
 {
@@ -353,9 +370,11 @@ void TryEntry(const string id,const string status,const string direction,
    int groups=0;
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
    if(MaximumConcurrentGroups>0 && groups>=MaximumConcurrentGroups) return;
-   // Reserve 15% of group capacity for a possible later layer.
-   double budget=MathMin(MaxGroupRiskGBP*INITIAL_GROUP_RISK_SHARE-groupRisk,
-                         MaxPortfolioRiskGBP-portfolio);
+   // Reserve 15% of balance-scaled group capacity for a possible later layer.
+   double groupLimit=GroupRiskLimitGBP(),portfolioLimit=PortfolioRiskLimitGBP();
+   if(groupLimit<=0 || portfolioLimit<groupLimit) return;
+   double budget=MathMin(groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk,
+                         portfolioLimit-portfolio);
    if(budget<=3*RiskPaddingGBPPerLeg) return;
    double minlot=LotMin();
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
@@ -530,13 +549,13 @@ void TryLayer(const string id,const long mid,const double percentage,
    if(buy?fill>=average-point*0.5:fill<=average+point*0.5) return;
    if(!StopValid(buy,protectiveSL,q)) return;
    double plannedRisk=RiskGBP(buy,layerLots,fill,protectiveSL);
-   if(plannedRisk<0 || plannedRisk>MaxGroupRiskGBP*LAYER_GROUP_RISK_SHARE+1e-7)
+   if(plannedRisk<0 || plannedRisk>GroupRiskLimitGBP()*LAYER_GROUP_RISK_SHARE+1e-7)
       return;
    double portfolio=0,groupRisk=0;
    int groups=0;
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups) ||
-      groupRisk+plannedRisk>MaxGroupRiskGBP+1e-7 ||
-      portfolio+plannedRisk>MaxPortfolioRiskGBP+1e-7) return;
+      groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
+      portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7) return;
    double margin=0;
    ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
    if(!OrderCalcMargin(type,GoldSymbol,layerLots,fill,margin) ||
@@ -665,6 +684,21 @@ void SendTelemetry()
    json+="\"bid\":"+N(q.bid,5)+",\"ask\":"+N(q.ask,5);
    json+=",\"feed_http\":"+IntegerToString(last_feed_http);
    json+=",\"entry_enabled\":"+(EnableNewEntries?"true":"false");
+   // All broker positions/orders must be counted, not only owned XAUUSD legs.
+   int brokerCount=PositionsTotal(), unmanaged=0;
+   bool allProtected=true;
+   for(int p=brokerCount-1;p>=0;p--)
+   {
+      ulong pos=PositionGetTicket(p);
+      if(pos==0) {allProtected=false;continue;}
+      if(PositionGetDouble(POSITION_SL)<=0) allProtected=false;
+      if(PositionGetString(POSITION_SYMBOL)!=GoldSymbol ||
+         !Owned((ulong)PositionGetInteger(POSITION_MAGIC))) unmanaged++;
+   }
+   json+=",\"broker_positions_total\":"+IntegerToString(brokerCount);
+   json+=",\"broker_orders_total\":"+IntegerToString(OrdersTotal());
+   json+=",\"unmanaged_positions_count\":"+IntegerToString(unmanaged);
+   json+=",\"broker_positions_protected\":"+(allProtected?"true":"false");
    json+=",\"positions\":[";
    bool first=true;
    for(int i=PositionsTotal()-1;i>=0;i--)
@@ -820,7 +854,8 @@ int OnInit()
    if(StringFind(FeedUrl,"http://127.0.0.1:8765/")!=0 ||
       StringFind(TelemetryUrl,"http://127.0.0.1:8765/")!=0 ||
       StringLen(FeedToken)<24 || PollSeconds<2 || TelemetryEverySeconds<10 ||
-      MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP)
+      MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
+      RiskReferenceBalanceGBP<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
    trade.SetAsyncMode(false);
@@ -828,7 +863,8 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin);
+         " login=",ExpectedDemoLogin," version=2.03 groupCapGBP=",GroupRiskLimitGBP(),
+         " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
 void OnDeinit(const int reason) {EventKillTimer();}
