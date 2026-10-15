@@ -1,0 +1,10 @@
+[Unit]
+Description=DK Capital guarded demo MT5 Account 1 freeze recovery
+After=docker.service dkcapital-mt5-1.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/mt5_terminal_autoheal.py --apply
+TimeoutStartSec=120
