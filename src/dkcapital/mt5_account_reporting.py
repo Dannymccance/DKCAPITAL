@@ -85,6 +85,30 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
             "profit": _number(p["profit"]), "swap": _number(p["swap"]),
             "risk_gbp": _number(p["risk_gbp"], minimum=0) if p.get("risk_gbp") is not None else None,
         })
+    # Newer EAs report account-wide exposure. Legacy telemetry is accepted
+    # for reporting, but is insufficient to authorize automated MT5 recovery.
+    broker_fields = (
+        "broker_positions_total", "broker_orders_total",
+        "unmanaged_positions_count", "broker_positions_protected",
+    )
+    broker_exposure = {}
+    present = [field in payload for field in broker_fields]
+    if any(present):
+        if not all(present):
+            raise ValueError("incomplete broker exposure telemetry")
+        for field in broker_fields[:3]:
+            broker_exposure[field] = _integer(payload[field])
+        protected = payload["broker_positions_protected"]
+        if not isinstance(protected, bool):
+            raise ValueError("invalid broker position protection flag")
+        broker_exposure["broker_positions_protected"] = protected
+        count = broker_exposure["broker_positions_total"]
+        unmanaged = broker_exposure["unmanaged_positions_count"]
+        if count != unmanaged + len(out_pos):
+            raise ValueError("broker exposure counts do not reconcile")
+        if count == 0 and not protected:
+            raise ValueError("empty broker account cannot be unprotected")
+
     out_deals = []
     seen_deals = set()
     for d in deals:
@@ -114,7 +138,7 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
     return {
         "version": 2, "mode": "DEMO", "login": login,
         "currency": "GBP", "generated_at": generated.isoformat(),
-        **numeric, "positions": out_pos, "deals": out_deals,
+        **numeric, **broker_exposure, "positions": out_pos, "deals": out_deals,
         "feed_http": _integer(payload.get("feed_http", 0)),
         "entry_enabled": payload.get("entry_enabled") is True,
         "received_at": datetime.now(UTC).isoformat(),
