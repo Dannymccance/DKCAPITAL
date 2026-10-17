@@ -65,7 +65,7 @@ def discover_events(
         new_state.update({
             "initialized": True, "positions": current,
             "seen_deals": tickets[-MAX_SEEN:],
-            "last_daily_loss_locked": snapshot.get("daily_loss_locked") is True,
+            "last_daily_loss_warning": snapshot.get("daily_loss_warning") is True,
         })
         return new_state, []
 
@@ -200,17 +200,17 @@ def discover_events(
                         "This is an unconfirmed protection change, not a TP/SL hit.",
             })
     new_state["warned_provider_stops"] = sorted(watched)[-1500:]
-    if snapshot.get("daily_loss_locked") is True and not state.get("last_daily_loss_locked"):
+    if snapshot.get("daily_loss_warning") is True and not state.get("last_daily_loss_warning"):
         add({
-            "id": f"daily-lock-{snapshot.get('daily_loss_day', snapshot.get('generated_at', '')[:10])}",
-            "channel": "changes", "title": "DAILY EQUITY LOSS LOCK ACTIVE",
-            "body": "MT5 EA reports the daily-loss lock. No new entries or layers permitted."
+            "id": f"daily-warning-{snapshot.get('daily_loss_day', snapshot.get('generated_at', '')[:10])}",
+            "channel": "changes", "title": "DAILY EQUITY LOSS WARNING",
+            "body": "MT5 EA reports a daily equity warning threshold was reached."
                     " Existing positions are not liquidated by this safeguard.",
         })
     new_state.update({
         "positions": current,
         "seen_deals": list(dict.fromkeys(list(state.get("seen_deals", [])) + tickets))[-MAX_SEEN:],
-        "last_daily_loss_locked": snapshot.get("daily_loss_locked") is True,
+        "last_daily_loss_warning": snapshot.get("daily_loss_warning") is True,
     })
     return new_state, events
 
@@ -218,7 +218,7 @@ def discover_events(
 def notification_embed(event: dict[str, Any]):
     import discord
 
-    critical = "CRITICAL" in event["title"] or "LOSS LOCK" in event["title"]
+    critical = "CRITICAL" in event["title"] or "DAILY EQUITY LOSS WARNING" in event["title"]
     color = discord.Color.red() if critical else (
         discord.Color.green() if event["channel"] == "tp_sl" and "TAKE PROFIT" in event["title"]
         else discord.Color.orange() if event["channel"] == "tp_sl" else discord.Color.blue()
