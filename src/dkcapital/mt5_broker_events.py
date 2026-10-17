@@ -12,7 +12,7 @@ from dkcapital.mt5_signal_cards import mt5_group
 from dkcapital.mt5_trade_results import verified_snapshot
 
 MAX_SEEN = 6000
-MAX_PENDING = 250
+MAX_PENDING = 5000
 
 
 def _lookup(signals: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
