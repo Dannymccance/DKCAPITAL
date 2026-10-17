@@ -9,18 +9,21 @@ class V205SourceContract(unittest.TestCase):
     def setUp(self):
         self.code = SOURCE.read_text(encoding="utf-8")
 
-    def test_daily_equity_lock_is_in_entry_and_layer(self):
+    def test_daily_equity_threshold_never_gates_new_orders(self):
         source = self.code
-        self.assertIn("input double MaxDailyEquityLossPct = 2.0;", source)
-        self.assertIn('GlobalVariableSet(lockedKey,(double)TimeGMT());', source)
+        self.assertIn("input double DailyLossWarningPct = 2.0;", source)
+        self.assertIn("bool DailyEquityWarningActive()", source)
         self.assertIn("AccountInfoDouble(ACCOUNT_EQUITY)", source)
-        self.assertIn("UKDateKey()", source)
+        self.assertIn("DAILY_WARN_", source)
         entry = source.split("void TryEntry(", 1)[1].split(
             "// Original three-leg broker fills", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split("bool ActionKeySeen(", 1)[0]
-        self.assertIn("DailyLossAllowed()", entry)
-        self.assertIn("DailyLossAllowed()", layer)
-        self.assertNotIn("CloseGroup(id)", source.split("bool DailyLossAllowed()", 1)[1].split("string DealReasonName", 1)[0])
+        self.assertNotIn("DailyEquityWarningActive", entry)
+        self.assertNotIn("DailyEquityWarningActive", layer)
+        self.assertNotIn("DailyLossAllowed", entry + layer)
+        self.assertNotIn("DAILY_EQUITY_LOSS_LOCK", source)
+        self.assertIn("daily_loss_guard_mode", source)
+        self.assertIn("ALERT_ONLY", source)
 
     def test_no_unplanned_tp_runner(self):
         entry = self.code.split("void TryEntry(", 1)[1].split(
@@ -44,7 +47,7 @@ class V205SourceContract(unittest.TestCase):
             '"PRICE_OUTSIDE_ENTRY_ZONE"', '"BROKER_SPREAD_TOO_WIDE"',
             '"MINIMUM_THREE_LEG_SIZE_OR_MARGIN"', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
             '"LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL"',
-            '"LAYER_ENTRIES_DISABLED"', '"DAILY_EQUITY_LOSS_LOCK"',
+            '"LAYER_ENTRIES_DISABLED"',
             '"ENTRY_WINDOW_EXPIRED"', '"MISSING_OR_INVALID_NATIVE_TP"',
         ):
             self.assertIn(phrase, source)
