@@ -25,9 +25,9 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("daily_loss_guard_mode", source)
         self.assertIn("ALERT_ONLY", source)
 
-    def test_balance_based_lots_with_total_point_five_percent_signal_risk(self):
+    def test_balance_based_lots_with_four_percent_provider_stop_risk(self):
         source = self.code
-        self.assertIn("input double MaxSignalRiskPct = 0.5;", source)
+        self.assertIn("input double MaxSignalRiskPct = 4.0;", source)
         self.assertIn("double SignalRiskLimitGBP()", source)
         self.assertIn("RiskBalanceGBP()*MaxSignalRiskPct/100.0", source)
         self.assertIn("return MathMin(balance,equity);", source)
@@ -46,7 +46,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("if(planned>budget+1e-7) continue;", entry)
         self.assertIn("FloorLots(total-LotStep())", entry)
         self.assertIn("groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7", layer)
-        self.assertIn("LAYER_EXCEEDS_SIGNAL_0_5_PERCENT_RISK", layer)
+        self.assertIn("LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK", layer)
         self.assertIn("RiskGBP(buy,minA,fill,sl)", entry)
         self.assertIn("MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
         self.assertIn("EnableLayerEntries = false", source)
