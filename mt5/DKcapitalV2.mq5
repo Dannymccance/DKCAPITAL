@@ -14,7 +14,7 @@ input long ExpectedDemoLogin = 0;
 input bool EnableNewEntries = false; // MUST remain false until accepted on demo.
 input bool EnableLayerEntries = false; // Separate opt-in after broker-side layer tests.
 input double MaxGroupRiskGBP = 75.0;
-input double MaxSignalRiskPct = 0.5; // Planned broker-native stop risk per signal including layer; 0.5% of lower balance/equity.
+input double MaxSignalRiskPct = 4.0; // Maximum planned stop risk at the PROVIDER SL, across all TP legs and layer.
 input double MaxPortfolioRiskGBP = 150.0;
 input double RiskReferenceBalanceGBP = 1000.0; // Caps above are calibrated at this GBP balance.
 input double RiskPaddingGBPPerLeg = 1.0;
@@ -560,8 +560,8 @@ void TryEntry(const string id,const string status,const string direction,
    if(groupLimit<=0 || portfolioLimit<groupLimit)
    {RecordDecision(id,"ENTRY","INVALID_RISK_LIMITS",age);return;}
    // Keep the existing balance-based targetLots calculation below unchanged.
-   // The 0.5% per-signal ceiling is an additional HARD sizing constraint.
-   // Do not reserve an unused percentage of the smaller signal cap for a
+   // The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.
+   // Do not reserve an unused percentage of the 4% signal cap for a
    // layer: it may use only whatever group stop-risk headroom actually remains.
    double signalLimit=SignalRiskLimitGBP();
    double signalRemaining=signalLimit-groupRisk;
@@ -790,7 +790,7 @@ void TryLayer(const string id,const long mid,const double percentage,
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups))
    {RecordDecision(id,"LAYER","LAYER_BROKER_EXPOSURE_UNSAFE",age);return;}
    if(groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7)
-   {RecordDecision(id,"LAYER","LAYER_EXCEEDS_SIGNAL_0_5_PERCENT_RISK",age);return;}
+   {RecordDecision(id,"LAYER","LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK",age);return;}
    if(groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
       portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7)
    {RecordDecision(id,"LAYER","LAYER_GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
