@@ -25,7 +25,7 @@ input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
 input int DeviationPoints = 35;
-input double MaxDailyEquityLossPct = 2.0; // Block NEW trades; never liquidate existing positions.
+input double DailyLossWarningPct = 2.0; // ALERT ONLY: no daily loss entry/layer lock.
 
 CTrade trade;
 bool in_cycle = false;
@@ -124,15 +124,15 @@ int UKDateKey()
    return local.year*10000+local.mon*100+local.day;
 }
 
-// First post-deployment observation anchors the daily baseline. This is
-// preserved across EA restarts via MT5 terminal globals but is not a historical
-// reconstruction of today's pre-deployment equity.
-bool DailyLossAllowed()
+// Informational alert ONLY. A breach NEVER gates new entries or layers.
+// The baseline is the first observed balance for each Isle of Man day,
+// persisted across EA restarts. No forced position closes or size changes.
+bool DailyEquityWarningActive()
 {
    int day=UKDateKey();
    string startKey=Key("DAILY_START_"+IntegerToString(day));
-   string lockedKey=Key("DAILY_LOCK_"+IntegerToString(day));
-   if(GlobalVariableCheck(lockedKey)) return false;
+   string warnedKey=Key("DAILY_WARN_"+IntegerToString(day));
+   if(GlobalVariableCheck(warnedKey)) return true;
    double balance=AccountInfoDouble(ACCOUNT_BALANCE);
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity))
@@ -141,19 +141,20 @@ bool DailyLossAllowed()
    {
       GlobalVariableSet(startKey,balance);
       GlobalVariablesFlush();
-      Print("DK2 daily loss baseline GBP=",balance," day=",day);
+      Print("DK2 daily loss alert baseline GBP=",balance," day=",day);
    }
    double opening=GlobalVariableGet(startKey);
    if(opening<=0) return false;
-   if(equity<=opening*(1.0-MaxDailyEquityLossPct/100.0))
+   if(equity<=opening*(1.0-DailyLossWarningPct/100.0))
    {
-      GlobalVariableSet(lockedKey,(double)TimeGMT());
+      GlobalVariableSet(warnedKey,(double)TimeGMT());
       GlobalVariablesFlush();
-      Print("DK2 DAILY EQUITY STOP LOCKED day=",day,
+      telemetry_urgent=true;
+      Print("DK2 DAILY EQUITY LOSS WARNING ONLY (trading continues) day=",day,
             " baseline=",opening," equity=",equity);
-      return false;
+      return true;
    }
-   return true;
+   return false;
 }
 
 string DealReasonName(const long reason)
@@ -507,7 +508,6 @@ void TryEntry(const string id,const string status,const string direction,
    if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
       !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED))
    {RecordDecision(id,"ENTRY","MT5_TRADING_DISABLED",age);return;}
-   if(!DailyLossAllowed()) {RecordDecision(id,"ENTRY","DAILY_EQUITY_LOSS_LOCK",age);return;}
    if(HasBeenAttempted(id)) return;
    MqlTick q;
    if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0)
@@ -704,8 +704,6 @@ void TryLayer(const string id,const long mid,const double percentage,
    {RecordDecision(id,"LAYER","LAYER_ENTRIES_DISABLED",age);return;}
    if(!TradeAllowed())
    {RecordDecision(id,"LAYER","LAYER_MT5_SAFETY_GATE",age);return;}
-   if(!DailyLossAllowed())
-   {RecordDecision(id,"LAYER","DAILY_EQUITY_LOSS_LOCK",age);return;}
    if(IsUKFriday())
    {RecordDecision(id,"LAYER","LAYER_FRIDAY_BLOCK",age);return;}
    if(LayerPreviouslyAttempted(id,groupId)) return;
@@ -892,8 +890,9 @@ void SendTelemetry()
    json+=",\"feed_http\":"+IntegerToString(last_feed_http);
    json+=",\"entry_enabled\":"+(EnableNewEntries?"true":"false");
    json+=",\"layer_entries_enabled\":"+(EnableLayerEntries?"true":"false");
-   json+=",\"daily_loss_locked\":"+(DailyLossAllowed()?"false":"true");
-   json+=",\"max_daily_loss_pct\":"+N(MaxDailyEquityLossPct,2);
+   json+=",\"daily_loss_warning\":"+(DailyEquityWarningActive()?"true":"false");
+   json+=",\"daily_loss_guard_mode\":\"ALERT_ONLY\"";
+   json+=",\"daily_loss_warning_pct\":"+N(DailyLossWarningPct,2);
    json+=",\"daily_loss_day\":"+IntegerToString(UKDateKey());
    // All broker positions/orders must be counted, not only owned XAUUSD legs.
    int brokerCount=PositionsTotal(), unmanaged=0;
@@ -1117,7 +1116,7 @@ int OnInit()
       StringFind(TelemetryUrl,"http://127.0.0.1:8765/")!=0 ||
       StringLen(FeedToken)<24 || PollSeconds<2 || TelemetryEverySeconds<10 ||
       MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
-      MaxDailyEquityLossPct<=0 || MaxDailyEquityLossPct>10 ||
+      DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
       RiskReferenceBalanceGBP<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
