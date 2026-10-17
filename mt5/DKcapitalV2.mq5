@@ -46,6 +46,7 @@ struct ExecutionDecision
    string id;
    string stage;
    string code;
+   string priorCode;
    datetime checked;
    double bid;
    double ask;
@@ -66,6 +67,8 @@ void RecordDecision(const string id,const string stage,const string code,
          if(decisionLog[i].code==code && now-decisionLog[i].checked<20) return;
          MqlTick q;
          bool quoted=SymbolInfoTick(GoldSymbol,q);
+         if(code=="ENTRY_WINDOW_EXPIRED" && decisionLog[i].code!="ENTRY_WINDOW_EXPIRED")
+            decisionLog[i].priorCode=decisionLog[i].code;
          decisionLog[i].code=code;
          decisionLog[i].checked=now;
          decisionLog[i].bid=quoted?q.bid:0;
@@ -89,6 +92,7 @@ void RecordDecision(const string id,const string stage,const string code,
    decisionLog[n].id=id;
    decisionLog[n].stage=stage;
    decisionLog[n].code=code;
+   decisionLog[n].priorCode="";
    decisionLog[n].checked=now;
    MqlTick q;
    bool quoted=SymbolInfoTick(GoldSymbol,q);
@@ -490,7 +494,8 @@ void TryEntry(const string id,const string status,const string direction,
    long age=(long)TimeGMT()-opened;
    if(age<0 || age>MaximumSignalAgeSeconds)
    {
-      if(age>MaximumSignalAgeSeconds && age<MaximumSignalAgeSeconds+120)
+      if(age>MaximumSignalAgeSeconds && age<MaximumSignalAgeSeconds+120 &&
+         !HasBeenAttempted(id))
          RecordDecision(id,"ENTRY","ENTRY_WINDOW_EXPIRED",age);
       return;
    }
@@ -1023,6 +1028,7 @@ void SendTelemetry()
       json+="{\"signal_id\":\""+decisionLog[i].id+"\"";
       json+=",\"stage\":\""+decisionLog[i].stage+"\"";
       json+=",\"code\":\""+decisionLog[i].code+"\"";
+      json+=",\"prior_code\":\""+decisionLog[i].priorCode+"\"";
       json+=",\"at\":\""+IsoUTC(decisionLog[i].checked)+"\"";
       json+=",\"bid\":"+N(decisionLog[i].bid,5);
       json+=",\"ask\":"+N(decisionLog[i].ask,5);
