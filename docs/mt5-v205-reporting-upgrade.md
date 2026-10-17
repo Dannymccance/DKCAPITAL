@@ -6,7 +6,7 @@ live USD account without a separate currency, account and risk review.
 
 ## Discord destinations
 - Results: 1561095999139877046, MT5 broker-only complete trade results, per-TP-leg GBP realised P&L, opening and closing commissions, swaps, and manual closures.
-- Changes: 1561099532467445961, broker entry/layer fills, native SL and TP amendments, manual position reductions, loss-lock and protection mismatch warnings.
+- Changes: 1561099532467445961, broker entry/layer fills, native SL and TP amendments, manual position reductions, drawdown warnings and protection mismatch warnings.
 - TP/SL alerts: 1561099506337063073, only MT5 closing deals with a verified DEAL_REASON_TP or DEAL_REASON_SL.
 - All have environment overrides documented in .env.example. They do not control trading.
 
@@ -31,7 +31,7 @@ exactly-once delivery.
 The 3-minute window remains. EA now reports observed account-specific and
 broker-specific reasons including:
 - entry disabled, account mismatch, gateway/telemetry unavailable, broker pending orders, terminal not authorised to trade
-- locked 2% daily equity-loss threshold
+- informational 2% daily equity warning
 - broker quote unavailable, spread too wide, stale broker tick or outside entry zone
 - missing/invalid provider SL or required native target
 - unavailable risk budget, minimum 3-leg size, insufficient broker margin
@@ -42,15 +42,18 @@ Decisions carry MT5 broker BID/ASK, timestamp, signal age and retcode, when
 available, and are limited to a bounded 24-hour telemetry window.
 Old trades cannot be retrospectively diagnosed as if the new EA was running.
 
-## Daily loss semantics
-New input MaxDailyEquityLossPct=2.0. A terminal global per Isle of Man date
-latches once actual MT5 account equity falls to 98% or below the first observed
-GBP balance for that calendar day. That prevents new entries AND adds but does
-not close existing positions, and therefore DOES NOT guarantee no more than
-2% realised loss. A newly deployed EA mid-session has a first-observation
-baseline rather than a reconstructed midnight baseline. Deposits and unusual
-non-trading balance changes are not yet handled. Treat these as live rollout
-blockers for the separately planned USD/Vantage account.
+## Daily threshold
+
+This setting is informational. The 2% equity threshold is reported through
+telemetry and the changes channel. The 180-second entry window, provider
+native stops, margin, spread, broker order state, position sizing and
+group/portfolio limits remain unchanged. The threshold uses the first
+observed Isle of Man daily balance, not a reconstructed opening balance.
+
+Risk sizing requires separate confirmation: the demo EA allows up to GBP 75
+group stop-risk per GBP 1,000 reference balance, whereas the paper trading
+engine uses a 0.5% per-trade risk model. These are not equivalent.
+The paper engine has its own daily settings.
 
 ## Mandatory test and rollout gates
 1. Pass CI Python tests for reporting, broker events, signal parser, gateway normalizer, and MQL source contracts.
@@ -60,7 +63,7 @@ blockers for the separately planned USD/Vantage account.
 5. Manually reduce and fully close an MT5 trade. Ensure changes channel and final result card both reflect genuine broker deals, including all leg profit/fees.
 6. Exercise a tighter SL, BE after TP1, an unsuccessful invalid stop modification and manual modification. Confirm no false positive "changed" notification.
 7. Exercise explicit GWS ADD message, permission-only message, price boundary, Friday restriction, one-layer-per-group, below-minimum lot and sufficient-size cases. Verify actual broker native SL/TP2 on the fourth ticket when filled.
-8. Exceed the 2% threshold on a test account; verify no new entries/layers, persistence after restart and Isle of Man midnight reset. Check the rule against *equity*, not just realised trades.
+8. Exceed the 2% threshold on a test account; verify the warning, monitor reset at Isle of Man midnight, and that eligibility follows the independent per-trade checks.
 9. Disconnect Discord/gateway and restart the bot to verify event persistence, deduplication and no protected-position interference.
 10. Retain known working EA binary. Disarm both switches if any gate fails. Do not deploy to live USD account or reset account history as part of reporting rollout.
 
