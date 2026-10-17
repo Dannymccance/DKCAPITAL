@@ -120,6 +120,19 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     entry = f"{low} - {high}" if low != high else str(low)
     embed.add_field(name="Telegram entry zone", value=entry, inline=True)
     embed.add_field(name="MT5 broker status", value=state["status"], inline=True)
+    if not state["has_broker_record"]:
+        note = ("No MT5 entry fill has been recorded. Exact rejection cause "
+                "has NOT been verified. Check EA execution diagnostics for "
+                "broker ASK/BID, spread, three-minute expiry, risk/lot minimum, "
+                "native SL and pending-order blockers.")
+        embed.add_field(name="Why wasn't this entered?", value=note, inline=False)
+    if int(signal.get("layers") or 1) > 1:
+        layer = state.get("legs", {}).get(4) or {}
+        layer_status = (f"MT5-confirmed: {layer.get('status')}" if layer.get("entry") is not None
+                        else "Provider layer requested; no MT5 layer fill verified. "
+                             "EA layer opt-in and risk checks require verification.")
+        embed.add_field(name="Layering reconciliation", value=layer_status[:1024], inline=False)
+
     rows = []
     for leg in (1, 2, 3, 4):
         item = state["legs"].get(leg)
