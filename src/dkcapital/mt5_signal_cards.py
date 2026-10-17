@@ -91,6 +91,10 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
             "exit_price": (sum(float(d["lots"]) * float(d["price"]) for d in exits) / exited_lots) if exited_lots else None,
             "realized_gbp": sum(float(d["profit"]) + float(d["commission"]) + float(d["swap"]) for d in exits),
         }
+    decisions = [d for d in telemetry.get("decisions", []) if isinstance(d, dict)
+                 and d.get("signal_id") == signal_id]
+    latest_entry = next((d for d in reversed(decisions) if d.get("stage") == "ENTRY"), None)
+    latest_layer = next((d for d in reversed(decisions) if d.get("stage") == "LAYER"), None)
     has_record = bool(positions or any(x["entries"] for x in by_leg.values()))
     if not has_record:
         status = "NOT FILLED ON MT5"
@@ -100,7 +104,8 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
         status = "CLOSED (MT5 confirmed)"
     else:
         status = "PARTIAL / RECONCILIATION"
-    return {"status": status, "legs": legs, "has_broker_record": has_record, "fresh": True}
+    return {"status": status, "legs": legs, "has_broker_record": has_record, "fresh": True,
+            "decision": latest_entry, "layer_decision": latest_layer}
 
 
 def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
@@ -141,6 +146,12 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
             line += f" | TP {item['tp']:.2f}"
         rows.append(line)
     embed.add_field(name="Broker-confirmed fills (with optional 10% layer)", value="\n".join(rows)[:1024], inline=False)
+    if str(signal.get("sl_mode") or "").upper() == "BREAKEVEN":
+        embed.add_field(name="Telegram requested SL", value="BREAKEVEN (await MT5 confirmation)", inline=False)
+    elif signal.get("current_sl") is not None:
+        embed.add_field(name="Telegram requested SL",
+                        value=f"{float(signal['current_sl']):.2f} (not a broker confirmation)",
+                        inline=False)
     targets = signal.get("tps") or {}
     if targets:
         embed.add_field(
@@ -148,5 +159,28 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
             value="\n".join(f"TP{k}: {v}" for k, v in sorted(targets.items(), key=lambda x: int(x[0])))[:1024],
             inline=False,
         )
+    if not state["has_broker_record"]:
+        decision = state.get("decision") or {}
+        code = str(decision.get("code") or "NOT_YET_RECORDED")
+        at = str(decision.get("at") or "")
+        broker_ask = decision.get("ask")
+        broker_bid = decision.get("bid")
+        reason = ("Exact MT5 reason not yet recorded" if code == "NOT_YET_RECORDED"
+                  else code.replace("_", " ").capitalize())
+        previous = str(decision.get("prior_code") or "")
+        if previous:
+            reason += f" (previous blocker: {previous.replace('_', ' ').lower()})"
+        quote = (f"\nBroker BID/ASK: {broker_bid:.2f} / {broker_ask:.2f}"
+                 if isinstance(broker_bid, (int, float)) and isinstance(broker_ask, (int, float))
+                 and broker_ask > 0 else "")
+        embed.add_field(name="Why wasn't this entered?",
+                        value=(f"**{reason}** | {at}{quote}" if code != "NOT_YET_RECORDED"
+                               else "Not filled on MT5; rejection reason not verified.")[:1024],
+                        inline=False)
+    layer = state.get("layer_decision")
+    if layer and int(signal.get("layers") or 1) > 1:
+        embed.add_field(name="MT5 layer decision",
+                        value=str(layer.get("code", "UNVERIFIED")).replace("_", " ")[:1024],
+                        inline=False)
     embed.set_footer(text="DEMO | ✅ = MT5 ENTRY FILLED | CLOSED does not imply TP | No paper/provider P&L")
     return embed

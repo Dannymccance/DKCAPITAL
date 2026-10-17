@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.04"
+#property version "2.05"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -14,6 +14,7 @@ input long ExpectedDemoLogin = 0;
 input bool EnableNewEntries = false; // MUST remain false until accepted on demo.
 input bool EnableLayerEntries = false; // Separate opt-in after broker-side layer tests.
 input double MaxGroupRiskGBP = 75.0;
+input double MaxSignalRiskPct = 4.0; // Maximum planned stop risk at the PROVIDER SL, across all TP legs and layer.
 input double MaxPortfolioRiskGBP = 150.0;
 input double RiskReferenceBalanceGBP = 1000.0; // Caps above are calibrated at this GBP balance.
 input double RiskPaddingGBPPerLeg = 1.0;
@@ -25,17 +26,150 @@ input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
 input int DeviationPoints = 35;
+input double DailyLossWarningPct = 2.0; // ALERT ONLY: no daily loss entry/layer lock.
 
 CTrade trade;
 bool in_cycle = false;
 bool telemetry_healthy = false;
 int last_feed_http = 0;
 datetime last_telemetry = 0;
+bool telemetry_urgent = false;
 const ulong MAGIC_BASE = 5100000000;
 const ulong MAGIC_MAX = 48049672950;
 const double INITIAL_GROUP_RISK_SHARE = 0.85;
 const double LAYER_GROUP_RISK_SHARE = 0.15;
 const int LAYER_LEG = 4;
+
+// Bounded, broker-sourced decisions. Never call a feed-only price rejection a
+// broker rejection; record the EA gate that actually prevented submission.
+struct ExecutionDecision
+{
+   string id;
+   string stage;
+   string code;
+   string priorCode;
+   datetime checked;
+   double bid;
+   double ask;
+   long age;
+   uint brokerCode;
+};
+ExecutionDecision decisionLog[];
+
+void RecordDecision(const string id,const string stage,const string code,
+                    const long age=0,const uint brokerCode=0)
+{
+   datetime now=TimeGMT();
+   if(StringLen(id)<1 || StringLen(id)>64) return;
+   for(int i=ArraySize(decisionLog)-1;i>=0;i--)
+   {
+      if(decisionLog[i].id==id && decisionLog[i].stage==stage)
+      {
+         if(decisionLog[i].code==code && now-decisionLog[i].checked<20) return;
+         MqlTick q;
+         bool quoted=SymbolInfoTick(GoldSymbol,q);
+         if(code=="ENTRY_WINDOW_EXPIRED" && decisionLog[i].code!="ENTRY_WINDOW_EXPIRED")
+            decisionLog[i].priorCode=decisionLog[i].code;
+         decisionLog[i].code=code;
+         decisionLog[i].checked=now;
+         decisionLog[i].bid=quoted?q.bid:0;
+         decisionLog[i].ask=quoted?q.ask:0;
+         decisionLog[i].age=age>0?age:0;
+         decisionLog[i].brokerCode=brokerCode;
+         telemetry_urgent=true;
+         Print("DK2 DECISION ",stage," signal=",id," code=",code,
+               " age=",age," brokerCode=",brokerCode);
+         return;
+      }
+   }
+   int n=ArraySize(decisionLog);
+   if(n>=120)
+   {
+      for(int j=1;j<n;j++) decisionLog[j-1]=decisionLog[j];
+      n=119;
+      ArrayResize(decisionLog,n);
+   }
+   ArrayResize(decisionLog,n+1);
+   decisionLog[n].id=id;
+   decisionLog[n].stage=stage;
+   decisionLog[n].code=code;
+   decisionLog[n].priorCode="";
+   decisionLog[n].checked=now;
+   MqlTick q;
+   bool quoted=SymbolInfoTick(GoldSymbol,q);
+   decisionLog[n].bid=quoted?q.bid:0;
+   decisionLog[n].ask=quoted?q.ask:0;
+   decisionLog[n].age=age>0?age:0;
+   decisionLog[n].brokerCode=brokerCode;
+   telemetry_urgent=true;
+   Print("DK2 DECISION ",stage," signal=",id," code=",code,
+         " age=",age," brokerCode=",brokerCode);
+}
+
+int UKDateKey()
+{
+   datetime utc=TimeGMT();
+   MqlDateTime t;
+   TimeToStruct(utc,t);
+   MqlDateTime last=t;
+   last.mon=3;last.day=31;last.hour=1;last.min=0;last.sec=0;
+   datetime march=StructToTime(last);
+   MqlDateTime m; TimeToStruct(march,m);
+   march-=(int)m.day_of_week*86400;
+   last.mon=10;
+   datetime october=StructToTime(last);
+   MqlDateTime o; TimeToStruct(october,o);
+   october-=(int)o.day_of_week*86400;
+   MqlDateTime local;
+   TimeToStruct(utc+(utc>=march && utc<october?3600:0),local);
+   return local.year*10000+local.mon*100+local.day;
+}
+
+// Informational alert ONLY. A breach NEVER gates new entries or layers.
+// The baseline is the first observed balance for each Isle of Man day,
+// persisted across EA restarts. No forced position closes or size changes.
+bool DailyEquityWarningActive()
+{
+   int day=UKDateKey();
+   string startKey=Key("DAILY_START_"+IntegerToString(day));
+   string warnedKey=Key("DAILY_WARN_"+IntegerToString(day));
+   if(GlobalVariableCheck(warnedKey)) return true;
+   double balance=AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity))
+      return false;
+   if(!GlobalVariableCheck(startKey))
+   {
+      GlobalVariableSet(startKey,balance);
+      GlobalVariablesFlush();
+      Print("DK2 daily loss alert baseline GBP=",balance," day=",day);
+   }
+   double opening=GlobalVariableGet(startKey);
+   if(opening<=0) return false;
+   if(equity<=opening*(1.0-DailyLossWarningPct/100.0))
+   {
+      GlobalVariableSet(warnedKey,(double)TimeGMT());
+      GlobalVariablesFlush();
+      telemetry_urgent=true;
+      Print("DK2 DAILY EQUITY LOSS WARNING ONLY (trading continues) day=",day,
+            " baseline=",opening," equity=",equity);
+      return true;
+   }
+   return false;
+}
+
+string DealReasonName(const long reason)
+{
+   if(reason==DEAL_REASON_TP) return "TP";
+   if(reason==DEAL_REASON_SL) return "SL";
+   if(reason==DEAL_REASON_CLIENT) return "CLIENT";
+   if(reason==DEAL_REASON_MOBILE) return "MOBILE";
+   if(reason==DEAL_REASON_WEB) return "WEB";
+   if(reason==DEAL_REASON_EXPERT) return "EXPERT";
+   if(reason==DEAL_REASON_SO) return "SO";
+   return "UNVERIFIED";
+}
+
 
 uint Hash(const string value)
 {
@@ -126,6 +260,13 @@ double RiskBalanceGBP()
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity)) return 0;
    return MathMin(balance,equity);
+}
+double SignalRiskLimitGBP()
+{
+   // Target lots remain determined by ACCOUNT_BALANCE; only the broker
+   // stop-risk budget uses the lower balance/equity on a drawdown.
+   // Includes original TP1/TP2/TP3 legs and any attributable fourth layer.
+   return RiskBalanceGBP()*MaxSignalRiskPct/100.0;
 }
 double GroupRiskLimitGBP()
 {
@@ -358,40 +499,82 @@ void TryEntry(const string id,const string status,const string direction,
               double low,double high,double providerSL,const long opened,
               double tp1,double tp2,double tp3)
 {
-   if(!EnableNewEntries || status!="ACTIVE" || !TradeAllowed()) return;
+   if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
-   if(age<0 || age>MaximumSignalAgeSeconds) return;
+   if(age<0 || age>MaximumSignalAgeSeconds)
+   {
+      if(age>MaximumSignalAgeSeconds && age<MaximumSignalAgeSeconds+120 &&
+         !HasBeenAttempted(id))
+         RecordDecision(id,"ENTRY","ENTRY_WINDOW_EXPIRED",age);
+      return;
+   }
+   if(!EnableNewEntries) {RecordDecision(id,"ENTRY","ENTRY_DISABLED",age);return;}
+   if(!DemoIdentity()) {RecordDecision(id,"ENTRY","DEMO_IDENTITY_FAILED",age);return;}
+   if(OrdersTotal()>0) {RecordDecision(id,"ENTRY","BROKER_PENDING_ORDERS",age);return;}
+   if(!telemetry_healthy || last_feed_http!=200)
+   {RecordDecision(id,"ENTRY","GATEWAY_OR_TELEMETRY_UNHEALTHY",age);return;}
+   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
+      !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED))
+   {RecordDecision(id,"ENTRY","MT5_TRADING_DISABLED",age);return;}
    if(HasBeenAttempted(id)) return;
    MqlTick q;
-   if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0 ||
-      q.ask-q.bid>MaxSpreadUSD ||
-      (long)TimeTradeServer()-(long)q.time>30) return;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0)
+   {RecordDecision(id,"ENTRY","BROKER_QUOTE_UNAVAILABLE",age);return;}
+   if(q.ask-q.bid>MaxSpreadUSD)
+   {RecordDecision(id,"ENTRY","BROKER_SPREAD_TOO_WIDE",age);return;}
+   if((long)TimeTradeServer()-(long)q.time>30)
+   {RecordDecision(id,"ENTRY","BROKER_QUOTE_STALE",age);return;}
    bool buy=direction=="BUY";
    double fill=buy?q.ask:q.bid;
    double zLow=MathMin(low,high),zHigh=MathMax(low,high);
-   if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD) return;
+   if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD)
+   {RecordDecision(id,"ENTRY","PRICE_OUTSIDE_ENTRY_ZONE",age);return;}
    // Provider's SL is the ONLY permitted entry stop.
    // Risk limits adjust lots, never the protective stop price.
    // Missing/wrong-side/broker-invalid SL means skip until corrected.
    if(providerSL<=0 || !StopValid(buy,providerSL,q) ||
       (buy ? providerSL>=zLow : providerSL<=zHigh))
    {
+      RecordDecision(id,"ENTRY","PROVIDER_SL_INVALID_OR_MISSING",age);
       Print("DK2 ENTRY SKIP: missing/invalid provider SL id=",id,
             " providerSL=",providerSL);
       return;
    }
+   // Do not open an unintended runner when Telegram target numbering is
+   // malformed or a native target is already behind the broker quote.
+   if(tp1<=0 || tp2<=0 || tp3<=0 ||
+      ValidTP(buy,tp1,q)<=0 || ValidTP(buy,tp2,q)<=0 ||
+      ValidTP(buy,tp3,q)<=0)
+   {RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);return;}
    double sl=NormalizePrice(providerSL);
-   if(!StopValid(buy,sl,q)) return;
+   if(!StopValid(buy,sl,q))
+   {RecordDecision(id,"ENTRY","BROKER_SL_INVALID",age);return;}
    double portfolio=0,groupRisk=0;
    int groups=0;
-   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
-   if(MaximumConcurrentGroups>0 && groups>=MaximumConcurrentGroups) return;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups))
+   {RecordDecision(id,"ENTRY","BROKER_EXPOSURE_UNSAFE",age);return;}
+   if(MaximumConcurrentGroups>0 && groups>=MaximumConcurrentGroups)
+   {RecordDecision(id,"ENTRY","MAX_CONCURRENT_GROUPS",age);return;}
    // Reserve 15% of balance-scaled group capacity for a possible later layer.
    double groupLimit=GroupRiskLimitGBP(),portfolioLimit=PortfolioRiskLimitGBP();
-   if(groupLimit<=0 || portfolioLimit<groupLimit) return;
+   if(groupLimit<=0 || portfolioLimit<groupLimit)
+   {RecordDecision(id,"ENTRY","INVALID_RISK_LIMITS",age);return;}
+   // Keep the existing balance-based targetLots calculation below unchanged.
+   // The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.
+   // Do not reserve an unused percentage of the 4% signal cap for a
+   // layer: it may use only whatever group stop-risk headroom actually remains.
+   double signalLimit=SignalRiskLimitGBP();
+   double signalRemaining=signalLimit-groupRisk;
    double budget=MathMin(groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk,
-                         portfolioLimit-portfolio);
-   if(budget<=3*RiskPaddingGBPPerLeg) return;
+                         MathMin(portfolioLimit-portfolio,signalRemaining));
+   if(budget<=3*RiskPaddingGBPPerLeg)
+   {
+      RecordDecision(id,"ENTRY",
+                     signalRemaining<=3*RiskPaddingGBPPerLeg ?
+                     "SIGNAL_RISK_TOO_SMALL_FOR_THREE_LEGS" :
+                     "GROUP_OR_PORTFOLIO_RISK_LIMIT",age);
+      return;
+   }
    double minlot=LotMin();
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
    if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);
@@ -410,6 +593,7 @@ void TryEntry(const string id,const string status,const string direction,
       // Its -1 sentinel is NOT negative exposure or spare risk capacity.
       if(r1<0 || r2<0 || r3<0)
       {
+         RecordDecision(id,"ENTRY","BROKER_RISK_VALUATION_FAILED",age);
          Print("DK2 RISK BLOCK: failed broker stop-risk valuation id=",id);
          return;
       }
@@ -430,8 +614,22 @@ void TryEntry(const string id,const string status,const string direction,
    }
    if(!possible)
    {
+      // Distinguish a broker's minimum three-leg size exceeding the 4%
+      // total stop-risk budget from an unrelated free-margin failure.
+      double minA=0,minB=0,minC=0;
+      bool minAvailable=Allocate(FloorLots(3*minlot),minA,minB,minC);
+      double minimumRisk=minAvailable ?
+         RiskGBP(buy,minA,fill,sl)+RiskGBP(buy,minB,fill,sl)+
+         RiskGBP(buy,minC,fill,sl) : -1;
+      string reason="MINIMUM_THREE_LEG_SIZE_OR_MARGIN";
+      if(minAvailable && minimumRisk>=0 && minimumRisk>budget+1e-7)
+         reason="MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
+      else if(targetLots<3*minlot-1e-8)
+         reason="BALANCE_BASED_TARGET_BELOW_THREE_MINIMUM_LOTS";
+      RecordDecision(id,"ENTRY",reason,age);
       Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
-            " three-leg minimum cannot fit");
+            " signalCapGBP=",signalLimit," targetLots=",targetLots,
+            " minimumRiskGBP=",minimumRisk," three-leg minimum cannot fit");
       return;
    }
    // Durable intent before first broker request prevents duplicates on restart.
@@ -450,6 +648,7 @@ void TryEntry(const string id,const string status,const string direction,
          PositionGetDouble(POSITION_SL)<=0 ||
          MathAbs(PositionGetDouble(POSITION_VOLUME)-vols[leg-1])>LotStep()/2)
       {
+         RecordDecision(id,"ENTRY","BROKER_ORDER_REJECTED_OR_PARTIAL",age,trade.ResultRetcode());
          Print("DK2 CRITICAL incomplete trio id=",id," leg=",leg,
                " retcode=",trade.ResultRetcode());
          allGood=false;break;
@@ -460,7 +659,11 @@ void TryEntry(const string id,const string status,const string direction,
       Print("DK2 CRITICAL attempting emergency unwind of partial entry ",id);
       if(!CloseGroup(id)) Print("DK2 CRITICAL residual hedging leg requires review ",id);
    }
-   else Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
+   else
+   {
+      RecordDecision(id,"ENTRY","BROKER_FILLED",age);
+      Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
+   }
 }
 // Original three-leg broker fills are the fixed reference, even after partial closes.
 double OriginalVolume(const string id)
@@ -525,34 +728,47 @@ void TryLayer(const string id,const long mid,const double percentage,
               const string groupId,const string status,const string direction,
               const double tp2)
 {
-   if(!EnableNewEntries || !EnableLayerEntries || !TradeAllowed() || status!="ACTIVE" ||
-      mid<=0 || maximum!=1 || MathAbs(percentage-10.0)>1e-8 ||
-      groupId=="" || (direction!="BUY" && direction!="SELL")) return;
+   if(status!="ACTIVE" || mid<=0 || maximum!=1 ||
+      MathAbs(percentage-10.0)>1e-8 || groupId=="" ||
+      (direction!="BUY" && direction!="SELL")) return;
    long age=(long)TimeGMT()-sentAt;
-   if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds ||
-      IsUKFriday() || LayerPreviouslyAttempted(id,groupId)) return;
+   if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds) return;
+   if(!EnableNewEntries || !EnableLayerEntries)
+   {RecordDecision(id,"LAYER","LAYER_ENTRIES_DISABLED",age);return;}
+   if(!TradeAllowed())
+   {RecordDecision(id,"LAYER","LAYER_MT5_SAFETY_GATE",age);return;}
+   if(IsUKFriday())
+   {RecordDecision(id,"LAYER","LAYER_FRIDAY_BLOCK",age);return;}
+   if(LayerPreviouslyAttempted(id,groupId)) return;
    bool buy=direction=="BUY";
    MqlTick q;
-   if(!SymbolInfoTick(GoldSymbol,q) || q.bid<=0 || q.ask<=0 ||
-      q.ask-q.bid>MaxSpreadUSD ||
-      (long)TimeTradeServer()-(long)q.time>30) return;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.bid<=0 || q.ask<=0)
+   {RecordDecision(id,"LAYER","BROKER_QUOTE_UNAVAILABLE",age);return;}
+   if(q.ask-q.bid>MaxSpreadUSD)
+   {RecordDecision(id,"LAYER","BROKER_SPREAD_TOO_WIDE",age);return;}
+   if((long)TimeTradeServer()-(long)q.time>30)
+   {RecordDecision(id,"LAYER","BROKER_QUOTE_STALE",age);return;}
    double fill=buy?q.ask:q.bid;
-   if(boundary>0 && (buy?fill>boundary:fill<boundary)) return;
+   if(boundary>0 && (buy?fill>boundary:fill<boundary))
+   {RecordDecision(id,"LAYER","LAYER_PRICE_BOUNDARY",age);return;}
    double referenceLots=OriginalVolume(id);
    double layerLots=FloorLots(referenceLots*0.10);
    if(referenceLots<=0 || layerLots<LotMin()-1e-8 ||
-      layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)) return;
+      layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX))
+   {RecordDecision(id,"LAYER","LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL",age);return;}
 
    // No layer after TP1 or any missing original leg.
    double priceVolume=0,openVolume=0,protectiveSL=0;
    for(int leg=1;leg<=3;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
-      if(ticket==0 || !PositionSelectByTicket(ticket)) return;
+      if(ticket==0 || !PositionSelectByTicket(ticket))
+      {RecordDecision(id,"LAYER","LAYER_REQUIRES_THREE_OPEN_ORIGINAL_LEGS",age);return;}
       if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) return;
       double lots=PositionGetDouble(POSITION_VOLUME);
       double sl=PositionGetDouble(POSITION_SL);
-      if(lots<=0 || sl<=0 || PositionRiskGBP()<0) return;
+      if(lots<=0 || sl<=0 || PositionRiskGBP()<0)
+      {RecordDecision(id,"LAYER","LAYER_INVALID_NATIVE_SL_OR_RISK",age);return;}
       priceVolume+=PositionGetDouble(POSITION_PRICE_OPEN)*lots;
       openVolume+=lots;
       if(leg==1) protectiveSL=sl;
@@ -562,23 +778,30 @@ void TryLayer(const string id,const long mid,const double percentage,
    if(openVolume<=0) return;
    double average=priceVolume/openVolume;
    double point=SymbolInfoDouble(GoldSymbol,SYMBOL_POINT);
-   if(buy?fill>=average-point*0.5:fill<=average+point*0.5) return;
-   if(!StopValid(buy,protectiveSL,q)) return;
+   if(buy?fill>=average-point*0.5:fill<=average+point*0.5)
+   {RecordDecision(id,"LAYER","LAYER_NOT_BETTER_PRICE",age);return;}
+   if(!StopValid(buy,protectiveSL,q))
+   {RecordDecision(id,"LAYER","LAYER_PROTECTIVE_SL_INVALID",age);return;}
    double plannedRisk=RiskGBP(buy,layerLots,fill,protectiveSL);
    if(plannedRisk<0 || plannedRisk>GroupRiskLimitGBP()*LAYER_GROUP_RISK_SHARE+1e-7)
-      return;
+   {RecordDecision(id,"LAYER","LAYER_RISK_LIMIT",age);return;}
    double portfolio=0,groupRisk=0;
    int groups=0;
-   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups) ||
-      groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
-      portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7) return;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups))
+   {RecordDecision(id,"LAYER","LAYER_BROKER_EXPOSURE_UNSAFE",age);return;}
+   if(groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7)
+   {RecordDecision(id,"LAYER","LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK",age);return;}
+   if(groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
+      portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7)
+   {RecordDecision(id,"LAYER","LAYER_GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
    double margin=0;
    ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
    if(!OrderCalcMargin(type,GoldSymbol,layerLots,fill,margin) ||
       margin<0 || !MathIsValidNumber(margin) ||
       AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
    double target=ValidTP(buy,tp2,q);
-   if(target<=0) return; // No unplanned runner.
+   if(target<=0)
+   {RecordDecision(id,"LAYER","LAYER_TP2_NOT_VALID",age);return;} // No unplanned runner.
 
    // Persist before submission: a result of uncertain status needs manual
    // reconciliation, never a second automatic order.
@@ -597,6 +820,7 @@ void TryLayer(const string id,const long mid,const double percentage,
       PositionGetDouble(POSITION_SL)<=0 ||
       MathAbs(PositionGetDouble(POSITION_VOLUME)-layerLots)>LotStep()/2)
    {
+      RecordDecision(id,"LAYER","LAYER_BROKER_REJECTED_OR_UNCERTAIN",age,trade.ResultRetcode());
       Print("DK2 CRITICAL uncertain layer id=",id,
             " msg=",mid," ticket=",ticket,
             " brokerCode=",trade.ResultRetcode(),"; no automatic retry");
@@ -605,6 +829,7 @@ void TryLayer(const string id,const long mid,const double percentage,
          Print("DK2 CRITICAL unprotected layer requires review ticket=",ticket);
       return;
    }
+   RecordDecision(id,"LAYER","LAYER_BROKER_FILLED",age);
    Print("DK2 layer FILLED id=",id," telegram=",mid," ticket=",ticket,
          " lots=",layerLots," actualEntry=",PositionGetDouble(POSITION_PRICE_OPEN),
          " nativeSL=",PositionGetDouble(POSITION_SL),
@@ -700,6 +925,13 @@ void SendTelemetry()
    json+="\"bid\":"+N(q.bid,5)+",\"ask\":"+N(q.ask,5);
    json+=",\"feed_http\":"+IntegerToString(last_feed_http);
    json+=",\"entry_enabled\":"+(EnableNewEntries?"true":"false");
+   json+=",\"layer_entries_enabled\":"+(EnableLayerEntries?"true":"false");
+   json+=",\"daily_loss_warning\":"+(DailyEquityWarningActive()?"true":"false");
+   json+=",\"daily_loss_guard_mode\":\"ALERT_ONLY\"";
+   json+=",\"daily_loss_warning_pct\":"+N(DailyLossWarningPct,2);
+   json+=",\"signal_risk_cap_pct\":"+N(MaxSignalRiskPct,3);
+   json+=",\"signal_risk_cap_gbp\":"+N(SignalRiskLimitGBP(),2);
+   json+=",\"daily_loss_day\":"+IntegerToString(UKDateKey());
    // All broker positions/orders must be counted, not only owned XAUUSD legs.
    int brokerCount=PositionsTotal(), unmanaged=0;
    bool allProtected=true;
@@ -817,9 +1049,28 @@ void SendTelemetry()
          json+=",\"profit\":"+N(HistoryDealGetDouble(deal,DEAL_PROFIT),2);
          json+=",\"commission\":"+N(HistoryDealGetDouble(deal,DEAL_COMMISSION),2);
          json+=",\"swap\":"+N(HistoryDealGetDouble(deal,DEAL_SWAP),2);
-         json+=",\"time\":\""+IsoUTC(utcTime)+"\"}";
+         json+=",\"time\":\""+IsoUTC(utcTime)+"\"";
+         json+=",\"reason\":\""+DealReasonName(HistoryDealGetInteger(deal,DEAL_REASON))+"\"}";
+
          emitted++;
       }
+   }
+   json+="],\"decisions\":[";
+   bool firstDecision=true;
+   for(int i=0;i<ArraySize(decisionLog);i++)
+   {
+      if(TimeGMT()-decisionLog[i].checked>86400) continue;
+      if(!firstDecision) json+=",";
+      firstDecision=false;
+      json+="{\"signal_id\":\""+decisionLog[i].id+"\"";
+      json+=",\"stage\":\""+decisionLog[i].stage+"\"";
+      json+=",\"code\":\""+decisionLog[i].code+"\"";
+      json+=",\"prior_code\":\""+decisionLog[i].priorCode+"\"";
+      json+=",\"at\":\""+IsoUTC(decisionLog[i].checked)+"\"";
+      json+=",\"bid\":"+N(decisionLog[i].bid,5);
+      json+=",\"ask\":"+N(decisionLog[i].ask,5);
+      json+=",\"age_seconds\":"+L(decisionLog[i].age);
+      json+=",\"broker_retcode\":"+IntegerToString((long)decisionLog[i].brokerCode)+"}";
    }
    json+="]}";
    char payload[],response[];
@@ -879,9 +1130,11 @@ void OnTimer()
    if(in_cycle) return;
    in_cycle=true;
    if(!DemoIdentity()) {in_cycle=false;return;}
-   if(TimeGMT()-last_telemetry>=TelemetryEverySeconds)
+   if(TimeGMT()-last_telemetry>=TelemetryEverySeconds ||
+      (telemetry_urgent && TimeGMT()-last_telemetry>=3))
    {
       SendTelemetry();last_telemetry=TimeGMT();
+      if(telemetry_healthy) telemetry_urgent=false;
    }
    char req[],resp[];
    string headers="Authorization: Bearer "+FeedToken+"\r\n";
@@ -901,6 +1154,8 @@ int OnInit()
       StringFind(TelemetryUrl,"http://127.0.0.1:8765/")!=0 ||
       StringLen(FeedToken)<24 || PollSeconds<2 || TelemetryEverySeconds<10 ||
       MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
+      MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||
+      DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
       RiskReferenceBalanceGBP<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
@@ -909,8 +1164,18 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.04 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.05 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
+}
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(trans.type==TRADE_TRANSACTION_DEAL_ADD ||
+      trans.type==TRADE_TRANSACTION_POSITION ||
+      trans.type==TRADE_TRANSACTION_ORDER_ADD ||
+      trans.type==TRADE_TRANSACTION_ORDER_DELETE)
+      telemetry_urgent=true;
 }
 void OnDeinit(const int reason) {EventKillTimer();}
