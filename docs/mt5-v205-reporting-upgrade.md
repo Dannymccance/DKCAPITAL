@@ -31,7 +31,7 @@ exactly-once delivery.
 The 3-minute window remains. EA now reports observed account-specific and
 broker-specific reasons including:
 - entry disabled, account mismatch, gateway/telemetry unavailable, broker pending orders, terminal not authorised to trade
-- informational 2% daily equity warning
+- daily drawdown is a warning, never an entry rejection
 - broker quote unavailable, spread too wide, stale broker tick or outside entry zone
 - missing/invalid provider SL or required native target
 - unavailable risk budget, minimum 3-leg size, insufficient broker margin
@@ -50,10 +50,37 @@ native stops, margin, spread, broker order state, position sizing and
 group/portfolio limits remain unchanged. The threshold uses the first
 observed Isle of Man daily balance, not a reconstructed opening balance.
 
-Risk sizing requires separate confirmation: the demo EA allows up to GBP 75
-group stop-risk per GBP 1,000 reference balance, whereas the paper trading
-engine uses a 0.5% per-trade risk model. These are not equivalent.
-The paper engine has its own daily settings.
+## Balance-based sizing with 0.5% per-signal maximum
+
+The **target lots still scale from account balance** exactly as before:
+`floor(balance / GBP 100) * 0.01` XAUUSD total lots, then 30/30/40 across
+TP1/TP2/TP3, with the existing smaller Friday target. The EA iterates
+downwards by broker lot steps when planned broker-stop risk would exceed its
+budget. No additional lot sizing multiplier is applied.
+
+A second, stricter cap is `MaxSignalRiskPct=0.5`. The maximum planned
+stop-risk of all native TP1/TP2/TP3 legs plus any optional fourth GWS layer is
+0.5% of `min(ACCOUNT_BALANCE, ACCOUNT_EQUITY)`, including the current stop
+slippage/padding allowance. Existing balance-scaled GBP 75 group / GBP 150
+portfolio limits and margin/stop protections remain additional ceilings.
+The layer can only open when its full risk fits remaining signal headroom.
+
+No hard percentage is reserved from the 0.5% ceiling for a hypothetical future
+layer; this maximizes eligible original entries. The optional layer may therefore
+not fit at all after the original three legs open. This is deliberate.
+
+**Minimum lots:** A GBP 1,000 account has a GBP 5 total signal-risk budget if
+equity is not lower. Three 0.01-minimum XAUUSD legs with a meaningful provider
+stop can exceed GBP 5 even at the lowest allowable broker volume. When the
+minimum three-leg structure will not fit, the EA will NOT place an oversized
+trade; it records `MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK`.
+This is not a daily loss lockout.
+
+The GBP-based calculation is DEMO Account 1 only. The planned USD/Vantage
+live account must be redesigned for its currency, hedging mode, gold contract,
+broker min/step, stop-level, fee rates and risk validation. Broker slippage/gaps
+can cause actual realised loss to exceed the planned 0.5% ceiling.
+The separate paper engine retains its own settings.
 
 ## Mandatory test and rollout gates
 1. Pass CI Python tests for reporting, broker events, signal parser, gateway normalizer, and MQL source contracts.
@@ -65,7 +92,8 @@ The paper engine has its own daily settings.
 7. Exercise explicit GWS ADD message, permission-only message, price boundary, Friday restriction, one-layer-per-group, below-minimum lot and sufficient-size cases. Verify actual broker native SL/TP2 on the fourth ticket when filled.
 8. Exceed the 2% threshold on a test account; verify the warning, monitor reset at Isle of Man midnight, and that eligibility follows the independent per-trade checks.
 9. Disconnect Discord/gateway and restart the bot to verify event persistence, deduplication and no protected-position interference.
-10. Retain known working EA binary. Disarm both switches if any gate fails. Do not deploy to live USD account or reset account history as part of reporting rollout.
+10. Demonstrate the balance-based target lots remain identical, the 0.5% aggregate signal cap bounds the combined three legs and optional layer, and every minimum-broker-lot failure is explicitly diagnosed.
+11. Retain known working EA binary. Disarm both switches if any gate fails. Do not deploy to live USD account or reset account history as part of reporting rollout.
 
 ## Caveats
 The EA polls every three seconds in normal operation and reports telemetry
