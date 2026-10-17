@@ -2,6 +2,7 @@
 Description=DK Capital MT5 Account 1 VNC (SSH tunnel only)
 After=network-online.target dkcapital-mt5-1.service
 Wants=dkcapital-mt5-1.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -14,7 +15,6 @@ ExecStartPre=/usr/bin/timeout 90 /bin/sh -c 'until test -S /tmp/.X11-unix/X150; 
 ExecStart=/usr/bin/x11vnc -display :150 -auth /var/lib/dkcapital-mt5/.Xauthority -rfbport 5901 -localhost -forever -shared -rfbauth /var/lib/dkcapital-mt5/.vnc/passwd -o /tmp/dkcapital-vnc1.log
 Restart=always
 RestartSec=15
-StartLimitIntervalSec=0
 NoNewPrivileges=true
 
 [Install]
