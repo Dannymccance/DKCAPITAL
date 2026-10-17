@@ -271,6 +271,31 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             return
         path = self.config.account1_telemetry_path
         try:
+            # Preserve the EA's latest broker-side rejection reason across MT5
+            # restarts, even though its in-memory 120-item journal resets.
+            # Only merge previously authenticated, same-account snapshots.
+            previous = _json(path)
+            if (previous.get("login") == normalized.get("login")
+                    and previous.get("mode") == "DEMO"
+                    and previous.get("currency") == "GBP"):
+                decisions = {}
+                from datetime import datetime, timedelta, timezone
+                cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+                for item in (previous.get("decisions") or []) + (normalized.get("decisions") or []):
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        at = datetime.fromisoformat(str(item["at"]).replace("Z", "+00:00"))
+                    except (ValueError, TypeError, KeyError):
+                        continue
+                    if at < cutoff or at.tzinfo is None:
+                        continue
+                    key = (item.get("signal_id"), item.get("stage"))
+                    if key not in decisions or str(item["at"]) > str(decisions[key]["at"]):
+                        decisions[key] = item
+                normalized["decisions"] = sorted(
+                    decisions.values(), key=lambda item: str(item["at"])
+                )[-500:]
             path.parent.mkdir(parents=True, exist_ok=True)
             temp = path.with_suffix(".tmp")
             temp.write_text(json.dumps(normalized, separators=(",", ":")), encoding="utf-8")
