@@ -17,6 +17,7 @@ from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
+from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
 from dkcapital.telegram_discord_mirror import sync_mirror
 from dkcapital.weekly_record import close_time, record_due, weekly_record
 
@@ -1175,6 +1176,8 @@ def build_bot(settings: Settings) -> commands.Bot:
 
     mt5_channel_raw = os.getenv("MT5_DASHBOARD_CHANNEL_ID", "").strip()
     mt5_alert_raw = os.getenv("MT5_ALERT_CHANNEL_ID", "").strip()
+    mt5_results_channel_id = int(os.getenv("MT5_RESULTS_CHANNEL_ID", "1561095999139877046"))
+    mt5_results_state_path = Path("/app/data/mt5-results-published.json")
     mt5_channel_id = int(mt5_channel_raw) if mt5_channel_raw else 0
     mt5_alert_id = int(mt5_alert_raw) if mt5_alert_raw else 0
     mt5_pip_size = float(os.getenv("MT5_XAU_PIP_SIZE", "0.01"))
@@ -1283,6 +1286,68 @@ def build_bot(settings: Settings) -> commands.Bot:
                     })
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     logger.exception("Unable to deliver MT5 Account 1 alert")
+
+    async def publish_mt5_results() -> None:
+        """Publish once per fully broker-closed trade, never Telegram-only closures."""
+        if not mt5_results_channel_id:
+            return
+        snapshot = _load_json(mt5_snapshot)
+        if not verified_snapshot(snapshot):
+            return
+        signals = _load_json(settings.signal_state_path).get("signals") or []
+        if not isinstance(signals, list):
+            return
+        results = completed_results(snapshot, signals)
+        state = _load_json(mt5_results_state_path)
+        if not state.get("initialized"):
+            # No historical result spam at deployment. Still follow groups with
+            # positions open now and publish after their broker-confirmed exit.
+            active = set()
+            for position in snapshot.get("positions") or []:
+                group = position.get("group")
+                if group is not None:
+                    active.add(int(group))
+            state = {
+                "initialized": True,
+                "cutover": datetime.now(UTC).isoformat(),
+                "published": {key: "pre-cutover" for key in results},
+                "active_mt5_groups": sorted(active),
+            }
+            _write_json(mt5_results_state_path, state)
+            return
+        published = state.setdefault("published", {})
+        active = set(state.get("active_mt5_groups") or [])
+        for pos in snapshot.get("positions") or []:
+            if pos.get("group") is not None:
+                active.add(int(pos["group"]))
+        state["active_mt5_groups"] = sorted(active)
+        cutover = datetime.fromisoformat(state["cutover"])
+        try:
+            channel = bot.get_channel(mt5_results_channel_id) or await bot.fetch_channel(mt5_results_channel_id)
+            for root, result in sorted(results.items(), key=lambda item: item[1]["closed_at"]):
+                if root in published:
+                    continue
+                group_numbers = set()
+                for signal in signals:
+                    if not isinstance(signal, dict):
+                        continue
+                    if str(signal.get("group_id") or signal.get("signal_id")) != root:
+                        continue
+                    group_numbers.add(mt5_group(str(signal.get("signal_id"))))
+                if (_local_datetime(result["closed_at"], "UTC") <= cutover
+                        and not group_numbers.intersection(active)):
+                    published[root] = "pre-cutover"
+                    _write_json(mt5_results_state_path, state)
+                    continue
+                # Persist a stable publication intent to avoid duplicate cards on
+                # concurrent loop executions. Delivery errors can be retried.
+                msg = await channel.send(embed=result_embed(result))
+                published[root] = str(msg.id)
+                active.difference_update(group_numbers)
+                state["active_mt5_groups"] = sorted(active)
+                _write_json(mt5_results_state_path, state)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception("MT5 results publication failed channel=%s", mt5_results_channel_id)
 
     async def update_paper_dashboard() -> bool:
         state = _load_json(settings.paper_state_path)
@@ -1536,6 +1601,14 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def before_telegram_mirror_loop() -> None:
         await bot.wait_until_ready()
 
+    @tasks.loop(seconds=30)
+    async def mt5_results_loop() -> None:
+        await publish_mt5_results()
+
+    @mt5_results_loop.before_loop
+    async def before_mt5_results_loop() -> None:
+        await bot.wait_until_ready()
+
     @tasks.loop(minutes=1)
     async def internal_signal_loop() -> None:
         await sync_internal_signals()
@@ -1588,6 +1661,8 @@ def build_bot(settings: Settings) -> commands.Bot:
         # MT5 Account 1 and its broker-confirmed signal cards remain active.
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
+        if mt5_results_channel_id and not mt5_results_loop.is_running():
+            mt5_results_loop.start()
         if weekly_channel_id and not weekly_record_loop.is_running():
             weekly_record_loop.start()
         if telegram_mirror_channel_id and not telegram_mirror_loop.is_running():
