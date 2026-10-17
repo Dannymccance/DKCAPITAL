@@ -18,6 +18,7 @@ from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
+from dkcapital.mt5_broker_events import discover_events, notification_embed
 from dkcapital.telegram_discord_mirror import sync_mirror
 from dkcapital.weekly_record import close_time, record_due, weekly_record
 
@@ -1178,6 +1179,9 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_alert_raw = os.getenv("MT5_ALERT_CHANNEL_ID", "").strip()
     mt5_results_channel_id = int(os.getenv("MT5_RESULTS_CHANNEL_ID", "1561095999139877046"))
     mt5_results_state_path = Path("/app/data/mt5-results-published.json")
+    mt5_changes_channel_id = int(os.getenv("MT5_CHANGES_CHANNEL_ID", "1561099532467445961"))
+    mt5_tp_sl_channel_id = int(os.getenv("MT5_TP_SL_CHANNEL_ID", "1561099506337063073"))
+    mt5_events_state_path = Path("/app/data/mt5-broker-events-state.json")
     mt5_channel_id = int(mt5_channel_raw) if mt5_channel_raw else 0
     mt5_alert_id = int(mt5_alert_raw) if mt5_alert_raw else 0
     mt5_pip_size = float(os.getenv("MT5_XAU_PIP_SIZE", "0.01"))
@@ -1348,6 +1352,37 @@ def build_bot(settings: Settings) -> commands.Bot:
                 _write_json(mt5_results_state_path, state)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             logger.exception("MT5 results publication failed channel=%s", mt5_results_channel_id)
+
+    async def publish_mt5_broker_events() -> None:
+        """Durably queue real MT5 broker transactions and position modifications."""
+        if not mt5_changes_channel_id and not mt5_tp_sl_channel_id:
+            return
+        snapshot = _load_json(mt5_snapshot)
+        if not verified_snapshot(snapshot):
+            return
+        signals = _load_json(settings.signal_state_path).get("signals") or []
+        if not isinstance(signals, list):
+            return
+        previous = _load_json(mt5_events_state_path)
+        updated, discovered = discover_events(previous, snapshot, signals)
+        queued = list(previous.get("pending") or [])
+        updated["pending"] = (queued + discovered)[:250]
+        # Save the queue BEFORE sending to Discord so delivery failures retry.
+        _write_json(mt5_events_state_path, updated)
+        for event in list(updated["pending"]):
+            channel_id = (mt5_tp_sl_channel_id if event.get("channel") == "tp_sl"
+                          else mt5_changes_channel_id)
+            if not channel_id:
+                logger.warning("MT5 notification channel not configured event=%s", event["id"])
+                return
+            try:
+                channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+                await channel.send(embed=notification_embed(event))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception("MT5 broker notification failed event=%s", event["id"])
+                return
+            updated["pending"] = [e for e in updated["pending"] if e["id"] != event["id"]]
+            _write_json(mt5_events_state_path, updated)
 
     async def update_paper_dashboard() -> bool:
         state = _load_json(settings.paper_state_path)
@@ -1601,6 +1636,14 @@ def build_bot(settings: Settings) -> commands.Bot:
     async def before_telegram_mirror_loop() -> None:
         await bot.wait_until_ready()
 
+    @tasks.loop(seconds=10)
+    async def mt5_broker_events_loop() -> None:
+        await publish_mt5_broker_events()
+
+    @mt5_broker_events_loop.before_loop
+    async def before_mt5_broker_events_loop() -> None:
+        await bot.wait_until_ready()
+
     @tasks.loop(seconds=30)
     async def mt5_results_loop() -> None:
         await publish_mt5_results()
@@ -1663,6 +1706,8 @@ def build_bot(settings: Settings) -> commands.Bot:
             internal_signal_loop.start()
         if mt5_results_channel_id and not mt5_results_loop.is_running():
             mt5_results_loop.start()
+        if (mt5_changes_channel_id or mt5_tp_sl_channel_id) and not mt5_broker_events_loop.is_running():
+            mt5_broker_events_loop.start()
         if weekly_channel_id and not weekly_record_loop.is_running():
             weekly_record_loop.start()
         if telegram_mirror_channel_id and not telegram_mirror_loop.is_running():
