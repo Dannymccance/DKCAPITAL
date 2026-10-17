@@ -1141,11 +1141,11 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
     groups = len({p["group"] for p in summary["positions"]})
     remaining = summary["portfolio_risk_gbp"]
     available = "UNKNOWN" if remaining is None else f"£{max(0.0, 150.0 - remaining):,.2f}"
-    risk_limit_text = (f"0.5% max planned per signal (current cap £{float(snapshot['signal_risk_cap_gbp']):,.2f})"
-                       if snapshot.get("signal_risk_cap_pct") == 0.5 and snapshot.get("signal_risk_cap_gbp") is not None
+    risk_limit_text = (f"4% maximum planned per signal at provider SL (current cap £{float(snapshot['signal_risk_cap_gbp']):,.2f})"
+                       if snapshot.get("signal_risk_cap_pct") == 4.0 and snapshot.get("signal_risk_cap_gbp") is not None
                        else f"Configured cap: {snapshot.get('signal_risk_cap_pct', 'unreported')}%"
                        if snapshot.get("signal_risk_cap_pct") is not None
-                       else "Per-signal 0.5% cap not reported by this EA")
+                       else "Per-signal risk cap not reported by this EA")
     embed.add_field(
         name="Risk and exposure",
         value=f"Per-signal stop-risk: **{risk_limit_text}**\n"
