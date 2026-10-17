@@ -167,6 +167,9 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
         broker_bid = decision.get("bid")
         reason = ("Exact MT5 reason not yet recorded" if code == "NOT_YET_RECORDED"
                   else code.replace("_", " ").capitalize())
+        previous = str(decision.get("prior_code") or "")
+        if previous:
+            reason += f" (previous blocker: {previous.replace('_', ' ').lower()})"
         quote = (f"\nBroker BID/ASK: {broker_bid:.2f} / {broker_ask:.2f}"
                  if isinstance(broker_bid, (int, float)) and isinstance(broker_ask, (int, float))
                  and broker_ask > 0 else "")
