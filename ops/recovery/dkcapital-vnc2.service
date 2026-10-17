@@ -1,0 +1,21 @@
+[Unit]
+Description=DK Capital MT5 Account 2 VNC (SSH tunnel only)
+After=network-online.target dkcapital-mt5-2.service
+Wants=dkcapital-mt5-2.service
+
+[Service]
+Type=simple
+User=dkmt5b
+Group=dkmt5b
+WorkingDirectory=/var/lib/dkcapital-mt5-2
+Environment=HOME=/var/lib/dkcapital-mt5-2
+Environment=XAUTHORITY=/var/lib/dkcapital-mt5-2/.Xauthority
+ExecStartPre=/usr/bin/timeout 90 /bin/sh -c 'until test -S /tmp/.X11-unix/X151; do sleep 2; done'
+ExecStart=/usr/bin/x11vnc -display :151 -auth /var/lib/dkcapital-mt5-2/.Xauthority -rfbport 5903 -localhost -forever -shared -rfbauth /var/lib/dkcapital-mt5-2/.vnc/passwd -o /tmp/dkcapital-vnc2.log
+Restart=always
+RestartSec=15
+StartLimitIntervalSec=0
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
