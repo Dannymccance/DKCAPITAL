@@ -1106,8 +1106,9 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
               "\n" + ("🟢 Instruction feed connected" if summary.get("feed_http") == 200 else "🔴 Instruction feed disconnected") +
               "\n" + health(telegram_healthy, "Telegram listener") +
               "\n" + health(processor_healthy, "Signal processor") +
-              "\n" + ("🔴 DAILY 2% EQUITY LOCK ACTIVE" if snapshot.get("daily_loss_locked")
-                       else "🟢 Daily equity lock not active / legacy EA unknown") +
+              "\n" + ("🟠 Daily 2% equity warning (trading still enabled)" if snapshot.get("daily_loss_warning")
+                       else "⚪ Daily 2% warning monitor: alert only" if snapshot.get("daily_loss_guard_mode") == "ALERT_ONLY"
+                       else "⚪ Daily loss warning: legacy EA telemetry") +
               "\n" + ("🟢 Layer entries enabled" if snapshot.get("layer_entries_enabled")
                        else "⚪ Layer entries disabled"),
         inline=False,
