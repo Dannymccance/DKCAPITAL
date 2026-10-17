@@ -684,34 +684,49 @@ void TryLayer(const string id,const long mid,const double percentage,
               const string groupId,const string status,const string direction,
               const double tp2)
 {
-   if(!EnableNewEntries || !EnableLayerEntries || !TradeAllowed() || status!="ACTIVE" ||
-      mid<=0 || maximum!=1 || MathAbs(percentage-10.0)>1e-8 ||
-      groupId=="" || (direction!="BUY" && direction!="SELL")) return;
+   if(status!="ACTIVE" || mid<=0 || maximum!=1 ||
+      MathAbs(percentage-10.0)>1e-8 || groupId=="" ||
+      (direction!="BUY" && direction!="SELL")) return;
    long age=(long)TimeGMT()-sentAt;
-   if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds ||
-      IsUKFriday() || LayerPreviouslyAttempted(id,groupId)) return;
+   if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds) return;
+   if(!EnableNewEntries || !EnableLayerEntries)
+   {RecordDecision(id,"LAYER","LAYER_ENTRIES_DISABLED",age);return;}
+   if(!TradeAllowed())
+   {RecordDecision(id,"LAYER","LAYER_MT5_SAFETY_GATE",age);return;}
+   if(!DailyLossAllowed())
+   {RecordDecision(id,"LAYER","DAILY_EQUITY_LOSS_LOCK",age);return;}
+   if(IsUKFriday())
+   {RecordDecision(id,"LAYER","LAYER_FRIDAY_BLOCK",age);return;}
+   if(LayerPreviouslyAttempted(id,groupId)) return;
    bool buy=direction=="BUY";
    MqlTick q;
-   if(!SymbolInfoTick(GoldSymbol,q) || q.bid<=0 || q.ask<=0 ||
-      q.ask-q.bid>MaxSpreadUSD ||
-      (long)TimeTradeServer()-(long)q.time>30) return;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.bid<=0 || q.ask<=0)
+   {RecordDecision(id,"LAYER","BROKER_QUOTE_UNAVAILABLE",age);return;}
+   if(q.ask-q.bid>MaxSpreadUSD)
+   {RecordDecision(id,"LAYER","BROKER_SPREAD_TOO_WIDE",age);return;}
+   if((long)TimeTradeServer()-(long)q.time>30)
+   {RecordDecision(id,"LAYER","BROKER_QUOTE_STALE",age);return;}
    double fill=buy?q.ask:q.bid;
-   if(boundary>0 && (buy?fill>boundary:fill<boundary)) return;
+   if(boundary>0 && (buy?fill>boundary:fill<boundary))
+   {RecordDecision(id,"LAYER","LAYER_PRICE_BOUNDARY",age);return;}
    double referenceLots=OriginalVolume(id);
    double layerLots=FloorLots(referenceLots*0.10);
    if(referenceLots<=0 || layerLots<LotMin()-1e-8 ||
-      layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)) return;
+      layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX))
+   {RecordDecision(id,"LAYER","LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL",age);return;}
 
    // No layer after TP1 or any missing original leg.
    double priceVolume=0,openVolume=0,protectiveSL=0;
    for(int leg=1;leg<=3;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
-      if(ticket==0 || !PositionSelectByTicket(ticket)) return;
+      if(ticket==0 || !PositionSelectByTicket(ticket))
+      {RecordDecision(id,"LAYER","LAYER_REQUIRES_THREE_OPEN_ORIGINAL_LEGS",age);return;}
       if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) return;
       double lots=PositionGetDouble(POSITION_VOLUME);
       double sl=PositionGetDouble(POSITION_SL);
-      if(lots<=0 || sl<=0 || PositionRiskGBP()<0) return;
+      if(lots<=0 || sl<=0 || PositionRiskGBP()<0)
+      {RecordDecision(id,"LAYER","LAYER_INVALID_NATIVE_SL_OR_RISK",age);return;}
       priceVolume+=PositionGetDouble(POSITION_PRICE_OPEN)*lots;
       openVolume+=lots;
       if(leg==1) protectiveSL=sl;
@@ -721,23 +736,27 @@ void TryLayer(const string id,const long mid,const double percentage,
    if(openVolume<=0) return;
    double average=priceVolume/openVolume;
    double point=SymbolInfoDouble(GoldSymbol,SYMBOL_POINT);
-   if(buy?fill>=average-point*0.5:fill<=average+point*0.5) return;
-   if(!StopValid(buy,protectiveSL,q)) return;
+   if(buy?fill>=average-point*0.5:fill<=average+point*0.5)
+   {RecordDecision(id,"LAYER","LAYER_NOT_BETTER_PRICE",age);return;}
+   if(!StopValid(buy,protectiveSL,q))
+   {RecordDecision(id,"LAYER","LAYER_PROTECTIVE_SL_INVALID",age);return;}
    double plannedRisk=RiskGBP(buy,layerLots,fill,protectiveSL);
    if(plannedRisk<0 || plannedRisk>GroupRiskLimitGBP()*LAYER_GROUP_RISK_SHARE+1e-7)
-      return;
+   {RecordDecision(id,"LAYER","LAYER_RISK_LIMIT",age);return;}
    double portfolio=0,groupRisk=0;
    int groups=0;
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups) ||
       groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
-      portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7) return;
+      portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7)
+   {RecordDecision(id,"LAYER","LAYER_GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
    double margin=0;
    ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
    if(!OrderCalcMargin(type,GoldSymbol,layerLots,fill,margin) ||
       margin<0 || !MathIsValidNumber(margin) ||
       AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*1.1) return;
    double target=ValidTP(buy,tp2,q);
-   if(target<=0) return; // No unplanned runner.
+   if(target<=0)
+   {RecordDecision(id,"LAYER","LAYER_TP2_NOT_VALID",age);return;} // No unplanned runner.
 
    // Persist before submission: a result of uncertain status needs manual
    // reconciliation, never a second automatic order.
@@ -756,6 +775,7 @@ void TryLayer(const string id,const long mid,const double percentage,
       PositionGetDouble(POSITION_SL)<=0 ||
       MathAbs(PositionGetDouble(POSITION_VOLUME)-layerLots)>LotStep()/2)
    {
+      RecordDecision(id,"LAYER","LAYER_BROKER_REJECTED_OR_UNCERTAIN",age,trade.ResultRetcode());
       Print("DK2 CRITICAL uncertain layer id=",id,
             " msg=",mid," ticket=",ticket,
             " brokerCode=",trade.ResultRetcode(),"; no automatic retry");
@@ -764,6 +784,7 @@ void TryLayer(const string id,const long mid,const double percentage,
          Print("DK2 CRITICAL unprotected layer requires review ticket=",ticket);
       return;
    }
+   RecordDecision(id,"LAYER","LAYER_BROKER_FILLED",age);
    Print("DK2 layer FILLED id=",id," telegram=",mid," ticket=",ticket,
          " lots=",layerLots," actualEntry=",PositionGetDouble(POSITION_PRICE_OPEN),
          " nativeSL=",PositionGetDouble(POSITION_SL),
