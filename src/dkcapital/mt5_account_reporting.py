@@ -213,9 +213,13 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
         "feed_http": _integer(payload.get("feed_http", 0)),
         "entry_enabled": payload.get("entry_enabled") is True,
         "layer_entries_enabled": payload.get("layer_entries_enabled") is True,
-        "daily_loss_locked": payload.get("daily_loss_locked") is True,
+        "daily_loss_warning": payload.get("daily_loss_warning") is True,
+        "daily_loss_guard_mode": (
+            "ALERT_ONLY" if payload.get("daily_loss_guard_mode") == "ALERT_ONLY"
+            else "LEGACY_OR_UNKNOWN"
+        ),
         "daily_loss_day": _integer(payload.get("daily_loss_day", 0)),
-        "max_daily_loss_pct": _number(payload.get("max_daily_loss_pct", 2.0), minimum=0),
+        "daily_loss_warning_pct": _number(payload.get("daily_loss_warning_pct", 2.0), minimum=0),
         "decisions": decision_rows,
         "received_at": datetime.now(UTC).isoformat(),
     }
