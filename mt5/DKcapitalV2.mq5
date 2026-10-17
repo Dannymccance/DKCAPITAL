@@ -14,6 +14,7 @@ input long ExpectedDemoLogin = 0;
 input bool EnableNewEntries = false; // MUST remain false until accepted on demo.
 input bool EnableLayerEntries = false; // Separate opt-in after broker-side layer tests.
 input double MaxGroupRiskGBP = 75.0;
+input double MaxSignalRiskPct = 0.5; // Planned broker-native stop risk per signal including layer; 0.5% of lower balance/equity.
 input double MaxPortfolioRiskGBP = 150.0;
 input double RiskReferenceBalanceGBP = 1000.0; // Caps above are calibrated at this GBP balance.
 input double RiskPaddingGBPPerLeg = 1.0;
@@ -259,6 +260,13 @@ double RiskBalanceGBP()
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity)) return 0;
    return MathMin(balance,equity);
+}
+double SignalRiskLimitGBP()
+{
+   // Target lots remain determined by ACCOUNT_BALANCE; only the broker
+   // stop-risk budget uses the lower balance/equity on a drawdown.
+   // Includes original TP1/TP2/TP3 legs and any attributable fourth layer.
+   return RiskBalanceGBP()*MaxSignalRiskPct/100.0;
 }
 double GroupRiskLimitGBP()
 {
@@ -551,10 +559,22 @@ void TryEntry(const string id,const string status,const string direction,
    double groupLimit=GroupRiskLimitGBP(),portfolioLimit=PortfolioRiskLimitGBP();
    if(groupLimit<=0 || portfolioLimit<groupLimit)
    {RecordDecision(id,"ENTRY","INVALID_RISK_LIMITS",age);return;}
+   // Keep the existing balance-based targetLots calculation below unchanged.
+   // The 0.5% per-signal ceiling is an additional HARD sizing constraint.
+   // Do not reserve an unused percentage of the smaller signal cap for a
+   // layer: it may use only whatever group stop-risk headroom actually remains.
+   double signalLimit=SignalRiskLimitGBP();
+   double signalRemaining=signalLimit-groupRisk;
    double budget=MathMin(groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk,
-                         portfolioLimit-portfolio);
+                         MathMin(portfolioLimit-portfolio,signalRemaining));
    if(budget<=3*RiskPaddingGBPPerLeg)
-   {RecordDecision(id,"ENTRY","GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
+   {
+      RecordDecision(id,"ENTRY",
+                     signalRemaining<=3*RiskPaddingGBPPerLeg ?
+                     "SIGNAL_RISK_TOO_SMALL_FOR_THREE_LEGS" :
+                     "GROUP_OR_PORTFOLIO_RISK_LIMIT",age);
+      return;
+   }
    double minlot=LotMin();
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
    if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);
@@ -594,9 +614,22 @@ void TryEntry(const string id,const string status,const string direction,
    }
    if(!possible)
    {
-      RecordDecision(id,"ENTRY","MINIMUM_THREE_LEG_SIZE_OR_MARGIN",age);
+      // Distinguish a broker's minimum three-leg size exceeding the 0.5%
+      // total stop-risk budget from an unrelated free-margin failure.
+      double minA=0,minB=0,minC=0;
+      bool minAvailable=Allocate(FloorLots(3*minlot),minA,minB,minC);
+      double minimumRisk=minAvailable ?
+         RiskGBP(buy,minA,fill,sl)+RiskGBP(buy,minB,fill,sl)+
+         RiskGBP(buy,minC,fill,sl) : -1;
+      string reason="MINIMUM_THREE_LEG_SIZE_OR_MARGIN";
+      if(minAvailable && minimumRisk>=0 && minimumRisk>budget+1e-7)
+         reason="MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
+      else if(targetLots<3*minlot-1e-8)
+         reason="BALANCE_BASED_TARGET_BELOW_THREE_MINIMUM_LOTS";
+      RecordDecision(id,"ENTRY",reason,age);
       Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
-            " three-leg minimum cannot fit");
+            " signalCapGBP=",signalLimit," targetLots=",targetLots,
+            " minimumRiskGBP=",minimumRisk," three-leg minimum cannot fit");
       return;
    }
    // Durable intent before first broker request prevents duplicates on restart.
@@ -754,8 +787,11 @@ void TryLayer(const string id,const long mid,const double percentage,
    {RecordDecision(id,"LAYER","LAYER_RISK_LIMIT",age);return;}
    double portfolio=0,groupRisk=0;
    int groups=0;
-   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups) ||
-      groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups))
+   {RecordDecision(id,"LAYER","LAYER_BROKER_EXPOSURE_UNSAFE",age);return;}
+   if(groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7)
+   {RecordDecision(id,"LAYER","LAYER_EXCEEDS_SIGNAL_0_5_PERCENT_RISK",age);return;}
+   if(groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
       portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7)
    {RecordDecision(id,"LAYER","LAYER_GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
    double margin=0;
@@ -893,6 +929,8 @@ void SendTelemetry()
    json+=",\"daily_loss_warning\":"+(DailyEquityWarningActive()?"true":"false");
    json+=",\"daily_loss_guard_mode\":\"ALERT_ONLY\"";
    json+=",\"daily_loss_warning_pct\":"+N(DailyLossWarningPct,2);
+   json+=",\"signal_risk_cap_pct\":"+N(MaxSignalRiskPct,3);
+   json+=",\"signal_risk_cap_gbp\":"+N(SignalRiskLimitGBP(),2);
    json+=",\"daily_loss_day\":"+IntegerToString(UKDateKey());
    // All broker positions/orders must be counted, not only owned XAUUSD legs.
    int brokerCount=PositionsTotal(), unmanaged=0;
@@ -1116,6 +1154,7 @@ int OnInit()
       StringFind(TelemetryUrl,"http://127.0.0.1:8765/")!=0 ||
       StringLen(FeedToken)<24 || PollSeconds<2 || TelemetryEverySeconds<10 ||
       MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
+      MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||
       DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
       RiskReferenceBalanceGBP<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
