@@ -70,7 +70,7 @@ void RecordDecision(const string id,const string stage,const string code,
          decisionLog[i].checked=now;
          decisionLog[i].bid=quoted?q.bid:0;
          decisionLog[i].ask=quoted?q.ask:0;
-         decisionLog[i].age=MathMax(0,age);
+         decisionLog[i].age=age>0?age:0;
          decisionLog[i].brokerCode=brokerCode;
          telemetry_urgent=true;
          Print("DK2 DECISION ",stage," signal=",id," code=",code,
@@ -94,7 +94,7 @@ void RecordDecision(const string id,const string stage,const string code,
    bool quoted=SymbolInfoTick(GoldSymbol,q);
    decisionLog[n].bid=quoted?q.bid:0;
    decisionLog[n].ask=quoted?q.ask:0;
-   decisionLog[n].age=MathMax(0,age);
+   decisionLog[n].age=age>0?age:0;
    decisionLog[n].brokerCode=brokerCode;
    telemetry_urgent=true;
    Print("DK2 DECISION ",stage," signal=",id," code=",code,
@@ -1120,7 +1120,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.04 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.05 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
