@@ -220,6 +220,8 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
         ),
         "daily_loss_day": _integer(payload.get("daily_loss_day", 0)),
         "daily_loss_warning_pct": _number(payload.get("daily_loss_warning_pct", 2.0), minimum=0),
+        "signal_risk_cap_pct": _number(payload.get("signal_risk_cap_pct", 0.5), minimum=0),
+        "signal_risk_cap_gbp": _number(payload.get("signal_risk_cap_gbp", 0), minimum=0),
         "decisions": decision_rows,
         "received_at": datetime.now(UTC).isoformat(),
     }
