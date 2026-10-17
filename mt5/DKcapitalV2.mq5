@@ -527,6 +527,12 @@ void TryEntry(const string id,const string status,const string direction,
             " providerSL=",providerSL);
       return;
    }
+   // Do not open an unintended runner when Telegram target numbering is
+   // malformed or a native target is already behind the broker quote.
+   if(tp1<=0 || tp2<=0 || tp3<=0 ||
+      ValidTP(buy,tp1,q)<=0 || ValidTP(buy,tp2,q)<=0 ||
+      ValidTP(buy,tp3,q)<=0)
+   {RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);return;}
    double sl=NormalizePrice(providerSL);
    if(!StopValid(buy,sl,q))
    {RecordDecision(id,"ENTRY","BROKER_SL_INVALID",age);return;}
