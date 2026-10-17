@@ -1,0 +1,80 @@
+"""Offline tests of MT5 LiveUpdate handoff detection and account isolation."""
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SCRIPT = Path(__file__).resolve().parents[1] / "ops/mt5/dkcapital-mt5-run"
+loader = importlib.machinery.SourceFileLoader("mt5_supervisor", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+
+
+class UpdateSupervisorTests(unittest.TestCase):
+    def test_detects_new_utf16_log_handoff(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory = Path(d)
+            log = directory / "20261017.log"
+            log.write_bytes("old LiveUpdate start /update\n".encode("utf-16-le"))
+            mark = module.log_offsets(directory)
+            self.assertFalse(module.new_update_handoff(directory, mark))
+            with log.open("ab") as out:
+                out.write("LiveUpdate start terminal64.exe /update /portable\n".encode("utf-16-le"))
+            self.assertTrue(module.new_update_handoff(directory, mark))
+
+    def test_normal_shutdown_not_misclassified(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory = Path(d)
+            log = directory / "20261017.log"
+            log.write_bytes("Terminal started\n".encode("utf-16-le"))
+            mark = module.log_offsets(directory)
+            with log.open("ab") as out:
+                out.write("Terminal exit with code 0\n".encode("utf-16-le"))
+            self.assertFalse(module.new_update_handoff(directory, mark))
+
+    def test_midnight_rollover_and_truncated_log(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory = Path(d)
+            earlier = directory / "20261017.log"
+            earlier.write_bytes("old stuff\n".encode("utf-16-le"))
+            mark = module.log_offsets(directory)
+            later = directory / "20261018.log"
+            later.write_bytes("LiveUpdate start terminal64.exe /update\n".encode("utf-16-le"))
+            self.assertTrue(module.new_update_handoff(directory, mark))
+            earlier.write_bytes("LiveUpdate start terminal64.exe /update\n".encode("utf-16-le"))
+            self.assertTrue(module.new_update_handoff(directory, mark))
+
+    def test_update_and_terminal_classification(self):
+        target = Path("/var/lib/dkcapital-mt5/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe")
+        self.assertEqual(module.process_kind(str(target) + " /portable /profile:5057220041", target), "terminal")
+        self.assertEqual(module.process_kind("C:\\users\\dkmt5\\liveupdate\\terminal64.exe /update /path:...", target), "updater")
+        self.assertIsNone(module.process_kind("/var/lib/dkcapital-mt5-2/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe /portable", target))
+        self.assertIsNone(module.process_kind("MetaEditor64.exe /compile:source.mq5", target))
+
+    def test_update_wait_settles_without_updater(self):
+        target = Path("/tmp/MT5/terminal64.exe")
+        ticks = iter(range(0, 400, 11))
+        with patch.object(module.time, "monotonic", side_effect=lambda: next(ticks)), \
+             patch.object(module.time, "sleep", return_value=None), \
+             patch.object(module, "wine_processes", return_value=set()):
+            self.assertEqual(module.await_update(target, 1002), "relaunch")
+
+    def test_update_wait_adopts_relaunched_terminal(self):
+        target = Path("/tmp/MT5/terminal64.exe")
+        with patch.object(module.time, "monotonic", return_value=0), \
+             patch.object(module, "wine_processes", return_value={"terminal"}):
+            self.assertEqual(module.await_update(target, 1002), "adopted")
+
+    def test_accounts_remain_isolated(self):
+        self.assertNotEqual(module.ACCOUNTS["1"][1], module.ACCOUNTS["2"][1])
+        self.assertNotEqual(module.ACCOUNTS["1"][2], module.ACCOUNTS["2"][2])
+        self.assertEqual(module.ACCOUNTS["1"][3], "5057220041")
+
+
+if __name__ == "__main__":
+    unittest.main()
