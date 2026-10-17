@@ -25,6 +25,33 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("daily_loss_guard_mode", source)
         self.assertIn("ALERT_ONLY", source)
 
+    def test_balance_based_lots_with_total_point_five_percent_signal_risk(self):
+        source = self.code
+        self.assertIn("input double MaxSignalRiskPct = 0.5;", source)
+        self.assertIn("double SignalRiskLimitGBP()", source)
+        self.assertIn("RiskBalanceGBP()*MaxSignalRiskPct/100.0", source)
+        self.assertIn("return MathMin(balance,equity);", source)
+        entry = source.split("void TryEntry(", 1)[1].split(
+            "// Original three-leg broker fills", 1)[0]
+        layer = source.split("void TryLayer(", 1)[1].split(
+            "bool ActionKeySeen(", 1)[0]
+        # Do not replace the account-BALANCE target sizing with fixed
+        # fractional lots or an entirely different entry allocation.
+        self.assertIn(
+            "MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01",
+            entry,
+        )
+        self.assertIn("MathMin(portfolioLimit-portfolio,signalRemaining)", entry)
+        self.assertIn("double signalRemaining=signalLimit-groupRisk;", entry)
+        self.assertIn("if(planned>budget+1e-7) continue;", entry)
+        self.assertIn("FloorLots(total-LotStep())", entry)
+        self.assertIn("groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7", layer)
+        self.assertIn("LAYER_EXCEEDS_SIGNAL_0_5_PERCENT_RISK", layer)
+        self.assertIn("RiskGBP(buy,minA,fill,sl)", entry)
+        self.assertIn("MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
+        self.assertIn("EnableLayerEntries = false", source)
+        self.assertNotIn("DailyLossAllowed()", entry + layer)
+
     def test_no_unplanned_tp_runner(self):
         entry = self.code.split("void TryEntry(", 1)[1].split(
             "// Original three-leg broker fills", 1)[0]
