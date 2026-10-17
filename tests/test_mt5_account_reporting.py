@@ -156,7 +156,8 @@ class ReportingUnitTests(unittest.TestCase):
         data = example()
         data["deals"][-1]["reason"] = "TP"
         data["layer_entries_enabled"] = False
-        data["daily_loss_locked"] = True
+        data["daily_loss_warning"] = True
+        data["daily_loss_guard_mode"] = "ALERT_ONLY"
         data["daily_loss_day"] = 20261017
         data["decisions"] = [{
             "signal_id": "-1003765237177:7081",
@@ -168,7 +169,8 @@ class ReportingUnitTests(unittest.TestCase):
         normal = normalize_telemetry(data, LOGIN)
         self.assertEqual(normal["deals"][-1]["reason"], "TP")
         self.assertEqual(normal["deals"][0]["reason"], "UNVERIFIED")
-        self.assertTrue(normal["daily_loss_locked"])
+        self.assertTrue(normal["daily_loss_warning"])
+        self.assertEqual(normal["daily_loss_guard_mode"], "ALERT_ONLY")
         self.assertEqual(normal["daily_loss_day"], 20261017)
         self.assertEqual(normal["decisions"][0]["code"], "BROKER_SPREAD_TOO_WIDE")
         self.assertEqual(normal["decisions"][0]["ask"], 4178.46)
