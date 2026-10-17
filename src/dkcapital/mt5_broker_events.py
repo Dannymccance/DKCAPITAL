@@ -205,7 +205,7 @@ def discover_events(
             "id": f"daily-warning-{snapshot.get('daily_loss_day', snapshot.get('generated_at', '')[:10])}",
             "channel": "changes", "title": "DAILY EQUITY LOSS WARNING",
             "body": "MT5 EA reports a daily equity warning threshold was reached."
-                    " Existing positions are not liquidated by this safeguard.",
+                    " Notification does not change order execution or positions.",
         })
     new_state.update({
         "positions": current,
