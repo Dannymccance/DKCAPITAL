@@ -200,6 +200,7 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
             raise ValueError("MT5 decision outside one-day retention window")
         decision_rows.append({
             "signal_id": signal_id, "stage": stage, "code": code,
+            "prior_code": str(item.get("prior_code") or "").upper()[:64],
             "at": stamp.isoformat(), "bid": _number(item.get("bid", 0), minimum=0),
             "ask": _number(item.get("ask", 0), minimum=0),
             "age_seconds": _integer(item.get("age_seconds", 0)),
