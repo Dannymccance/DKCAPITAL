@@ -77,13 +77,13 @@ class BrokerEventsTests(unittest.TestCase):
         state, repeat = discover_events(state, snap(positions=[pos()]), signals, now=NOW)
         self.assertFalse(any(e["title"].startswith("WARNING: PROVIDER SL") for e in repeat))
 
-    def test_daily_equity_loss_lock_appears_only_on_transition(self):
-        state, _ = discover_events({}, snap(daily_loss_locked=False), SIGNALS, now=NOW)
-        state, first = discover_events(state, snap(daily_loss_locked=True, daily_loss_day=20261017),
+    def test_daily_equity_warning_appears_only_on_transition(self):
+        state, _ = discover_events({}, snap(daily_loss_warning=False), SIGNALS, now=NOW)
+        state, first = discover_events(state, snap(daily_loss_warning=True, daily_loss_day=20261017),
                                        SIGNALS, now=NOW)
         self.assertEqual(len(first), 1)
-        self.assertIn("DAILY", first[0]["title"])
-        _, repeat = discover_events(state, snap(daily_loss_locked=True), SIGNALS, now=NOW)
+        self.assertIn("WARNING", first[0]["title"])
+        _, repeat = discover_events(state, snap(daily_loss_warning=True), SIGNALS, now=NOW)
         self.assertEqual(repeat, [])
 
     def test_late_or_wrong_account_data_emits_nothing(self):
