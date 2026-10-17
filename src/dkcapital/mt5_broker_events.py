@@ -141,6 +141,63 @@ def discover_events(
                         f"| Ticket {ticket}\n{attr.upper()}: {was:.2f} -> {updated:.2f}"
                         + ("\nCRITICAL: protective SL removed" if attr == "sl" and updated <= 0 else ""),
             })
+    # Compare requested provider stop to the ACTUAL native MT5 position stop.
+    # Notify only if a more protective move is still missing after a grace
+    # period. Never demand a provider's request to widen an existing SL.
+    watched = set(state.get("warned_provider_stops", []))
+    for signal in signals:
+        if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
+            continue
+        sid = str(signal.get("signal_id") or "")
+        if not sid:
+            continue
+        relevant = [pos for pos in current.values()
+                    if int(pos["magic"]) // 10 == mt5_group(sid)]
+        if not relevant:
+            continue
+        status = str(signal.get("sl_mode") or "PRICE").upper()
+        if status not in ("PRICE", "BREAKEVEN"):
+            continue
+        updated = str(signal.get("last_update_at") or "")
+        try:
+            update_at = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            if update_at.tzinfo is None:
+                continue
+            if ((now or datetime.now(UTC)) - update_at).total_seconds() < 40:
+                continue
+        except (ValueError, TypeError):
+            continue
+        direction = str(signal.get("direction") or "")
+        if direction not in ("BUY", "SELL"):
+            continue
+        expected = float(signal.get("current_sl") or 0)
+        for pos in relevant:
+            if status == "PRICE" and expected <= 0:
+                continue
+            threshold = float(pos["entry"]) if status == "BREAKEVEN" else expected
+            actual = float(pos["sl"])
+            # Only compare improvement. Broker stop that is already more
+            # protective than provider's instruction is fully compliant.
+            missing = actual <= 0 or (
+                actual + 0.000001 < threshold if direction == "BUY"
+                else actual - 0.000001 > threshold
+            )
+            if not missing:
+                continue
+            key = f"{sid}:{pos['magic']}:{pos['entry']:.5f}:{status}:{threshold:.5f}"
+            if key in watched:
+                continue
+            watched.add(key)
+            add({
+                "id": "sl-unconfirmed-" + key,
+                "channel": "changes",
+                "title": "WARNING: PROVIDER SL NOT YET CONFIRMED ON MT5",
+                "body": f"Signal {sid} | {direction} XAUUSD\n"
+                        f"Expected minimum protective SL: {threshold:.2f}\n"
+                        f"Broker SL observed: {actual:.2f}\n"
+                        "This is an unconfirmed protection change, not a TP/SL hit.",
+            })
+    new_state["warned_provider_stops"] = sorted(watched)[-1500:]
     if snapshot.get("daily_loss_locked") is True and not state.get("last_daily_loss_locked"):
         add({
             "id": f"daily-lock-{snapshot.get('daily_loss_day', snapshot.get('generated_at', '')[:10])}",
