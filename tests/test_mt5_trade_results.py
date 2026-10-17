@@ -1,3 +1,4 @@
+import unittest
 from datetime import UTC, datetime
 
 from dkcapital.mt5_signal_cards import mt5_group
@@ -81,3 +82,20 @@ def test_unverified_reason_never_claims_tp():
     assert completed_results(snapshot(deals), SIGNALS, now=NOW)[SID]["exit_type"] == (
         "BROKER CLOSED - REASON UNVERIFIED"
     )
+
+class Mt5TradeResultsTests(unittest.TestCase):
+    def test_leg_profits_commissions(self):
+        test_final_result_counts_each_leg_and_commissions()
+
+    def test_completion_requires_all_legs(self):
+        test_no_result_until_every_leg_fully_closed()
+
+    def test_still_open_broker_position(self):
+        test_no_result_when_broker_position_still_open()
+
+    def test_stale_snapshot(self):
+        test_no_result_on_stale_snapshot()
+
+    def test_reason_not_invented(self):
+        test_unverified_reason_never_claims_tp()
+
