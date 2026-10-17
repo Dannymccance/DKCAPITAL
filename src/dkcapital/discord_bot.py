@@ -1366,7 +1366,7 @@ def build_bot(settings: Settings) -> commands.Bot:
         previous = _load_json(mt5_events_state_path)
         updated, discovered = discover_events(previous, snapshot, signals)
         queued = list(previous.get("pending") or [])
-        updated["pending"] = (queued + discovered)[:250]
+        updated["pending"] = queued + discovered
         # Save the queue BEFORE sending to Discord so delivery failures retry.
         _write_json(mt5_events_state_path, updated)
         for event in list(updated["pending"]):
