@@ -486,40 +486,64 @@ void TryEntry(const string id,const string status,const string direction,
               double low,double high,double providerSL,const long opened,
               double tp1,double tp2,double tp3)
 {
-   if(!EnableNewEntries || status!="ACTIVE" || !TradeAllowed()) return;
+   if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
-   if(age<0 || age>MaximumSignalAgeSeconds) return;
+   if(age<0 || age>MaximumSignalAgeSeconds)
+   {
+      if(age>MaximumSignalAgeSeconds && age<MaximumSignalAgeSeconds+120)
+         RecordDecision(id,"ENTRY","ENTRY_WINDOW_EXPIRED",age);
+      return;
+   }
+   if(!EnableNewEntries) {RecordDecision(id,"ENTRY","ENTRY_DISABLED",age);return;}
+   if(!DemoIdentity()) {RecordDecision(id,"ENTRY","DEMO_IDENTITY_FAILED",age);return;}
+   if(OrdersTotal()>0) {RecordDecision(id,"ENTRY","BROKER_PENDING_ORDERS",age);return;}
+   if(!telemetry_healthy || last_feed_http!=200)
+   {RecordDecision(id,"ENTRY","GATEWAY_OR_TELEMETRY_UNHEALTHY",age);return;}
+   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
+      !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED))
+   {RecordDecision(id,"ENTRY","MT5_TRADING_DISABLED",age);return;}
+   if(!DailyLossAllowed()) {RecordDecision(id,"ENTRY","DAILY_EQUITY_LOSS_LOCK",age);return;}
    if(HasBeenAttempted(id)) return;
    MqlTick q;
-   if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0 ||
-      q.ask-q.bid>MaxSpreadUSD ||
-      (long)TimeTradeServer()-(long)q.time>30) return;
+   if(!SymbolInfoTick(GoldSymbol,q) || q.ask<=0 || q.bid<=0)
+   {RecordDecision(id,"ENTRY","BROKER_QUOTE_UNAVAILABLE",age);return;}
+   if(q.ask-q.bid>MaxSpreadUSD)
+   {RecordDecision(id,"ENTRY","BROKER_SPREAD_TOO_WIDE",age);return;}
+   if((long)TimeTradeServer()-(long)q.time>30)
+   {RecordDecision(id,"ENTRY","BROKER_QUOTE_STALE",age);return;}
    bool buy=direction=="BUY";
    double fill=buy?q.ask:q.bid;
    double zLow=MathMin(low,high),zHigh=MathMax(low,high);
-   if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD) return;
+   if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD)
+   {RecordDecision(id,"ENTRY","PRICE_OUTSIDE_ENTRY_ZONE",age);return;}
    // Provider's SL is the ONLY permitted entry stop.
    // Risk limits adjust lots, never the protective stop price.
    // Missing/wrong-side/broker-invalid SL means skip until corrected.
    if(providerSL<=0 || !StopValid(buy,providerSL,q) ||
       (buy ? providerSL>=zLow : providerSL<=zHigh))
    {
+      RecordDecision(id,"ENTRY","PROVIDER_SL_INVALID_OR_MISSING",age);
       Print("DK2 ENTRY SKIP: missing/invalid provider SL id=",id,
             " providerSL=",providerSL);
       return;
    }
    double sl=NormalizePrice(providerSL);
-   if(!StopValid(buy,sl,q)) return;
+   if(!StopValid(buy,sl,q))
+   {RecordDecision(id,"ENTRY","BROKER_SL_INVALID",age);return;}
    double portfolio=0,groupRisk=0;
    int groups=0;
-   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups)) return;
-   if(MaximumConcurrentGroups>0 && groups>=MaximumConcurrentGroups) return;
+   if(!Exposure(portfolio,groupRisk,GroupBase(id),groups))
+   {RecordDecision(id,"ENTRY","BROKER_EXPOSURE_UNSAFE",age);return;}
+   if(MaximumConcurrentGroups>0 && groups>=MaximumConcurrentGroups)
+   {RecordDecision(id,"ENTRY","MAX_CONCURRENT_GROUPS",age);return;}
    // Reserve 15% of balance-scaled group capacity for a possible later layer.
    double groupLimit=GroupRiskLimitGBP(),portfolioLimit=PortfolioRiskLimitGBP();
-   if(groupLimit<=0 || portfolioLimit<groupLimit) return;
+   if(groupLimit<=0 || portfolioLimit<groupLimit)
+   {RecordDecision(id,"ENTRY","INVALID_RISK_LIMITS",age);return;}
    double budget=MathMin(groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk,
                          portfolioLimit-portfolio);
-   if(budget<=3*RiskPaddingGBPPerLeg) return;
+   if(budget<=3*RiskPaddingGBPPerLeg)
+   {RecordDecision(id,"ENTRY","GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
    double minlot=LotMin();
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
    if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);
@@ -538,6 +562,7 @@ void TryEntry(const string id,const string status,const string direction,
       // Its -1 sentinel is NOT negative exposure or spare risk capacity.
       if(r1<0 || r2<0 || r3<0)
       {
+         RecordDecision(id,"ENTRY","BROKER_RISK_VALUATION_FAILED",age);
          Print("DK2 RISK BLOCK: failed broker stop-risk valuation id=",id);
          return;
       }
@@ -558,6 +583,7 @@ void TryEntry(const string id,const string status,const string direction,
    }
    if(!possible)
    {
+      RecordDecision(id,"ENTRY","MINIMUM_THREE_LEG_SIZE_OR_MARGIN",age);
       Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
             " three-leg minimum cannot fit");
       return;
@@ -578,6 +604,7 @@ void TryEntry(const string id,const string status,const string direction,
          PositionGetDouble(POSITION_SL)<=0 ||
          MathAbs(PositionGetDouble(POSITION_VOLUME)-vols[leg-1])>LotStep()/2)
       {
+         RecordDecision(id,"ENTRY","BROKER_ORDER_REJECTED_OR_PARTIAL",age,trade.ResultRetcode());
          Print("DK2 CRITICAL incomplete trio id=",id," leg=",leg,
                " retcode=",trade.ResultRetcode());
          allGood=false;break;
@@ -588,7 +615,11 @@ void TryEntry(const string id,const string status,const string direction,
       Print("DK2 CRITICAL attempting emergency unwind of partial entry ",id);
       if(!CloseGroup(id)) Print("DK2 CRITICAL residual hedging leg requires review ",id);
    }
-   else Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
+   else
+   {
+      RecordDecision(id,"ENTRY","BROKER_FILLED",age);
+      Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
+   }
 }
 // Original three-leg broker fills are the fixed reference, even after partial closes.
 double OriginalVolume(const string id)
