@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.04"
+#property version "2.05"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -25,17 +25,145 @@ input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
 input int DeviationPoints = 35;
+input double MaxDailyEquityLossPct = 2.0; // Block NEW trades; never liquidate existing positions.
 
 CTrade trade;
 bool in_cycle = false;
 bool telemetry_healthy = false;
 int last_feed_http = 0;
 datetime last_telemetry = 0;
+bool telemetry_urgent = false;
 const ulong MAGIC_BASE = 5100000000;
 const ulong MAGIC_MAX = 48049672950;
 const double INITIAL_GROUP_RISK_SHARE = 0.85;
 const double LAYER_GROUP_RISK_SHARE = 0.15;
 const int LAYER_LEG = 4;
+
+// Bounded, broker-sourced decisions. Never call a feed-only price rejection a
+// broker rejection; record the EA gate that actually prevented submission.
+struct ExecutionDecision
+{
+   string id;
+   string stage;
+   string code;
+   datetime checked;
+   double bid;
+   double ask;
+   long age;
+   uint brokerCode;
+};
+ExecutionDecision decisionLog[];
+
+void RecordDecision(const string id,const string stage,const string code,
+                    const long age=0,const uint brokerCode=0)
+{
+   datetime now=TimeGMT();
+   if(StringLen(id)<1 || StringLen(id)>64) return;
+   for(int i=ArraySize(decisionLog)-1;i>=0;i--)
+   {
+      if(decisionLog[i].id==id && decisionLog[i].stage==stage)
+      {
+         if(decisionLog[i].code==code && now-decisionLog[i].checked<20) return;
+         MqlTick q;
+         bool quoted=SymbolInfoTick(GoldSymbol,q);
+         decisionLog[i].code=code;
+         decisionLog[i].checked=now;
+         decisionLog[i].bid=quoted?q.bid:0;
+         decisionLog[i].ask=quoted?q.ask:0;
+         decisionLog[i].age=MathMax(0,age);
+         decisionLog[i].brokerCode=brokerCode;
+         telemetry_urgent=true;
+         Print("DK2 DECISION ",stage," signal=",id," code=",code,
+               " age=",age," brokerCode=",brokerCode);
+         return;
+      }
+   }
+   int n=ArraySize(decisionLog);
+   if(n>=120)
+   {
+      for(int j=1;j<n;j++) decisionLog[j-1]=decisionLog[j];
+      n=119;
+      ArrayResize(decisionLog,n);
+   }
+   ArrayResize(decisionLog,n+1);
+   decisionLog[n].id=id;
+   decisionLog[n].stage=stage;
+   decisionLog[n].code=code;
+   decisionLog[n].checked=now;
+   MqlTick q;
+   bool quoted=SymbolInfoTick(GoldSymbol,q);
+   decisionLog[n].bid=quoted?q.bid:0;
+   decisionLog[n].ask=quoted?q.ask:0;
+   decisionLog[n].age=MathMax(0,age);
+   decisionLog[n].brokerCode=brokerCode;
+   telemetry_urgent=true;
+   Print("DK2 DECISION ",stage," signal=",id," code=",code,
+         " age=",age," brokerCode=",brokerCode);
+}
+
+int UKDateKey()
+{
+   datetime utc=TimeGMT();
+   MqlDateTime t;
+   TimeToStruct(utc,t);
+   MqlDateTime last=t;
+   last.mon=3;last.day=31;last.hour=1;last.min=0;last.sec=0;
+   datetime march=StructToTime(last);
+   MqlDateTime m; TimeToStruct(march,m);
+   march-=(int)m.day_of_week*86400;
+   last.mon=10;
+   datetime october=StructToTime(last);
+   MqlDateTime o; TimeToStruct(october,o);
+   october-=(int)o.day_of_week*86400;
+   MqlDateTime local;
+   TimeToStruct(utc+(utc>=march && utc<october?3600:0),local);
+   return local.year*10000+local.mon*100+local.day;
+}
+
+// First post-deployment observation anchors the daily baseline. This is
+// preserved across EA restarts via MT5 terminal globals but is not a historical
+// reconstruction of today's pre-deployment equity.
+bool DailyLossAllowed()
+{
+   int day=UKDateKey();
+   string startKey=Key("DAILY_START_"+IntegerToString(day));
+   string lockedKey=Key("DAILY_LOCK_"+IntegerToString(day));
+   if(GlobalVariableCheck(lockedKey)) return false;
+   double balance=AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity))
+      return false;
+   if(!GlobalVariableCheck(startKey))
+   {
+      GlobalVariableSet(startKey,balance);
+      GlobalVariablesFlush();
+      Print("DK2 daily loss baseline GBP=",balance," day=",day);
+   }
+   double opening=GlobalVariableGet(startKey);
+   if(opening<=0) return false;
+   if(equity<=opening*(1.0-MaxDailyEquityLossPct/100.0))
+   {
+      GlobalVariableSet(lockedKey,(double)TimeGMT());
+      GlobalVariablesFlush();
+      Print("DK2 DAILY EQUITY STOP LOCKED day=",day,
+            " baseline=",opening," equity=",equity);
+      return false;
+   }
+   return true;
+}
+
+string DealReasonName(const long reason)
+{
+   if(reason==DEAL_REASON_TP) return "TP";
+   if(reason==DEAL_REASON_SL) return "SL";
+   if(reason==DEAL_REASON_CLIENT) return "CLIENT";
+   if(reason==DEAL_REASON_MOBILE) return "MOBILE";
+   if(reason==DEAL_REASON_WEB) return "WEB";
+   if(reason==DEAL_REASON_EXPERT) return "EXPERT";
+   if(reason==DEAL_REASON_SO) return "SO";
+   return "UNVERIFIED";
+}
+
 
 uint Hash(const string value)
 {
@@ -700,6 +828,9 @@ void SendTelemetry()
    json+="\"bid\":"+N(q.bid,5)+",\"ask\":"+N(q.ask,5);
    json+=",\"feed_http\":"+IntegerToString(last_feed_http);
    json+=",\"entry_enabled\":"+(EnableNewEntries?"true":"false");
+   json+=",\"layer_entries_enabled\":"+(EnableLayerEntries?"true":"false");
+   json+=",\"daily_loss_locked\":"+(DailyLossAllowed()?"false":"true");
+   json+=",\"max_daily_loss_pct\":"+N(MaxDailyEquityLossPct,2);
    // All broker positions/orders must be counted, not only owned XAUUSD legs.
    int brokerCount=PositionsTotal(), unmanaged=0;
    bool allProtected=true;
@@ -817,9 +948,27 @@ void SendTelemetry()
          json+=",\"profit\":"+N(HistoryDealGetDouble(deal,DEAL_PROFIT),2);
          json+=",\"commission\":"+N(HistoryDealGetDouble(deal,DEAL_COMMISSION),2);
          json+=",\"swap\":"+N(HistoryDealGetDouble(deal,DEAL_SWAP),2);
-         json+=",\"time\":\""+IsoUTC(utcTime)+"\"}";
+         json+=",\"time\":\""+IsoUTC(utcTime)+"\"";
+         json+=",\"reason\":\""+DealReasonName(HistoryDealGetInteger(deal,DEAL_REASON))+"\"}";
+
          emitted++;
       }
+   }
+   json+="],\"decisions\":[";
+   bool firstDecision=true;
+   for(int i=0;i<ArraySize(decisionLog);i++)
+   {
+      if(TimeGMT()-decisionLog[i].checked>86400) continue;
+      if(!firstDecision) json+=",";
+      firstDecision=false;
+      json+="{\"signal_id\":\""+decisionLog[i].id+"\"";
+      json+=",\"stage\":\""+decisionLog[i].stage+"\"";
+      json+=",\"code\":\""+decisionLog[i].code+"\"";
+      json+=",\"at\":\""+IsoUTC(decisionLog[i].checked)+"\"";
+      json+=",\"bid\":"+N(decisionLog[i].bid,5);
+      json+=",\"ask\":"+N(decisionLog[i].ask,5);
+      json+=",\"age_seconds\":"+L(decisionLog[i].age);
+      json+=",\"broker_retcode\":"+IntegerToString((long)decisionLog[i].brokerCode)+"}";
    }
    json+="]}";
    char payload[],response[];
@@ -879,9 +1028,11 @@ void OnTimer()
    if(in_cycle) return;
    in_cycle=true;
    if(!DemoIdentity()) {in_cycle=false;return;}
-   if(TimeGMT()-last_telemetry>=TelemetryEverySeconds)
+   if(TimeGMT()-last_telemetry>=TelemetryEverySeconds ||
+      (telemetry_urgent && TimeGMT()-last_telemetry>=3))
    {
       SendTelemetry();last_telemetry=TimeGMT();
+      if(telemetry_healthy) telemetry_urgent=false;
    }
    char req[],resp[];
    string headers="Authorization: Bearer "+FeedToken+"\r\n";
@@ -901,6 +1052,7 @@ int OnInit()
       StringFind(TelemetryUrl,"http://127.0.0.1:8765/")!=0 ||
       StringLen(FeedToken)<24 || PollSeconds<2 || TelemetryEverySeconds<10 ||
       MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
+      MaxDailyEquityLossPct<=0 || MaxDailyEquityLossPct>10 ||
       RiskReferenceBalanceGBP<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
@@ -912,5 +1064,15 @@ int OnInit()
          " login=",ExpectedDemoLogin," version=2.04 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
+}
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(trans.type==TRADE_TRANSACTION_DEAL_ADD ||
+      trans.type==TRADE_TRANSACTION_POSITION ||
+      trans.type==TRADE_TRANSACTION_ORDER_ADD ||
+      trans.type==TRADE_TRANSACTION_ORDER_DELETE)
+      telemetry_urgent=true;
 }
 void OnDeinit(const int reason) {EventKillTimer();}
