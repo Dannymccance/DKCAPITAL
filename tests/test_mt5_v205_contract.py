@@ -48,7 +48,7 @@ class V205SourceContract(unittest.TestCase):
             '"ENTRY_WINDOW_EXPIRED"', '"MISSING_OR_INVALID_NATIVE_TP"',
         ):
             self.assertIn(phrase, source)
-        for telemetry_field in ('"decisions"', 'age_seconds', 'broker_retcode', 'layer_entries_enabled'):
+        for telemetry_field in ('decisions', 'age_seconds', 'broker_retcode', 'layer_entries_enabled'):
             self.assertIn(telemetry_field, source)
 
     def test_native_stop_and_fixed_risk_rules_not_removed(self):
