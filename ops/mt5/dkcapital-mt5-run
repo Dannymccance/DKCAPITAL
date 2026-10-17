@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Keep an MT5 Wine display alive across MetaTrader LiveUpdate handoffs.
+
+This replaces the one-shot /usr/local/bin/dkcapital-mt5-run shell launcher.
+The caller is the existing per-account systemd unit; it must run as dkmt5 or
+dkmt5b, never root. This does not modify EA files or trading flags.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import time
+
+ACCOUNTS = {
+    "1": ("dkmt5", Path("/var/lib/dkcapital-mt5"), 150, "5057220041"),
+    "2": ("dkmt5b", Path("/var/lib/dkcapital-mt5-2"), 151, None),
+}
+WINE64 = "/usr/lib/wine/wine64"
+UPDATE_WAIT_SECONDS = 600
+UPDATE_SETTLE_SECONDS = 20
+UPDATE_RETRY_LIMIT = 3
+POLL_SECONDS = 2
+
+
+def log_offsets(log_dir: Path) -> dict[Path, int]:
+    """Bookmark each log so an old LiveUpdate line cannot trigger a retry."""
+    return {p: p.stat().st_size for p in log_dir.glob("????????.log") if p.is_file()}
+
+
+def new_update_handoff(log_dir: Path, offsets: dict[Path, int]) -> bool:
+    for path in log_dir.glob("????????.log"):
+        if not path.is_file():
+            continue
+        raw = path.read_bytes()
+        start = offsets.get(path, 0)
+        if start > len(raw):
+            start = 0
+        start -= start % 2
+        appended = raw[start:].decode("utf-16-le", errors="replace")
+        if any("LiveUpdate" in line and "/update" in line for line in appended.splitlines()):
+            return True
+    return False
+
+
+def process_kind(command: str, installed_exe: Path) -> str | None:
+    """Identify only this installation's terminal or its LiveUpdate executable."""
+    cmd = command.lower()
+    if "terminal64.exe" not in cmd:
+        return None
+    if "liveupdate" in cmd and "/update" in cmd:
+        return "updater"
+    if str(installed_exe).lower() in cmd and "/portable" in cmd:
+        return "terminal"
+    return None
+
+
+def wine_processes(uid: int, installed_exe: Path) -> set[str]:
+    kinds: set[str] = set()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdecimal() or int(entry.name) == os.getpid():
+            continue
+        try:
+            if entry.stat().st_uid != uid:
+                continue
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        kind = process_kind(command, installed_exe)
+        if kind:
+            kinds.add(kind)
+    return kinds
+
+
+def await_update(installed_exe: Path, uid: int) -> str:
+    """Leave the X display alive until Wine finishes handing off the update."""
+    deadline = time.monotonic() + UPDATE_WAIT_SECONDS
+    quiet_since: float | None = None
+    while time.monotonic() < deadline:
+        present = wine_processes(uid, installed_exe)
+        if "terminal" in present:
+            return "adopted"
+        if "updater" in present:
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = time.monotonic()
+        elif time.monotonic() - quiet_since >= UPDATE_SETTLE_SECONDS:
+            return "relaunch"
+        time.sleep(POLL_SECONDS)
+    return "timeout"
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] not in ACCOUNTS:
+        print("Usage: dkcapital-mt5-run {1|2}", file=sys.stderr, flush=True)
+        return 2
+    expected_user, home, display_number, profile = ACCOUNTS[sys.argv[1]]
+    import pwd
+    account = pwd.getpwnam(expected_user)
+    if os.geteuid() != account.pw_uid:
+        print(f"Refusing to start as a user other than {expected_user}", file=sys.stderr, flush=True)
+        return 2
+
+    os.umask(0o077)
+    wineprefix = home / ".wine"
+    install = wineprefix / "drive_c/Program Files/MetaTrader 5"
+    executable = install / "terminal64.exe"
+    if not executable.is_file():
+        print(f"Missing MT5 terminal: {executable}", file=sys.stderr, flush=True)
+        return 2
+    env = os.environ.copy()
+    env.update(HOME=str(home), WINEPREFIX=str(wineprefix), WINEDEBUG="-all",
+               DISPLAY=f":{display_number}", XAUTHORITY=str(home / ".Xauthority"))
+    display_socket = Path(f"/tmp/.X11-unix/X{display_number}")
+    if display_socket.exists():
+        print(f"Refusing to duplicate display: {display_socket}", file=sys.stderr, flush=True)
+        return 2
+    Path(env["XAUTHORITY"]).touch(mode=0o600, exist_ok=True)
+    Path(env["XAUTHORITY"]).chmod(0o600)
+    subprocess.run(["xauth", "-f", env["XAUTHORITY"], "add", env["DISPLAY"], ".",
+                    secrets.token_hex(16)], check=True, env=env)
+
+    xvfb = subprocess.Popen(["Xvfb", env["DISPLAY"], "-screen", "0", "1280x800x24",
+                             "-auth", env["XAUTHORITY"], "-nolisten", "tcp"], env=env)
+    try:
+        for _ in range(50):
+            if display_socket.is_socket():
+                break
+            if xvfb.poll() is not None:
+                raise RuntimeError("Xvfb exited unexpectedly")
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("Xvfb display did not become ready")
+
+        print(f"MT5 START: account={sys.argv[1]} display={env['DISPLAY']}", flush=True)
+        handoffs = 0
+        adopted = False
+        while True:
+            bookmark = log_offsets(install / "logs")
+            if adopted:
+                print("MT5: monitoring updater-relaunched terminal", flush=True)
+                while "terminal" in wine_processes(os.geteuid(), executable):
+                    time.sleep(POLL_SECONDS)
+                adopted = False
+                rc = 0
+            else:
+                cmd = [WINE64, str(executable), "/portable"]
+                if profile:
+                    cmd.append(f"/profile:{profile}")
+                rc = subprocess.call(cmd, env=env)
+                print(f"MT5 EXIT CODE: {rc}", flush=True)
+            time.sleep(1)
+            if not new_update_handoff(install / "logs", bookmark):
+                print("MT5 stopped without new LiveUpdate handoff; returning control to systemd", flush=True)
+                return rc if rc != 0 else 75
+
+            handoffs += 1
+            if handoffs > UPDATE_RETRY_LIMIT:
+                print("MT5 UPDATE LOOP: repeated LiveUpdate requests; operator intervention required",
+                      file=sys.stderr, flush=True)
+                return 75
+            print(f"MT5 LIVEUPDATE HANDOFF {handoffs}: retaining display {env['DISPLAY']}", flush=True)
+            outcome = await_update(executable, os.geteuid())
+            if outcome == "timeout":
+                print("MT5 UPDATE TIMEOUT: updater did not settle; operator intervention required",
+                      file=sys.stderr, flush=True)
+                return 75
+            adopted = outcome == "adopted"
+            print(f"MT5 UPDATE HANDOFF: {outcome}", flush=True)
+    finally:
+        if xvfb.poll() is None:
+            xvfb.terminate()
+            try:
+                xvfb.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                xvfb.kill()
+                xvfb.wait()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
+        print(f"MT5 supervisor error: {exc}", file=sys.stderr, flush=True)
+        sys.exit(75)
