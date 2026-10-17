@@ -112,7 +112,9 @@ def discover_events(
             else:
                 add({
                     "id": f"deal-{ticket}", "channel": "changes",
-                    "title": "MT5 POSITION REDUCED / CLOSED",
+                    "title": ("CRITICAL: BROKER STOP-OUT" if reason == "SO"
+                              else "MANUAL MT5 CLOSE / REDUCTION" if reason in {"CLIENT", "WEB", "MOBILE"}
+                              else "MT5 POSITION REDUCED / CLOSED"),
                     "body": f"{prefix}\nBroker closing deal: {_fmt(cash)}"
                             f"\nExit {float(d['lots']):.2f} lots @ {float(d['price']):.2f}"
                             f"\nExit reason: {reason} (not claimed as TP/SL)",
