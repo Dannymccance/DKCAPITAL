@@ -175,14 +175,44 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
             "commission": _number(d["commission"]),
             "swap": _number(d["swap"]),
             "time": _datetime(d["time"]).isoformat(),
+            "reason": str(d.get("reason") or "UNVERIFIED").upper()
+                if str(d.get("reason") or "UNVERIFIED").upper() in
+                {"TP", "SL", "CLIENT", "MOBILE", "WEB", "EXPERT", "SO", "UNVERIFIED"}
+                else "UNVERIFIED",
         })
     out_deals.sort(key=lambda d: (d["time"], d["ticket"]))
+    diagnostics = payload.get("decisions", [])
+    if not isinstance(diagnostics, list) or len(diagnostics) > 160:
+        raise ValueError("invalid MT5 decision diagnostics")
+    decision_rows = []
+    for item in diagnostics:
+        if not isinstance(item, dict):
+            raise ValueError("invalid MT5 decision")
+        signal_id = str(item.get("signal_id") or "")
+        stage = str(item.get("stage") or "").upper()
+        code = str(item.get("code") or "").upper()
+        if (not __import__("re").fullmatch(r"[-0-9:]{1,64}", signal_id)
+                or stage not in {"ENTRY", "LAYER", "PROTECTION"}
+                or not __import__("re").fullmatch(r"[A-Z0-9_]{1,64}", code)):
+            raise ValueError("invalid MT5 decision identifier")
+        stamp = _datetime(item.get("at"))
+        if abs((generated - stamp).total_seconds()) > 86400:
+            raise ValueError("MT5 decision outside one-day retention window")
+        decision_rows.append({
+            "signal_id": signal_id, "stage": stage, "code": code,
+            "at": stamp.isoformat(), "bid": _number(item.get("bid", 0), minimum=0),
+            "ask": _number(item.get("ask", 0), minimum=0),
+            "age_seconds": _integer(item.get("age_seconds", 0)),
+            "broker_retcode": _integer(item.get("broker_retcode", 0)),
+        })
     return {
         "version": 2, "mode": "DEMO", "login": login,
         "currency": "GBP", "generated_at": generated.isoformat(),
         **numeric, **broker_exposure, "positions": out_pos, "deals": out_deals,
         "feed_http": _integer(payload.get("feed_http", 0)),
         "entry_enabled": payload.get("entry_enabled") is True,
+        "layer_entries_enabled": payload.get("layer_entries_enabled") is True,
+        "decisions": decision_rows,
         "received_at": datetime.now(UTC).isoformat(),
     }
 
