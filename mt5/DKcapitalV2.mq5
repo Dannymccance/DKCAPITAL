@@ -614,7 +614,7 @@ void TryEntry(const string id,const string status,const string direction,
    }
    if(!possible)
    {
-      // Distinguish a broker's minimum three-leg size exceeding the 0.5%
+      // Distinguish a broker's minimum three-leg size exceeding the 4%
       // total stop-risk budget from an unrelated free-margin failure.
       double minA=0,minB=0,minC=0;
       bool minAvailable=Allocate(FloorLots(3*minlot),minA,minB,minC);
