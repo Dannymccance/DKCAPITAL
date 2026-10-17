@@ -152,6 +152,43 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(summary["portfolio_risk_gbp"], 4.5)
         self.assertEqual(summary["week_closed_signals"], 1)
 
+    def test_broker_reason_and_execution_diagnostics_are_retained(self):
+        data = example()
+        data["deals"][-1]["reason"] = "TP"
+        data["layer_entries_enabled"] = False
+        data["daily_loss_locked"] = True
+        data["daily_loss_day"] = 20261017
+        data["decisions"] = [{
+            "signal_id": "-1003765237177:7081",
+            "stage": "ENTRY", "code": "BROKER_SPREAD_TOO_WIDE",
+            "at": datetime.now(UTC).isoformat(),
+            "bid": 4173.09, "ask": 4178.46,
+            "age_seconds": 25, "broker_retcode": 0,
+        }]
+        normal = normalize_telemetry(data, LOGIN)
+        self.assertEqual(normal["deals"][-1]["reason"], "TP")
+        self.assertEqual(normal["deals"][0]["reason"], "UNVERIFIED")
+        self.assertTrue(normal["daily_loss_locked"])
+        self.assertEqual(normal["daily_loss_day"], 20261017)
+        self.assertEqual(normal["decisions"][0]["code"], "BROKER_SPREAD_TOO_WIDE")
+        self.assertEqual(normal["decisions"][0]["ask"], 4178.46)
+
+    def test_bogus_broker_reason_is_not_promoted_to_tp(self):
+        data = example()
+        data["deals"][-1]["reason"] = "TELEGRAM_SAYS_TP"
+        normal = normalize_telemetry(data, LOGIN)
+        self.assertEqual(normal["deals"][-1]["reason"], "UNVERIFIED")
+
+    def test_invalid_decision_id_is_rejected(self):
+        data = example()
+        data["decisions"] = [{
+            "signal_id": "arbitrary<script>",
+            "stage": "ENTRY", "code": "PRICE_OUTSIDE_ENTRY_ZONE",
+            "at": datetime.now(UTC).isoformat(), "bid": 4000, "ask": 4001,
+        }]
+        with self.assertRaises(ValueError):
+            normalize_telemetry(data, LOGIN)
+
     def test_rejects_unowned_fifth_leg(self):
         data = example()
         data["positions"][0]["magic"] = MAGIC + 5
