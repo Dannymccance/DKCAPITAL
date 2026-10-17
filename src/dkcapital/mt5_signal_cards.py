@@ -146,6 +146,12 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
             line += f" | TP {item['tp']:.2f}"
         rows.append(line)
     embed.add_field(name="Broker-confirmed fills (with optional 10% layer)", value="\n".join(rows)[:1024], inline=False)
+    if str(signal.get("sl_mode") or "").upper() == "BREAKEVEN":
+        embed.add_field(name="Telegram requested SL", value="BREAKEVEN (await MT5 confirmation)", inline=False)
+    elif signal.get("current_sl") is not None:
+        embed.add_field(name="Telegram requested SL",
+                        value=f"{float(signal['current_sl']):.2f} (not a broker confirmation)",
+                        inline=False)
     targets = signal.get("tps") or {}
     if targets:
         embed.add_field(
