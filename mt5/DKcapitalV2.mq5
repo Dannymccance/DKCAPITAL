@@ -883,6 +883,7 @@ void SendTelemetry()
    json+=",\"layer_entries_enabled\":"+(EnableLayerEntries?"true":"false");
    json+=",\"daily_loss_locked\":"+(DailyLossAllowed()?"false":"true");
    json+=",\"max_daily_loss_pct\":"+N(MaxDailyEquityLossPct,2);
+   json+=",\"daily_loss_day\":"+IntegerToString(UKDateKey());
    // All broker positions/orders must be counted, not only owned XAUUSD legs.
    int brokerCount=PositionsTotal(), unmanaged=0;
    bool allProtected=true;
