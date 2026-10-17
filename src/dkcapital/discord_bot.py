@@ -1530,6 +1530,9 @@ def build_bot(settings: Settings) -> commands.Bot:
                 "entry_high": signal.get("entry_high"),
                 "tps": signal.get("tps"),
                 "source_style": signal.get("source_style"),
+                "current_sl": signal.get("current_sl"),
+                "sl_mode": signal.get("sl_mode"),
+                "layers": signal.get("layers"),
                 "broker": broker_state,
             }, sort_keys=True, default=str)
             if prior.get("message_id") and prior.get("fingerprint") == fingerprint:
