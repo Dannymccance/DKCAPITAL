@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
-from dkcapital.mt5_signal_cards import broker_signal_state, mt5_signal_embed
+from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
 from dkcapital.mt5_broker_events import discover_events, notification_embed
 from dkcapital.telegram_discord_mirror import sync_mirror
