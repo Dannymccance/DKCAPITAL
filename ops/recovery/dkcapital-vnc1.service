@@ -1,7 +1,7 @@
 [Unit]
 Description=DK Capital MT5 Account 1 VNC (SSH tunnel only)
 After=network-online.target dkcapital-mt5-1.service
-Wants=dkcapital-mt5-1.service
+# VNC is observational: starting it must never start Account 1 trading.
 StartLimitIntervalSec=0
 
 [Service]

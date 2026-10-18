@@ -91,6 +91,38 @@ class UpdateSupervisorTests(unittest.TestCase):
              patch.object(module, "wine_processes", side_effect=lambda uid, exe: {module.process_kind(windows_command, exe)}):
             self.assertEqual(module.await_update(target, 1002), "adopted")
 
+    def test_account1_uses_best_effort_skipupdate_only(self):
+        exe = Path("/opt/mt5/terminal64.exe")
+        account1 = module.launch_command("1", exe, "5057220041")
+        account2 = module.launch_command("2", exe, None)
+        self.assertIn("/skipupdate", account1)
+        self.assertIn("/profile:5057220041", account1)
+        self.assertNotIn("/skipupdate", account2)
+        self.assertNotIn("/profile:5057220041", account2)
+
+    def test_account1_approved_binary_enforces_pinned_hash(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "terminal64.exe"
+            approval = Path(d) / "approved.sha256"
+            exe.write_bytes(b"old good MT5")
+            digest = hashlib.sha256(b"old good MT5").hexdigest()
+            approval.write_text(digest + "\n")
+            self.assertTrue(module.approved_binary(exe, approval)[0])
+            exe.write_bytes(b"incompatible MT5 update")
+            okay, message = module.approved_binary(exe, approval)
+            self.assertFalse(okay)
+            self.assertIn("MT5 executable changed", message)
+
+    def test_missing_or_invalid_approval_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "terminal64.exe"
+            approval = Path(d) / "approved.sha256"
+            exe.write_bytes(b"payload")
+            self.assertFalse(module.approved_binary(exe, approval)[0])
+            approval.write_text("invalid hash")
+            self.assertFalse(module.approved_binary(exe, approval)[0])
+
     def test_accounts_remain_isolated(self):
         self.assertNotEqual(module.ACCOUNTS["1"][1], module.ACCOUNTS["2"][1])
         self.assertNotEqual(module.ACCOUNTS["1"][2], module.ACCOUNTS["2"][2])

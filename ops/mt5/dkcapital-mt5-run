@@ -7,6 +7,7 @@ dkmt5b, never root. This does not modify EA files or trading flags.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -23,6 +24,40 @@ UPDATE_WAIT_SECONDS = 600
 UPDATE_SETTLE_SECONDS = 20
 UPDATE_RETRY_LIMIT = 3
 POLL_SECONDS = 2
+# Exit status 78 is excluded from systemd automatic restarts by the
+# account-1 drop-in. A changed/unapproved binary requires human review.
+APPROVAL_FAILURE_EXIT = 78
+APPROVAL_FILE = Path("/etc/dkcapital/mt5-account1-approved.sha256")
+
+
+def approved_binary(executable: Path, approval_file: Path) -> tuple[bool, str]:
+    """Fail closed when the root-managed approved terminal digest is absent or changed."""
+    try:
+        expected = approval_file.read_text(encoding="ascii").strip().lower()
+        if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+            return False, "invalid approved SHA-256 file"
+        digest = hashlib.sha256()
+        with executable.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except (OSError, UnicodeError) as exc:
+        return False, f"cannot verify approved MT5 executable: {exc}"
+    actual = digest.hexdigest()
+    if actual != expected:
+        return False, f"MT5 executable changed: expected {expected}, got {actual}"
+    return True, actual
+
+
+def launch_command(account: str, executable: Path, profile: str | None) -> list[str]:
+    cmd = [WINE64, str(executable), "/portable"]
+    if profile:
+        cmd.append(f"/profile:{profile}")
+    # Undocumented best-effort flag seen in Wine MT5 deployments. This is NOT
+    # a MetaQuotes-supported way to disable LiveUpdate; hash guard is authoritative.
+    if account == "1":
+        cmd.append("/skipupdate")
+    return cmd
+
 
 
 def log_offsets(log_dir: Path) -> dict[Path, int]:
@@ -118,6 +153,11 @@ def main() -> int:
     if not executable.is_file():
         print(f"Missing MT5 terminal: {executable}", file=sys.stderr, flush=True)
         return 2
+    if sys.argv[1] == "1":
+        okay, detail = approved_binary(executable, APPROVAL_FILE)
+        if not okay:
+            print(f"MT5 ACCOUNT 1 APPROVAL FAILURE: {detail}", file=sys.stderr, flush=True)
+            return APPROVAL_FAILURE_EXIT
     env = os.environ.copy()
     env.update(HOME=str(home), WINEPREFIX=str(wineprefix), WINEDEBUG="-all",
                DISPLAY=f":{display_number}", XAUTHORITY=str(home / ".Xauthority"))
@@ -146,6 +186,11 @@ def main() -> int:
         handoffs = 0
         adopted = False
         while True:
+            if sys.argv[1] == "1":
+                okay, detail = approved_binary(executable, APPROVAL_FILE)
+                if not okay:
+                    print(f"MT5 ACCOUNT 1 APPROVAL FAILURE: {detail}", file=sys.stderr, flush=True)
+                    return APPROVAL_FAILURE_EXIT
             bookmark = log_offsets(install / "logs")
             # Never open a second MT5 instance if Wine has already reopened
             # the terminal independently during an update or service recovery.
@@ -159,15 +204,26 @@ def main() -> int:
                 adopted = False
                 rc = 0
             else:
-                cmd = [WINE64, str(executable), "/portable"]
-                if profile:
-                    cmd.append(f"/profile:{profile}")
+                cmd = launch_command(sys.argv[1], executable, profile)
                 rc = subprocess.call(cmd, env=env)
                 print(f"MT5 EXIT CODE: {rc}", flush=True)
+            if sys.argv[1] == "1":
+                okay, detail = approved_binary(executable, APPROVAL_FILE)
+                if not okay:
+                    print(f"MT5 ACCOUNT 1 APPROVAL FAILURE: {detail}", file=sys.stderr, flush=True)
+                    return APPROVAL_FAILURE_EXIT
             time.sleep(1)
             if not new_update_handoff(install / "logs", bookmark):
                 print("MT5 stopped without new LiveUpdate handoff; returning control to systemd", flush=True)
+                if sys.argv[1] == "1" and rc == 222:
+                    print("MT5 ACCOUNT 1: startup failure 222; manual investigation required",
+                          file=sys.stderr, flush=True)
+                    return APPROVAL_FAILURE_EXIT
                 return rc if rc != 0 else 75
+            if sys.argv[1] == "1":
+                print("MT5 ACCOUNT 1: LiveUpdate attempted; stopping for supervised validation",
+                      file=sys.stderr, flush=True)
+                return APPROVAL_FAILURE_EXIT
 
             handoffs += 1
             if handoffs > UPDATE_RETRY_LIMIT:
