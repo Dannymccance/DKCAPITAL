@@ -107,7 +107,7 @@ class UpdateSupervisorTests(unittest.TestCase):
             approval = Path(d) / "approved.sha256"
             exe.write_bytes(b"old good MT5")
             digest = hashlib.sha256(b"old good MT5").hexdigest()
-            approval.write_text(digest + "\\n")
+            approval.write_text(digest + "\n")
             self.assertTrue(module.approved_binary(exe, approval)[0])
             exe.write_bytes(b"incompatible MT5 update")
             okay, message = module.approved_binary(exe, approval)
