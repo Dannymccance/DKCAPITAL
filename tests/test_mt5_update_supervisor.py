@@ -55,6 +55,20 @@ class UpdateSupervisorTests(unittest.TestCase):
         self.assertEqual(module.process_kind("C:\\users\\dkmt5\\liveupdate\\terminal64.exe /update /path:...", target), "updater")
         self.assertIsNone(module.process_kind("/var/lib/dkcapital-mt5-2/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe /portable", target))
         self.assertIsNone(module.process_kind("MetaEditor64.exe /compile:source.mq5", target))
+        # Real 2026-10-18 LiveUpdate relaunch command observed on the VPS.
+        self.assertEqual(
+            module.process_kind(
+                r"C:\Program Files\MetaTrader 5\terminal64.exe "
+                "/skipupdate:8FE31F85A20F7884BA436F757AB5B932 /portable", target
+            ),
+            "terminal",
+        )
+        self.assertIsNone(module.process_kind(
+            r"C:\Program Files\MetaTrader 4\terminal64.exe /portable", target
+        ))
+        self.assertIsNone(module.process_kind(
+            r"C:\Program Files\MetaTrader 5\terminal64.exe /update /portable", target
+        ))
 
     def test_update_wait_settles_without_updater(self):
         target = Path("/tmp/MT5/terminal64.exe")
@@ -68,6 +82,13 @@ class UpdateSupervisorTests(unittest.TestCase):
         target = Path("/tmp/MT5/terminal64.exe")
         with patch.object(module.time, "monotonic", return_value=0), \
              patch.object(module, "wine_processes", return_value={"terminal"}):
+            self.assertEqual(module.await_update(target, 1002), "adopted")
+
+    def test_updater_self_relaunch_is_adopted(self):
+        target = Path("/var/lib/dkcapital-mt5/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe")
+        windows_command = r"C:\Program Files\MetaTrader 5\terminal64.exe /skipupdate:ABC /portable"
+        with patch.object(module.time, "monotonic", return_value=0), \
+             patch.object(module, "wine_processes", side_effect=lambda uid, exe: {module.process_kind(windows_command, exe)}):
             self.assertEqual(module.await_update(target, 1002), "adopted")
 
     def test_accounts_remain_isolated(self):
