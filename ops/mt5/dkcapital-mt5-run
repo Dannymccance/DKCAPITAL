@@ -52,6 +52,9 @@ def process_kind(command: str, installed_exe: Path) -> str | None:
         return None
     if "liveupdate" in cmd and "/update" in cmd:
         return "updater"
+    # An ordinary /update command is not a running trading terminal.
+    if "/update" in cmd and "/skipupdate:" not in cmd:
+        return None
     # Wine's MetaTrader LiveUpdate relaunch uses a Windows-style command:
     # C:\\Program Files\\MetaTrader 5\\terminal64.exe /skipupdate:... /portable
     # It is scoped to this account by wine_processes()'s Linux UID filter.
