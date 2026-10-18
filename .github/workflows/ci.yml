@@ -23,6 +23,11 @@ jobs:
       - name: Compile Python
         run: python -m compileall -q src scripts tests windows
 
+      - name: Validate boot recovery scripts
+        run: |
+          python -m py_compile ops/mt5/dkcapital-mt5-run ops/recovery/check_boot.py
+          bash -n ops/recovery/install-recovery.sh
+
       - name: Run tests
         env:
           PYTHONPATH: src

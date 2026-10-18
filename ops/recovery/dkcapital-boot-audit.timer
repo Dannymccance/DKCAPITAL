@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically verify DK Capital VPS reboot recovery
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=dkcapital-boot-audit.service
+
+[Install]
+WantedBy=timers.target

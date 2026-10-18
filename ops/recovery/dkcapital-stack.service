@@ -1,0 +1,16 @@
+[Unit]
+Description=DK Capital core Docker Compose services
+Documentation=https://github.com/Dannymccance/DKCAPITAL
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/docker compose --profile discord --profile mt5-shadow up -d --no-build telegram-listener signal-processor paper-engine mt5-gateway dkcapital-watchdog discord-bot
+RemainAfterExit=yes
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

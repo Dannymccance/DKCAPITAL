@@ -1,0 +1,11 @@
+[Unit]
+Description=Audit DK Capital components after VPS boot and periodically
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/python3 /opt/dkcapital/ops/recovery/check_boot.py
+TimeoutStartSec=90
+NoNewPrivileges=true
