@@ -52,7 +52,12 @@ def process_kind(command: str, installed_exe: Path) -> str | None:
         return None
     if "liveupdate" in cmd and "/update" in cmd:
         return "updater"
-    if str(installed_exe).lower() in cmd and "/portable" in cmd:
+    # Wine's MetaTrader LiveUpdate relaunch uses a Windows-style command:
+    # C:\\Program Files\\MetaTrader 5\\terminal64.exe /skipupdate:... /portable
+    # It is scoped to this account by wine_processes()'s Linux UID filter.
+    native = str(installed_exe).lower()
+    windows = "c:\\program files\\metatrader 5\\terminal64.exe"
+    if "/portable" in cmd and (cmd.startswith(native + " ") or cmd.startswith(windows + " ")):
         return "terminal"
     return None
 
@@ -139,6 +144,11 @@ def main() -> int:
         adopted = False
         while True:
             bookmark = log_offsets(install / "logs")
+            # Never open a second MT5 instance if Wine has already reopened
+            # the terminal independently during an update or service recovery.
+            if not adopted and "terminal" in wine_processes(os.geteuid(), executable):
+                adopted = True
+                print("MT5: adopting pre-existing terminal; avoiding duplicate launch", flush=True)
             if adopted:
                 print("MT5: monitoring updater-relaunched terminal", flush=True)
                 while "terminal" in wine_processes(os.geteuid(), executable):
