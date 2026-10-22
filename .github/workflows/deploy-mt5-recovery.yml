@@ -1,0 +1,68 @@
+name: Deploy MT5 recovery controller (staged)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dkcapital-mt5-recovery-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: mt5-recovery-deployment
+    timeout-minutes: 10
+    steps:
+      - name: Check out reviewed main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify Python controller
+        run: |
+          python3 -m py_compile scripts/mt5_liveupdate_recovery.py
+          python3 -m unittest discover -s tests -q
+
+      - name: Check deployment secrets
+        env:
+          VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
+          VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
+          VPS_KEY: ${{ secrets.DKCAPITAL_VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.DKCAPITAL_VPS_HOST_KEY }}
+        run: |
+          for v in VPS_HOST VPS_USER VPS_KEY VPS_HOST_KEY; do
+            if [ -z "${!v}" ]; then echo "::error::Missing $v deployment secret"; exit 1; fi
+          done
+
+      - name: Stage and validate on VPS (do not activate)
+        env:
+          VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
+          VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
+          VPS_KEY: ${{ secrets.DKCAPITAL_VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.DKCAPITAL_VPS_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+          SSH_OPTS=(-i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+          REMOTE="$VPS_USER@$VPS_HOST"
+          scp "${SSH_OPTS[@]}" scripts/mt5_liveupdate_recovery.py "$REMOTE:/tmp/dkcapital-mt5-liveupdate-recovery.py"
+          ssh "${SSH_OPTS[@]}" "$REMOTE" 'set -eu
+            python3 -m py_compile /tmp/dkcapital-mt5-liveupdate-recovery.py
+            mkdir -p /opt/dkcapital/scripts
+            if [ -f /opt/dkcapital/scripts/mt5_liveupdate_recovery.py ]; then
+              cp -p /opt/dkcapital/scripts/mt5_liveupdate_recovery.py /opt/dkcapital/scripts/mt5_liveupdate_recovery.py.predeploy
+            fi
+            install -m 0755 /tmp/dkcapital-mt5-liveupdate-recovery.py /opt/dkcapital/scripts/mt5_liveupdate_recovery.py
+            rm -f /tmp/dkcapital-mt5-liveupdate-recovery.py
+            echo "Controller staged; no recovery timer activated."
+            systemctl is-active dkcapital-mt5-1 dkcapital-mt5-2
+            systemctl is-active dkcapital-mt5-autoheal.timer
+          '
