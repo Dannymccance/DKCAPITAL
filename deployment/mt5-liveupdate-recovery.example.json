@@ -1,0 +1,23 @@
+{
+  "accounts": [
+    {
+      "id": 1,
+      "enabled": false,
+      "demo_recovery": false,
+      "service": "dkcapital-mt5-1.service",
+      "telemetry": "/REPLACE/mt5-account1.json",
+      "login": "REPLACE_WITH_DEMO_LOGIN",
+      "approval": "/etc/dkcapital/mt5-account1-approved.sha256",
+      "executable": "/var/lib/dkcapital-mt5/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe",
+      "liveupdate": "/var/lib/dkcapital-mt5/.wine/drive_c/users/dkmt5/AppData/Roaming/MetaQuotes/Terminal/D0E8209F77C8CF37AD8BF550E51FF075/liveupdate"
+    },
+    {
+      "id": 2,
+      "enabled": false
+    },
+    {
+      "id": 3,
+      "enabled": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=DK Capital demo LiveUpdate recovery check
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=dkcapital-mt5-liveupdate-recovery.service
+
+[Install]
+WantedBy=timers.target
