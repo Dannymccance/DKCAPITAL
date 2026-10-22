@@ -89,8 +89,13 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("RiskReferenceBalanceGBP = 1000.0", source)
         self.assertIn("MaxPortfolioRiskGBP = 150.0", source)
         self.assertIn("EnableLayerEntries = false", source)
-        self.assertIn("if(BetterStop(buy,fill,wantedSL)", source)
-        self.assertIn("if(BetterStop(buy,stop,wantedSL)", source)
+        # Breakeven still only allows better stops. Before breakeven,
+        # explicit provider amendments can move the stop in either direction.
+        self.assertIn("if(BetterStop(buy,proposed,wantedSL)", source)
+        self.assertIn(
+            'else if(slMode=="PRICE" && stop>0 && StopValid(buy,stop,quote))',
+            source,
+        )
 
 
 if __name__ == "__main__":
