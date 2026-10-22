@@ -20,6 +20,30 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertNotIn("fallbackBuffer", entry)
         self.assertNotIn("HouseMinStopDistanceUSD", code)
 
+    def test_existing_positions_follow_explicit_provider_sl_even_when_wider(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        manage = code.split("void ManageLegs(", 1)[1].split("void TryEntry(", 1)[0]
+        self.assertIn(
+            'else if(slMode=="PRICE" && stop>0 && StopValid(buy,stop,quote))',
+            manage,
+        )
+        self.assertIn("wantedSL=NormalizePrice(stop);", manage)
+        # Entry sizing limits must not reject an explicit SL widening on
+        # a position that the broker has already opened.
+        self.assertNotIn("GroupRiskLimitGBP()", manage)
+        self.assertNotIn("PortfolioRiskLimitGBP()", manage)
+        self.assertNotIn("BetterStop(buy,stop,wantedSL)", manage)
+        self.assertIn('Print("DK2 native SL updated ticket=",ticket', manage)
+
+    def test_tp1_and_breakeven_protection_prevent_later_stop_widening(self):
+        code = SOURCE.read_text(encoding="utf-8")
+        manage = code.split("void ManageLegs(", 1)[1].split("void TryEntry(", 1)[0]
+        self.assertIn("tp1Confirmed && leg!=1", manage)
+        self.assertIn("slAlreadyAtOrBeyondBE", manage)
+        self.assertIn('slMode=="BREAKEVEN"', manage)
+        self.assertIn("BetterStop(buy,proposed,wantedSL)", manage)
+        self.assertIn("StopValid(buy,proposed,quote)", manage)
+
     def test_failed_broker_risk_valuation_blocks_entry(self):
         code = SOURCE.read_text(encoding="utf-8")
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
