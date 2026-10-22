@@ -532,6 +532,18 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(state.signals["1:100"].layers, 1)
         self.assertEqual(state.signals["1:101"].layers, 1)
 
+    def test_gws_successive_standalone_sl_widening_amendments(self) -> None:
+        state = SignalState()
+        state.ingest_event(
+            event(110, "BUY XAUUSD AT 4074 - 4071\\nTP1 4078\\nSL 4065", minute=0)
+        )
+        state.ingest_event(event(111, "SL ALSO 4060", minute=1, reply_to=110))
+        self.assertEqual(state.signals["1:110"].current_sl, 4060)
+        state.ingest_event(event(112, "SL ONE MORE TIME TO 4054", minute=2))
+        self.assertEqual(state.signals["1:110"].current_sl, 4054)
+        self.assertEqual(len(state.signals), 1)
+        self.assertEqual(state.signals["1:110"].history[-1]["sl_after"], 4054)
+
     def test_group_management_updates_both_positions(self) -> None:
         state = SignalState()
         state.ingest_event(
