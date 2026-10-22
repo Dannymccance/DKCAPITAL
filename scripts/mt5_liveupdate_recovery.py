@@ -67,7 +67,7 @@ def recover(account, apply=False):
     if not account.get("enabled", False):
         return "DISABLED"
     service = account["service"]
-    if not re.fullmatch(r"dkcapital-mt5-[1-9][0-9]*\\.service", service):
+    if not re.fullmatch(r"dkcapital-mt5-[1-9][0-9]*\.service", service):
         return "BLOCKED: invalid service"
     if command("systemctl", "is-active", "--quiet", service).returncode == 0:
         return "HEALTHY"
