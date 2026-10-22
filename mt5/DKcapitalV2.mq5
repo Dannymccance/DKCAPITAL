@@ -474,25 +474,44 @@ void ManageLegs(const string id,const string direction,const double stop,
       double currentTP=PositionGetDouble(POSITION_TP);
       double wantedSL=currentSL;
       double fill=PositionGetDouble(POSITION_PRICE_OPEN);
-      if(slMode=="BREAKEVEN" || (tp1Confirmed && leg!=1))
+      // Provider SL amendments are authoritative before BE, including
+      // wider stops that exceed the initial entry risk budget. Entry risk
+      // caps are intentionally checked only when opening a new position.
+      bool slAlreadyAtOrBeyondBE=(currentSL>0 &&
+                                   (buy ? currentSL>=fill : currentSL<=fill));
+      bool preserveBE=(slMode=="BREAKEVEN" || (tp1Confirmed && leg!=1) ||
+                       slAlreadyAtOrBeyondBE);
+      if(preserveBE)
       {
-         if(BetterStop(buy,fill,wantedSL) && StopValid(buy,fill,quote))
-            wantedSL=NormalizePrice(fill);
+         // Once a position is protected at BE (or TP1 has filled), provider
+         // amendments may tighten the stop but must never widen it again.
+         double proposed=fill;
+         if(slMode=="PRICE" && BetterStop(buy,stop,proposed))
+            proposed=stop;
+         if(BetterStop(buy,proposed,wantedSL) && StopValid(buy,proposed,quote))
+            wantedSL=NormalizePrice(proposed);
       }
-      else if(BetterStop(buy,stop,wantedSL) && StopValid(buy,stop,quote))
+      else if(slMode=="PRICE" && stop>0 && StopValid(buy,stop,quote))
+      {
+         // Explicit provider changes may increase risk on an existing trade.
          wantedSL=NormalizePrice(stop);
+      }
       // The separately tracked 10% layer exits at TP2.
       double rawTP=leg==1?tp1:(leg==2 || leg==LAYER_LEG?tp2:tp3);
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
       double wantedTP=validTP>0?validTP:currentTP;
-      if(MathAbs(wantedSL-currentSL)<1e-8 && MathAbs(wantedTP-currentTP)<1e-8)
+      bool slChanged=MathAbs(wantedSL-currentSL)>=1e-8;
+      if(!slChanged && MathAbs(wantedTP-currentTP)<1e-8)
          continue;
       trade.SetExpertMagicNumber(LegMagic(id,leg));
       if(!trade.PositionModify(ticket,wantedSL,wantedTP) || !BrokerDone())
          Print("DK2 ALERT native SL/TP modification failed ticket=",ticket,
                " code=",trade.ResultRetcode());
+      else if(slChanged)
+         Print("DK2 native SL updated ticket=",ticket," old=",currentSL,
+               " new=",wantedSL," provider_stop=",stop);
    }
 }
 void TryEntry(const string id,const string status,const string direction,
