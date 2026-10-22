@@ -535,7 +535,7 @@ class ParserTests(unittest.TestCase):
     def test_gws_successive_standalone_sl_widening_amendments(self) -> None:
         state = SignalState()
         state.ingest_event(
-            event(110, "BUY XAUUSD AT 4074 - 4071\\nTP1 4078\\nSL 4065", minute=0)
+            event(110, "BUY XAUUSD AT 4074 - 4071\nTP1 4078\nSL 4065", minute=0)
         )
         state.ingest_event(event(111, "SL ALSO 4060", minute=1, reply_to=110))
         self.assertEqual(state.signals["1:110"].current_sl, 4060)
