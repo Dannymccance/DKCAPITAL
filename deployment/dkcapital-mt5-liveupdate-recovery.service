@@ -1,0 +1,8 @@
+[Unit]
+Description=DK Capital guarded demo MT5 LiveUpdate recovery
+After=dkcapital-mt5-1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/mt5_liveupdate_recovery.py --apply
+TimeoutStartSec=120
