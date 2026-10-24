@@ -179,3 +179,21 @@ The updated \`dkcapital-watchdog\` Docker container requires a **separately sche
 - One account down: other MT5/VNC profiles remain stable, P&L stays independently attributed, and the alert includes the correct account ID.
 
 **Deployment status:** code and tests can be merged without installing timers or restarting terminals. The two existing MT5 terminals keep their current services and EAs. The new live-account recovery contract remains unactivated until Dan's Vantage account is commissioned, and the existing demonstration account keeps its working guarded recovery in the meantime.
+
+
+## V2.08 take-profit allocation: TP2 receives largest share
+
+The existing GBP demo-only EA source `mt5/DKcapitalV2.mq5` is updated to version **2.08**. These are *targets*, not guaranteed exact volumes: the broker's symbol-specific minimum volume and lot step govern order sizing. **Do not copy or attach the updated EA to account 1 until compiled in the isolated MetaEditor, verified for zero errors/warnings, hash-recorded, and demo tested.** No source-code merge deploys a compiled EX5 automatically.
+
+| Provider instructions | Native broker exit legs | Intended exit volumes | Minimum 0.01-lot steps example |
+| --- | --- | --- | --- |
+| Numeric TP1 and TP2, no TP3 | Leg 1 → TP1; legs 2 and 3 → TP2 | 25% at TP1 / 75% at TP2 | 0.03 lots: 0.01 TP1 and 0.02 TP2 (33%/67%) |
+| Numeric TP1, TP2 and TP3 | Leg 1 → TP1; leg 2 → TP2; leg 3 → TP3 | 25% / 50% / 25% | 0.04 lots: 0.01 / 0.02 / 0.01 (25%/50%/25%) |
+| Explicit `TP3: OPEN` | Leg 3 open runner, **only** with existing separately approved `EnableOpenRunnerEntries` | 25% / 50% / 25% plus runner policy | Unchanged opt-in restrictions |
+| Fewer than two valid numeric targets | No entries | No synthetic targets | Safely skip |
+
+For three numeric targets, if the trade cannot fund a **strictly larger TP2 exit** than either TP1 or TP3 using three broker-native legs at the group/signal risk cap, **skip the new trade** rather than silently revert to equal 1/1/1 distribution. On 0.01 min lots, this requires at least 0.04 lots in the trio; provider SL, margin and Friday rules can reduce permissible size. On two-target signals, three minimum broker legs still work because the third leg exits at TP2. The EA records this two-target assignment in MT5 terminal global variables before submitting any broker order so that terminal restarts and later signal amendments do not silently reassign that TP2 leg to a later TP3.
+
+Broker-native SL on every leg, TP1 broker-confirmed BE rules, distinct magic numbers, exactly-once broker history checks, risk cap at the **actual provider SL**, strict entry freshness and the existing optional GWS STORM / OPEN rules remain in place. This update **does not** change the independent live-account EA. Do not use V2.08 on a USD/REAL Vantage account; the EA intentionally checks Account 1 GBP DEMO identity.
+
+**Verification before arming V2.08:** test a fresh GWS `XAUUSD 4003 - 4000: Buy / TP1: 4107 / TP2: 4120 / SL: 3996`-format *synthetic* message in a controlled demo environment, confirm the 12-field DKDEMO2 wire format carries a numeric zero for absent TP3 (not OPEN), verify two TP2 broker tickets and one TP1 broker ticket at acceptable lot sizes, confirm TP1 close triggers BE only on broker-side confirmed fill, inspect broker ticket SL/TP and total planned risk, and restart the terminal with protected tickets to ensure TP mapping survives. Never backfill or auto-open the historical example as a new trade.
