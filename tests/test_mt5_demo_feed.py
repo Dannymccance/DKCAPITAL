@@ -113,6 +113,30 @@ class DemoFeedTests(unittest.TestCase):
             f = response.read().decode("utf-8").splitlines()[1].split("|")
         self.assertEqual(f[10], "0.0")
 
+    def test_gws_buy_two_targets_passes_feed_without_runner(self):
+        self.path.write_text(json.dumps({
+            "signals": [{
+                "symbol": "XAUUSD", "signal_id": "-1007:63",
+                "status": "ACTIVE", "direction": "BUY",
+                "entry_low": 4000, "entry_high": 4003,
+                "current_sl": 3996, "sl_mode": "PRICE",
+                "tp3_open": False, "tps": {"1": 4107, "2": 4120},
+                "opened_at": datetime.now(UTC).isoformat(),
+            }],
+        }), encoding="utf-8")
+        url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        with urlopen(Request(url, headers={
+            "Authorization": "Bearer " + self.token
+        }), timeout=3) as response:
+            lines = response.read().decode("utf-8").splitlines()
+        self.assertEqual(lines[0], "DKDEMO2")
+        fields = lines[1].split("|")
+        self.assertEqual(len(fields), 12)
+        self.assertEqual(fields[3:11], [
+            "BUY", "4000.0", "4003.0", "3996.0", "PRICE",
+            "4107.0", "4120.0", "0.0",
+        ])
+
     def test_injected_ids_rejected(self):
         self.path.write_text(json.dumps({"signals": [{
             "symbol": "XAUUSD", "signal_id": "malicious\nS|",

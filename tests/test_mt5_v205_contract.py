@@ -56,8 +56,11 @@ class V205SourceContract(unittest.TestCase):
         entry = self.code.split("void TryEntry(", 1)[1].split(
             "// Original three-leg broker fills", 1)[0]
         self.assertIn("input bool EnableOpenRunnerEntries = false;", self.code)
-        self.assertIn("(!openRunner && tp3<=0)", entry)
-        self.assertIn("(!openRunner && ValidTP(buy,tp3,q)<=0)", entry)
+        self.assertIn("bool twoTargets=!openRunner && tp3<=0;", entry)
+        self.assertIn("(!twoTargets && !openRunner && ValidTP(buy,tp3,q)<=0)", entry)
+        self.assertIn("targets[2]=openRunner?0:(twoTargets?tp2:tp3);", entry)
+        self.assertIn('GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);', entry)
+        self.assertIn('GlobalVariablesFlush();', entry)
         self.assertIn('if(openRunner && !EnableOpenRunnerEntries)', entry)
         self.assertIn('"OPEN_RUNNER_REQUIRES_OPT_IN"', entry)
         self.assertIn('"MISSING_OR_INVALID_NATIVE_TP"', entry)
