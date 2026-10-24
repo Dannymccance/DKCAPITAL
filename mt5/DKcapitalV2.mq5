@@ -6,7 +6,7 @@
 #property version "2.09"
 #include <Trade/Trade.mqh>
 
-input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
+input string FeedUrl = "http://127.0.0.1:8765/v3/demo/feed";
 input string TelemetryUrl = "http://127.0.0.1:8765/v2/demo/telemetry";
 input string FeedToken = "";
 input string GoldSymbol = "XAUUSD";
@@ -1265,7 +1265,7 @@ void ProcessFeed(const string content)
 {
    string lines[];
    int count=StringSplit(content,'\n',lines);
-   if(count<1 || StringFind(lines[0],"DKDEMO2")!=0)
+   if(count<1 || StringFind(lines[0],"DKDEMO3")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
    for(int i=1;i<count;i++)
    {
