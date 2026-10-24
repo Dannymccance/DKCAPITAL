@@ -200,11 +200,17 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     continue
             except (ValueError, TypeError, KeyError, OverflowError):
                 continue
+            # Keep the 12-field V2 wire format: an explicit provider OPEN
+            # runner is represented by the literal OPEN at the TP3 position.
+            # Unspecified TP3 stays zero and is *not* an open-runner mandate.
+            stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
+            if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
+                stop_mode = "DEFER_BE"
+            tp3 = "OPEN" if signal.get("tp3_open") else str(prices[5])
             lines.append("|".join([
                 "S", ident, status, direction,
                 str(prices[0]), str(prices[1]), str(prices[2]),
-                str(signal.get("sl_mode") or "PRICE").upper(),
-                *(str(price) for price in prices[3:]),
+                stop_mode, str(prices[3]), str(prices[4]), tp3,
                 str(int(opened.timestamp())),
             ]))
             for action in signal.get("history", []):
