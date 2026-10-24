@@ -641,6 +641,9 @@ class SignalState:
             "timestamp": timestamp,
             "message_id": message_id,
             "kind": action.kind,
+            # Retain command provenance so simulations never promote TP/layer
+            # result commentary into a newly authorised market add.
+            "raw_text": text,
         }
         if market is not None:
             history_event["market"] = market
