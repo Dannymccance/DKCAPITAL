@@ -206,7 +206,7 @@ def _tp3_open(text: str) -> bool:
 def _move_to_be(text: str) -> bool:
     if _defer_breakeven(text):
         return False
-    if re.search(r"\b(?:SET|MOVE)\s+(?:ALL\s+)?(?:TO\s+)?BREAKEVEN\b", text):
+    if re.search(r"\b(?:SET|SETTY|MOVE)\s+(?:ALL\s+)?(?:TO\s+)?BREAKEVEN\b", text):
         return True
     return bool(
         re.search(
@@ -225,6 +225,14 @@ def _scope(
     reply_to_message_id: int | None,
     symbol: str | None,
 ) -> str:
+    # An explicit ALL-provider breakeven command applies across that
+    # provider's active positions; replying to one post doesn't reduce ALL.
+    if re.search(
+        r"\b(?:SET|SETTY|MOVE)\s+ALL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN)\b"
+        r"|\bALL\s+(?:SL|STOP(?:\s+LOSS)?)\s+TO\s+(?:BE|BREAKEVEN|BREAK\s*EVEN)\b",
+        text,
+    ):
+        return "all_direction"
     if reply_to_message_id is not None:
         return "reply"
     if re.search(r"\bALL\s+(?:GOLD|XAU(?:USD|USDT)?|BTC(?:USD|USDT)?)\b", text):
