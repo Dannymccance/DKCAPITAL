@@ -1,0 +1,12 @@
+[Unit]
+Description=DK Capital bounded MT5 recovery supervisor (all commissioned accounts)
+After=docker.service
+Wants=docker.service
+# Does not start MT5 units as dependencies.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/mt5_recovery_supervisor.py --apply
+TimeoutStartSec=240
+NoNewPrivileges=true
