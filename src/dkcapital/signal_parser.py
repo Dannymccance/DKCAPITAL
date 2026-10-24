@@ -97,9 +97,11 @@ def _symbol(text: str) -> str | None:
 
 
 def _direction(text: str) -> str | None:
-    if re.search(r"\b(?:BUY(?:ER|ERS)?|LONGS?)\b", text):
+    # GOLD 4049BUY is a real provider format, with no space between
+    # the last price digit and the direction.
+    if re.search(r"\b(?:BUY(?:ER|ERS)?|LONGS?)\b|\d{3,5}(?:[.,]\d{1,2})?BUY\b", text):
         return "BUY"
-    if re.search(r"\b(?:SELL(?:ER|ERS)?|SHORTS?)\b", text):
+    if re.search(r"\b(?:SELL(?:ER|ERS)?|SHORTS?)\b|\d{3,5}(?:[.,]\d{1,2})?SELL\b", text):
         return "SELL"
     return None
 
@@ -110,7 +112,7 @@ def _extract_tps(text: str) -> dict[int, float]:
     # Numbered labels take precedence. Keep explicit duplicate numbering
     # (e.g. TP3 repeated) as the next sequential target.
     for raw_index, value in re.findall(
-        r"\bTP\s*(\d+)\s*[:=@-]?\s*(\d+(?:\.\d+)?)\b",
+        r"\bTP\s*(\d{1,2})\s*[:=@-]?\s*(\d{3,6}(?:\.\d+)?)\b",
         text,
     ):
         index = int(raw_index)
@@ -306,6 +308,26 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 sl=_explicit_sl(normalized),
                 source_style="gws",
                 scope="new",
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        ]
+
+    # A clearly formatted but malformed GOLD entry must not fall through
+    # into an update and change the stop/target of an unrelated old trade.
+    if gold_zone is None and symbol == "XAUUSD" and direction and re.search(
+        r"\b(?:XAU\s*/?\s*USD|XAUUSDT|XAU|GOLD)\s*:?\s*"
+        r"\d{3,5}(?:[.,]\d{1,2})?\s*-\s*"
+        r"\d{1,5}(?:[.,]\d{1,2})?\s*:?\s*(?:BUY|SELL)\b",
+        normalized,
+    ):
+        return [
+            ParsedAction(
+                kind="unparsed_new_signal",
+                symbol="XAUUSD",
+                direction=direction,
+                source_style="gws",
+                scope="none",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
