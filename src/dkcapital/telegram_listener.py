@@ -20,6 +20,52 @@ from dkcapital.telegram_recovery import (
 
 logger = logging.getLogger("dkcapital.telegram")
 
+# Only these explicitly requested GWS channels may be discovered by title.
+# Existing TELEGRAM_SOURCE_CHATS identities remain pinned by ID/username.
+AUTO_GWS_TITLES = frozenset({
+    "gws - money house",
+    "gws - capital",
+    "gws - storm",
+    "gws (vip)",
+    "gws - vip",
+    "gws vip",
+    "gws-vip",
+})
+
+
+def _discover_auto_gws_chats(dialogs: list[Any]) -> dict[int, str]:
+    """Resolve exact GWS titles in joined Telegram channels, failing closed on duplicates.
+
+    Telegram titles are mutable and are not authentication. Operators should
+    ultimately pin verified IDs in TELEGRAM_SOURCE_CHATS for live execution.
+    """
+    matched: dict[str, dict[int, str]] = {}
+    for dialog in dialogs:
+        entity = dialog.entity
+        # Ignore personal messages and ordinary groups. Only channel-style
+        # dialogs joined by the authenticated user can be auto-discovered.
+        if not (getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False)):
+            continue
+        title = str(getattr(entity, "title", None) or dialog.name or "")
+        normalised = " ".join(title.split()).casefold()
+        if normalised not in AUTO_GWS_TITLES:
+            continue
+        peer_id = utils.get_peer_id(entity)
+        matched.setdefault(normalised, {})[peer_id] = title
+
+    discovered: dict[int, str] = {}
+    for title, candidates in matched.items():
+        if len(candidates) != 1:
+            logger.error(
+                "Ambiguous auto-discovered Telegram title %r, IDs=%s: "
+                "source not activated; pin verified chat ID to TELEGRAM_SOURCE_CHATS",
+                title, sorted(candidates),
+            )
+            continue
+        discovered.update(candidates)
+    return discovered
+
+
 
 def _iso(value: Any) -> str | None:
     if value is None:
@@ -135,6 +181,7 @@ async def run() -> None:
     )
 
     chat_ids = await _resolve_chat_ids(client, settings.telegram_source_chats)
+    configured_chat_ids = tuple(chat_ids)
     known = load_known(settings.telegram_event_log_path)
     dialogs = await client.get_dialogs()
     chat_titles = {
@@ -142,6 +189,27 @@ async def run() -> None:
         for d in dialogs
     }
     sender_names: dict[int, str] = {}
+
+    def refresh_sources(current_dialogs: list[Any]) -> None:
+        """Refresh the allowlist in place so all live handlers see new joins."""
+        discovered = (
+            _discover_auto_gws_chats(current_dialogs)
+            if settings.telegram_auto_gws_sources else {}
+        )
+        updated = list(dict.fromkeys((*configured_chat_ids, *discovered.keys())))
+        added = set(updated) - set(chat_ids)
+        removed = set(chat_ids) - set(updated)
+        chat_ids[:] = updated
+        for chat_id, title in discovered.items():
+            chat_titles[chat_id] = title
+        if added or removed:
+            logger.warning(
+                "Telegram source membership changed added=%s removed=%s; "
+                "auto-discovered titles must be ID-verified before trusting live orders",
+                sorted(added), sorted(removed),
+            )
+
+    refresh_sources(dialogs)
 
     async def detailed_payload(kind: str, message: Any) -> dict[str, Any]:
         sender = getattr(message, "sender", None)
@@ -201,12 +269,18 @@ async def run() -> None:
             return True
 
     async def on_new_message(event: events.NewMessage.Event) -> None:
+        if event.chat_id not in chat_ids:
+            return
         await record(await detailed_payload("new_message", event.message))
 
     async def on_message_edited(event: events.MessageEdited.Event) -> None:
+        if event.chat_id not in chat_ids:
+            return
         await record(await detailed_payload("message_edited", event.message))
 
     async def on_message_deleted(event: events.MessageDeleted.Event) -> None:
+        if event.chat_id not in chat_ids:
+            return
         payload = {
             "event_type": "message_deleted",
             "observed_at": datetime.now(UTC).isoformat(),
@@ -215,9 +289,11 @@ async def run() -> None:
         }
         await record(payload)
 
-    client.add_event_handler(on_new_message, events.NewMessage(chats=chat_ids))
-    client.add_event_handler(on_message_edited, events.MessageEdited(chats=chat_ids))
-    client.add_event_handler(on_message_deleted, events.MessageDeleted(chats=chat_ids))
+    # Builder-level chats= filters are frozen at registration. Filter inside
+    # callbacks instead so membership changes are picked up without a restart.
+    client.add_event_handler(on_new_message, events.NewMessage())
+    client.add_event_handler(on_message_edited, events.MessageEdited())
+    client.add_event_handler(on_message_deleted, events.MessageDeleted())
     logger.info("Telegram listener handlers ready sources=%s log=%s",
                 chat_ids, settings.telegram_event_log_path)
 
@@ -237,6 +313,7 @@ async def run() -> None:
         """
         now = datetime.now(UTC)
         dialogs = await client.get_dialogs()
+        refresh_sources(dialogs)
         entities = {utils.get_peer_id(item.entity): item.entity for item in dialogs}
         recovered = 0
         amended = 0
