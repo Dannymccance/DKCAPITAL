@@ -1,0 +1,12 @@
+[Unit]
+Description=Guarded DEMO-only MT5 Account 3 freeze check (DO NOT ENABLE for LIVE accounts)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=false
+Unit=dkcapital-mt5-autoheal-account3.service
+
+[Install]
+WantedBy=timers.target
