@@ -127,6 +127,16 @@ class UpdateSupervisorTests(unittest.TestCase):
         self.assertNotEqual(module.ACCOUNTS["1"][1], module.ACCOUNTS["2"][1])
         self.assertNotEqual(module.ACCOUNTS["1"][2], module.ACCOUNTS["2"][2])
         self.assertEqual(module.ACCOUNTS["1"][3], "5057220041")
+        self.assertEqual(len(module.ACCOUNTS), 3)
+        self.assertEqual(module.ACCOUNTS["3"][0], "dkmt5c")
+        self.assertEqual(module.ACCOUNTS["3"][1], Path("/var/lib/dkcapital-mt5-3"))
+        self.assertEqual(module.ACCOUNTS["3"][2], 152)
+        self.assertIsNone(module.ACCOUNTS["3"][3])
+        self.assertEqual(len({v[0] for v in module.ACCOUNTS.values()}), 3)
+        self.assertEqual(len({v[1] for v in module.ACCOUNTS.values()}), 3)
+        self.assertEqual(len({v[2] for v in module.ACCOUNTS.values()}), 3)
+        self.assertNotIn("/skipupdate", module.launch_command("3", Path("/opt/mt5/terminal64.exe"), None))
+
 
 
 if __name__ == "__main__":
