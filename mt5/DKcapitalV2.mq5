@@ -350,10 +350,12 @@ bool Allocate(double total,double &a,double &b,double &c,const bool twoTargets)
    if(each<1) each=1;
    if(count<3*each) return false;
    int units[3];units[0]=each;units[1]=each;units[2]=each;
-   // Target allocation: TP1=25%, TP2=50%, TP3=25%. If the
-   // provider has only TP1/TP2, legs 2 and 3 BOTH exit at TP2,
-   // producing a target of 25% at TP1 and 75% at TP2.
-   double w[3];w[0]=0.25;w[1]=0.50;w[2]=0.25;
+   // Three-target goal: TP1=25%, TP2=50%, TP3=25%.
+   // Two-target goal: TP1=25%, TP2=75%, split TP2 across two
+   // independently stopped native legs so TP1 fill still drives BE.
+   double w[3];w[0]=0.25;
+   w[1]=twoTargets?0.375:0.50;
+   w[2]=twoTargets?0.375:0.25;
    for(int k=3*each;k<count;k++)
    {
       int best=2;
