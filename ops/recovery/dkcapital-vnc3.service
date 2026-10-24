@@ -1,0 +1,21 @@
+[Unit]
+Description=DK Capital MT5 Account 3 VNC (Dan; SSH tunnel only)
+After=network-online.target dkcapital-mt5-3.service
+# Observational only: never start or restart Account 3 trading as a side effect.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=dkmt5c
+Group=dkmt5c
+WorkingDirectory=/var/lib/dkcapital-mt5-3
+Environment=HOME=/var/lib/dkcapital-mt5-3
+Environment=XAUTHORITY=/var/lib/dkcapital-mt5-3/.Xauthority
+ExecStartPre=/usr/bin/timeout 90 /bin/sh -c 'until test -S /tmp/.X11-unix/X152; do sleep 2; done'
+ExecStart=/usr/bin/x11vnc -display :152 -auth /var/lib/dkcapital-mt5-3/.Xauthority -rfbport 5904 -localhost -forever -shared -rfbauth /var/lib/dkcapital-mt5-3/.vnc/passwd -o /tmp/dkcapital-vnc3.log
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

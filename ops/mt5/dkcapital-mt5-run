@@ -3,7 +3,7 @@
 
 This replaces the one-shot /usr/local/bin/dkcapital-mt5-run shell launcher.
 The caller is the existing per-account systemd unit; it must run as dkmt5 or
-dkmt5b, never root. This does not modify EA files or trading flags.
+dkmt5b or dkmt5c, never root. This does not modify EA files or trading flags.
 """
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ import time
 ACCOUNTS = {
     "1": ("dkmt5", Path("/var/lib/dkcapital-mt5"), 150, "5057220041"),
     "2": ("dkmt5b", Path("/var/lib/dkcapital-mt5-2"), 151, None),
+    # Third isolated MT5 instance; no approved broker login until provisioned.
+    "3": ("dkmt5c", Path("/var/lib/dkcapital-mt5-3"), 152, None),
 }
 WINE64 = "/usr/lib/wine/wine64"
 UPDATE_WAIT_SECONDS = 600
@@ -137,7 +139,7 @@ def await_update(installed_exe: Path, uid: int) -> str:
 
 def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in ACCOUNTS:
-        print("Usage: dkcapital-mt5-run {1|2}", file=sys.stderr, flush=True)
+        print("Usage: dkcapital-mt5-run {1|2|3}", file=sys.stderr, flush=True)
         return 2
     expected_user, home, display_number, profile = ACCOUNTS[sys.argv[1]]
     import pwd
