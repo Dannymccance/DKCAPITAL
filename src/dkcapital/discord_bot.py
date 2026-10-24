@@ -19,7 +19,7 @@ from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
 from dkcapital.mt5_broker_events import discover_events, notification_embed
-from dkcapital.telegram_discord_mirror import sync_mirror
+from dkcapital.telegram_discord_mirror import chats_channel_id, sync_mirror
 from dkcapital.weekly_record import close_time, record_due, weekly_record
 
 logger = logging.getLogger("dkcapital.discord")
@@ -1202,7 +1202,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
     weekly_channel_id = int(os.getenv("DISCORD_WEEKLY_RECORD_CHANNEL_ID", "0"))
     weekly_state_path = Path(os.getenv("WEEKLY_RECORD_STATE_PATH", "/app/data/weekly-record-state.json"))
-    telegram_mirror_channel_id = int(os.getenv("DISCORD_TELEGRAM_CHATS_CHANNEL_ID", "0"))
+    telegram_mirror_channel_id = chats_channel_id()
     telegram_mirror_state_path = Path(os.getenv("TELEGRAM_MIRROR_STATE_PATH", "/app/data/telegram-mirror-state.json"))
 
     async def update_mt5_account1() -> None:
