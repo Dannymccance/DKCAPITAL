@@ -15,6 +15,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, ProxyHandler
 
 from dkcapital.logging_setup import configure_logging
+from dkcapital.mt5_profile_registry import (
+    PROFILE_REGISTRY_NAME, profiles_from_registry, telemetry_file,
+)
 
 logger = logging.getLogger("dkcapital.watchdog")
 
@@ -43,14 +46,54 @@ def check_health(data_dir: Path, now: datetime, gateway_ok: bool) -> set[str]:
     problems: set[str] = set()
     if not gateway_ok:
         problems.add("GATEWAY_HEALTH_UNAVAILABLE")
-    telemetry = _read(data_dir / "mt5-account1.json")
-    if _age_seconds(telemetry.get("received_at"), now) > 150:
-        problems.add("MT5_ACCOUNT1_TELEMETRY_STALE")
-    else:
+    profiles, registry_valid = profiles_from_registry(data_dir)
+    if not registry_valid:
+        problems.add("MT5_PROFILE_REGISTRY_INVALID")
+    for profile in profiles:
+        ident = profile["id"]
+        prefix = f"MT5_ACCOUNT{ident}"
+        telemetry = _read(telemetry_file(data_dir, ident))
+        if _age_seconds(telemetry.get("received_at"), now) > 150:
+            problems.add(f"{prefix}_TELEMETRY_STALE")
+            continue
         if telemetry.get("feed_http") != 200:
-            problems.add("MT5_ACCOUNT1_FEED_NOT_HTTP200")
-        if telemetry.get("entry_enabled") is not True:
-            problems.add("MT5_ACCOUNT1_NOT_ARMED")
+            problems.add(f"{prefix}_FEED_NOT_HTTP200")
+        if profile["expect_entries"] and telemetry.get("entry_enabled") is not True:
+            problems.add(f"{prefix}_NOT_ARMED")
+        elif not profile["expect_entries"] and telemetry.get("entry_enabled") is True:
+            problems.add(f"{prefix}_UNEXPECTEDLY_ARMED")
+        if profile["expected_login"] is not None and telemetry.get("login") != profile["expected_login"]:
+            problems.add(f"{prefix}_WRONG_LOGIN")
+        if profile["expected_login"] is not None:
+            if telemetry.get("mode") != profile["expected_mode"] or telemetry.get("currency") != profile["expected_currency"]:
+                problems.add(f"{prefix}_WRONG_ACCOUNT_TYPE")
+            if any(type(telemetry.get(k)) is not int or telemetry[k] < 0
+                   for k in ("broker_positions_total", "broker_orders_total")):
+                problems.add(f"{prefix}_EXPOSURE_UNVERIFIED")
+            if telemetry.get("broker_positions_protected") is not True:
+                problems.add(f"{prefix}_BROKER_STOPS_UNVERIFIED")
+    # Host-systemd evidence is optional for legacy Account 1 deployments, but
+    # required once an explicit multi-account registry has been commissioned.
+    host = _read(data_dir / "mt5-profile-host-status.json")
+    require_host = (data_dir / PROFILE_REGISTRY_NAME).exists()
+    if require_host or host:
+        if _age_seconds(host.get("checked_at"), now) > 180:
+            problems.add("MT5_PROFILE_HOST_AUDIT_STALE")
+        else:
+            account_states = host.get("accounts")
+            account_states = account_states if isinstance(account_states, dict) else {}
+            for profile in profiles:
+                ident = profile["id"]
+                name = f"MT5_ACCOUNT{ident}"
+                info = account_states.get(str(ident))
+                if not isinstance(info, dict):
+                    problems.add(f"{name}_SERVICE_STATUS_MISSING")
+                    continue
+                if info.get("active") is not True:
+                    problems.add(f"{name}_TERMINAL_DOWN")
+                restart_at = info.get("last_restart_at")
+                if restart_at and _age_seconds(restart_at, now) < 300:
+                    problems.add(f"{name}_TERMINAL_RECENTLY_RESTARTED")
     recovery = _read(data_dir / "telegram-recovery-status.json")
     if _age_seconds(recovery.get("checked_at"), now) > 200:
         problems.add("TELEGRAM_CATCHUP_HEARTBEAT_STALE")
@@ -150,7 +193,7 @@ class Watchdog:
         delivered = set(prior)
         for issue in pending:
             telegram = issue.startswith("TELEGRAM_")
-            if self._notify(f"🚨 DKcapital independent watchdog: `{issue}` - inspect " + ("Telegram listener and recovery service." if telegram else "Account 1 services."), telegram=telegram, ping=telegram):
+            if self._notify(f"🚨 DKcapital independent watchdog: `{issue}` - inspect " + ("Telegram listener and recovery service." if telegram else "the named MT5 account / shared services."), telegram=telegram, ping=telegram):
                 delivered.add(issue)
         for issue in recovered:
             if self._notify(f"✅ DKcapital independent watchdog recovery: `{issue}` cleared.", telegram=issue.startswith("TELEGRAM_")):
