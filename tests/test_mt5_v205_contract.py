@@ -16,7 +16,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("AccountInfoDouble(ACCOUNT_EQUITY)", source)
         self.assertIn("DAILY_WARN_", source)
         entry = source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split("bool ActionKeySeen(", 1)[0]
         self.assertNotIn("DailyEquityWarningActive", entry)
         self.assertNotIn("DailyEquityWarningActive", layer)
@@ -32,7 +32,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("RiskBalanceGBP()*MaxSignalRiskPct/100.0", source)
         self.assertIn("return MathMin(balance,equity);", source)
         entry = source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split(
             "bool ActionKeySeen(", 1)[0]
         # Do not replace the account-BALANCE target sizing with fixed
@@ -54,7 +54,7 @@ class V205SourceContract(unittest.TestCase):
 
     def test_only_explicit_provider_open_runner_with_demo_opt_in(self):
         entry = self.code.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         self.assertIn("input bool EnableOpenRunnerEntries = false;", self.code)
         self.assertIn("bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;", entry)
         self.assertIn("(!oneTarget && !twoTargets && !openRunner &&", entry)
@@ -97,7 +97,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("GlobalVariableSet(key,(double)TimeGMT());", source)
         self.assertIn("GlobalVariablesFlush();", source)
         entry = source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split(
             "bool ActionKeySeen(", 1)[0]
         self.assertIn("int maxAge=SignalAgeLimit(id);", entry)
