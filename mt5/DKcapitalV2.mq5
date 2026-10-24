@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.08"
+#property version "2.09"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -46,6 +46,7 @@ const ulong MAGIC_MAX = 48049672950;
 const double INITIAL_GROUP_RISK_SHARE = 0.85;
 const double LAYER_GROUP_RISK_SHARE = 0.15;
 const int LAYER_LEG = 4;
+const int TP4_LEG = 5; // Preserve pre-existing layer magic 4 on broker trades.
 
 // Bounded, broker-sourced decisions. Never call a feed-only price rejection a
 // broker rejection; record the EA gate that actually prevented submission.
@@ -189,8 +190,8 @@ ulong GroupBase(const string id) { return MAGIC_BASE + (ulong)Hash(id)*10; }
 ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
-   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+3 &&
-          magic%10>=1 && magic%10<=4;
+   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+TP4_LEG &&
+          magic%10>=1 && magic%10<=TP4_LEG;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
@@ -272,7 +273,7 @@ double SignalRiskLimitGBP()
 {
    // Target lots remain determined by ACCOUNT_BALANCE; only the broker
    // stop-risk budget uses the lower balance/equity on a drawdown.
-   // Includes original TP1/TP2/TP3 legs and any attributable fourth layer.
+   // Includes original TP1/TP2/TP3/TP4 legs and any attributable layer.
    return RiskBalanceGBP()*MaxSignalRiskPct/100.0;
 }
 double GroupRiskLimitGBP()
@@ -378,6 +379,33 @@ bool Allocate(double total,double &a,double &b,double &c,const bool twoTargets)
    // because legs 2 and 3 are assigned to TP2.
    return twoTargets ? b+c>a+1e-7 : (b>a+1e-7 && b>c+1e-7);
 }
+bool AllocateFour(double total,double &a,double &b,double &c,double &d)
+{
+   double step=LotStep(),minlot=LotMin();
+   if(step<=0 || minlot<=0) return false;
+   int count=(int)MathFloor(total/step+1e-6);
+   int each=(int)MathCeil(minlot/step-1e-6);
+   if(each<1) each=1;
+   // Four native targets: 20%, 40%, 20%, 20%, TP2 strictly largest.
+   if(count<5*each) return false;
+   int units[4];for(int i=0;i<4;i++) units[i]=each;
+   double w[4];w[0]=0.20;w[1]=0.40;w[2]=0.20;w[3]=0.20;
+   for(int k=4*each;k<count;k++)
+   {
+      int best=3;double gap=-1e10;
+      for(int j=3;j>=0;j--)
+      {
+         double missing=w[j]*count-units[j];
+         if(missing>gap+1e-7) {gap=missing;best=j;}
+      }
+      units[best]++;
+   }
+   a=NormalizeDouble(units[0]*step,8);
+   b=NormalizeDouble(units[1]*step,8);
+   c=NormalizeDouble(units[2]*step,8);
+   d=NormalizeDouble(units[3]*step,8);
+   return b>a+1e-7 && b>c+1e-7 && b>d+1e-7;
+}
 bool HasBeenAttempted(const string id)
 {
    if(GlobalVariableCheck(IDKey(id,"ATTEMPT"))) return true;
@@ -442,7 +470,7 @@ bool CloseTicket(ulong ticket)
 bool CloseGroup(const string id)
 {
    bool ok=true;
-   for(int leg=1;leg<=4;leg++)
+   for(int leg=1;leg<=TP4_LEG;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket>0 && !CloseTicket(ticket)) ok=false;
@@ -521,7 +549,7 @@ bool StormTP1DrawdownReached(const string id,const string direction)
 }
 void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3,
-                const bool openRunner)
+                const double tp4,const bool openRunner)
 {
    bool buy=direction=="BUY";
    bool tp1Confirmed=TP1BrokerConfirmed(id);
@@ -531,11 +559,13 @@ void ManageLegs(const string id,const string direction,const double stop,
    // or later provider amendments; do not silently move the TP2 exit leg
    // to a newly added TP3 target.
    bool wasTwoTargets=GlobalVariableCheck(IDKey(id,"TWO_TARGET_ENTRY"));
+   bool wasFourTargets=GlobalVariableCheck(IDKey(id,"FOUR_TARGET_ENTRY"));
    bool stormUseTP1=stormAdaptive && StormTP1DrawdownReached(id,direction);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
-   for(int leg=1;leg<=4;leg++)
+   for(int leg=1;leg<=TP4_LEG;leg++)
    {
+      if(leg==TP4_LEG && !wasFourTargets) continue;
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
       if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) continue;
@@ -568,8 +598,9 @@ void ManageLegs(const string id,const string direction,const double stop,
       }
       // The separately tracked 10% layer exits at TP2.
       double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;
-      double rawTP=leg==1?firstTarget:(leg==2 || leg==LAYER_LEG ||
-                    (leg==3 && wasTwoTargets)?tp2:tp3);
+      double rawTP=leg==1?firstTarget:
+                    (leg==2 || leg==LAYER_LEG || (leg==3 && wasTwoTargets)?tp2:
+                    (leg==TP4_LEG?tp4:tp3));
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -588,7 +619,7 @@ void ManageLegs(const string id,const string direction,const double stop,
 }
 void TryEntry(const string id,const string status,const string direction,
               double low,double high,double providerSL,const long opened,
-              double tp1,double tp2,double tp3,const bool openRunner)
+              double tp1,double tp2,double tp3,double tp4,const bool openRunner)
 {
    if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
@@ -646,10 +677,17 @@ void TryEntry(const string id,const string status,const string direction,
    // malformed or a native target is already behind the broker quote.
    // A provider may define exactly two targets. TP3=0 denotes "absent",
    // never OPEN. Only the literal OPEN signal may opt into a runner.
-   bool twoTargets=!openRunner && tp3<=0;
-   if(tp1<=0 || tp2<=0 ||
-      ValidTP(buy,tp1,q)<=0 || ValidTP(buy,tp2,q)<=0 ||
-      (!twoTargets && !openRunner && ValidTP(buy,tp3,q)<=0))
+   bool oneTarget=!openRunner && tp2<=0 && tp3<=0 && tp4<=0;
+   bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;
+   bool fourTargets=!openRunner && tp2>0 && tp3>0 && tp4>0;
+   int initialLegCount=oneTarget?1:(fourTargets?4:3);
+   if(tp1<=0 || ValidTP(buy,tp1,q)<=0 ||
+      (!oneTarget && (tp2<=0 || ValidTP(buy,tp2,q)<=0)) ||
+      (!oneTarget && !twoTargets && !openRunner &&
+       (tp3<=0 || ValidTP(buy,tp3,q)<=0)) ||
+      (fourTargets && ValidTP(buy,tp4,q)<=0) ||
+      (tp4>0 && !fourTargets) ||
+      (tp3<=0 && tp2>0 && !twoTargets && !openRunner))
    {RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);return;}
    if(openRunner && !EnableOpenRunnerEntries)
    {RecordDecision(id,"ENTRY","OPEN_RUNNER_REQUIRES_OPT_IN",age);return;}
@@ -674,7 +712,7 @@ void TryEntry(const string id,const string status,const string direction,
    double signalRemaining=signalLimit-groupRisk;
    double budget=MathMin(groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk,
                          MathMin(portfolioLimit-portfolio,signalRemaining));
-   if(budget<=3*RiskPaddingGBPPerLeg)
+   if(budget<=initialLegCount*RiskPaddingGBPPerLeg)
    {
       RecordDecision(id,"ENTRY",
                      signalRemaining<=3*RiskPaddingGBPPerLeg ?
@@ -685,31 +723,38 @@ void TryEntry(const string id,const string status,const string direction,
    double minlot=LotMin();
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
    if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);
-   targetLots=MathMin(targetLots,SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)*3);
-   double a=0,b=0,c=0;
-   double vols[3];
+   targetLots=MathMin(targetLots,SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)*initialLegCount);
+   double a=0,b=0,c=0,d=0;
+   double vols[4];
    bool possible=false;
-   for(double total=targetLots;total>=3*minlot-1e-8;total=FloorLots(total-LotStep()))
+   for(double total=targetLots;
+       total>=initialLegCount*minlot-1e-8;total=FloorLots(total-LotStep()))
    {
-      if(!Allocate(total,a,b,c,twoTargets)) continue;
-      vols[0]=a;vols[1]=b;vols[2]=c;
+      if(oneTarget) {a=total;b=0;c=0;d=0;}
+      else if(fourTargets)
+      {
+         if(!AllocateFour(total,a,b,c,d)) continue;
+      }
+      else if(!Allocate(total,a,b,c,twoTargets)) continue;
+      vols[0]=a;vols[1]=b;vols[2]=c;vols[3]=d;
       double r1=RiskGBP(buy,a,fill,sl);
-      double r2=RiskGBP(buy,b,fill,sl);
-      double r3=RiskGBP(buy,c,fill,sl);
+      double r2=initialLegCount>1?RiskGBP(buy,b,fill,sl):0;
+      double r3=initialLegCount>2?RiskGBP(buy,c,fill,sl):0;
+      double r4=fourTargets?RiskGBP(buy,d,fill,sl):0;
       // OrderCalcProfit may fail for a broker contract/currency conversion.
       // Its -1 sentinel is NOT negative exposure or spare risk capacity.
-      if(r1<0 || r2<0 || r3<0)
+      if(r1<0 || r2<0 || r3<0 || r4<0)
       {
          RecordDecision(id,"ENTRY","BROKER_RISK_VALUATION_FAILED",age);
          Print("DK2 RISK BLOCK: failed broker stop-risk valuation id=",id);
          return;
       }
-      double planned=r1+r2+r3;
+      double planned=r1+r2+r3+r4;
       if(planned>budget+1e-7) continue;
       double requiredMargin=0,margin=0;
       bool marginOK=true;
       ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
-      for(int i=0;i<3;i++)
+      for(int i=0;i<initialLegCount;i++)
       {
          if(!OrderCalcMargin(type,GoldSymbol,vols[i],fill,margin) || margin<0 || !MathIsValidNumber(margin))
          { marginOK=false;break; }
@@ -723,17 +768,23 @@ void TryEntry(const string id,const string status,const string direction,
    {
       // Distinguish a broker's minimum three-leg size exceeding the 4%
       // total stop-risk budget from an unrelated free-margin failure.
-      double minA=0,minB=0,minC=0;
-      bool minAvailable=Allocate(FloorLots(3*minlot),minA,minB,minC,twoTargets);
+      double minA=0,minB=0,minC=0,minD=0;
+      bool minAvailable=oneTarget?true:
+         (fourTargets?
+           AllocateFour(FloorLots(5*minlot),minA,minB,minC,minD):
+           Allocate(FloorLots(3*minlot),minA,minB,minC,twoTargets));
+      if(oneTarget) minA=LotMin();
       double minimumRisk=minAvailable ?
-         RiskGBP(buy,minA,fill,sl)+RiskGBP(buy,minB,fill,sl)+
-         RiskGBP(buy,minC,fill,sl) : -1;
+         RiskGBP(buy,minA,fill,sl)+
+         (oneTarget?0:RiskGBP(buy,minB,fill,sl)+RiskGBP(buy,minC,fill,sl))+
+         (fourTargets?RiskGBP(buy,minD,fill,sl):0) : -1;
       string reason="MINIMUM_THREE_LEG_SIZE_OR_MARGIN";
       if(minAvailable && minimumRisk>=0 && minimumRisk>budget+1e-7)
          reason="MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
-      else if(targetLots<3*minlot-1e-8)
+      else if(targetLots<initialLegCount*minlot-1e-8)
          reason="BALANCE_BASED_TARGET_BELOW_THREE_MINIMUM_LOTS";
-      else if(!twoTargets && targetLots<3*minlot+LotStep()-1e-8)
+      else if(!oneTarget && !twoTargets &&
+              targetLots<(fourTargets?5:4)*minlot-1e-8)
          reason="TP2_MAJORITY_REQUIRES_ADDITIONAL_LOT_STEP";
       RecordDecision(id,"ENTRY",reason,age);
       Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
@@ -745,26 +796,29 @@ void TryEntry(const string id,const string status,const string direction,
    bool stormAdaptive=EnableStormConditionalTP1 && IsStormSignal(id);
    if(stormAdaptive) GlobalVariableSet(IDKey(id,"STORM_TP_POLICY"),1);
    if(twoTargets) GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);
+   if(fourTargets) GlobalVariableSet(IDKey(id,"FOUR_TARGET_ENTRY"),1);
    GlobalVariableSet(IDKey(id,"ATTEMPT"),(double)TimeGMT());
    GlobalVariablesFlush();
    // Default STORM first leg to TP2; use TP1 only if subsequent observed
    // adverse excursion reaches the configured 20-pip threshold.
-   double targets[3];targets[0]=stormAdaptive?tp2:tp1;
+   double targets[4];targets[0]=stormAdaptive && !oneTarget?tp2:tp1;
    targets[1]=tp2;targets[2]=openRunner?0:(twoTargets?tp2:tp3);
+   targets[3]=tp4;
    bool allGood=true;
-   for(int leg=1;leg<=3;leg++)
+   for(int i=0;i<initialLegCount;i++)
    {
+      int leg=i==3?TP4_LEG:i+1;
       trade.SetExpertMagicNumber(LegMagic(id,leg));
-      double tp=(leg==3 && openRunner)?0:ValidTP(buy,targets[leg-1],q);
-      bool sent=buy?trade.Buy(vols[leg-1],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg)):
-                    trade.Sell(vols[leg-1],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg));
+      double tp=(i==2 && openRunner)?0:ValidTP(buy,targets[i],q);
+      bool sent=buy?trade.Buy(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg)):
+                    trade.Sell(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg));
       ulong ticket=TicketForLeg(id,leg);
       if(!sent || !BrokerDone() || ticket==0 || !PositionSelectByTicket(ticket) ||
          PositionGetDouble(POSITION_SL)<=0 ||
-         MathAbs(PositionGetDouble(POSITION_VOLUME)-vols[leg-1])>LotStep()/2)
+         MathAbs(PositionGetDouble(POSITION_VOLUME)-vols[i])>LotStep()/2)
       {
          RecordDecision(id,"ENTRY","BROKER_ORDER_REJECTED_OR_PARTIAL",age,trade.ResultRetcode());
-         Print("DK2 CRITICAL incomplete trio id=",id," leg=",leg,
+         Print("DK2 CRITICAL incomplete entry id=",id," leg=",leg,
                " retcode=",trade.ResultRetcode());
          allGood=false;break;
       }
@@ -777,12 +831,14 @@ void TryEntry(const string id,const string status,const string direction,
    else
    {
       RecordDecision(id,"ENTRY","BROKER_FILLED",age);
-      Print("DK2 trio opened id=",id," TP1_lots=",a,
+      Print("DK2 execution filled id=",id," TP1_lots=",a,
             " TP2_lots=",b+(twoTargets?c:0),
-            " TP3_lots=",(twoTargets?0:c)," twoTargets=",twoTargets);
+            " TP3_lots=",(twoTargets?0:c),
+            " TP4_lots=",d," numTargets=",
+            oneTarget?1:(twoTargets?2:(fourTargets?4:3)));
    }
 }
-// Original three-leg broker fills are the fixed reference, even after partial closes.
+// Broker-history original leg volume is fixed even after partial closes.
 double OriginalVolume(const string id)
 {
    if(!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()+3600)) return 0;
@@ -793,8 +849,8 @@ double OriginalVolume(const string id)
       if(deal==0 || HistoryDealGetString(deal,DEAL_SYMBOL)!=GoldSymbol ||
          HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
       ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
-      for(int leg=1;leg<=3;leg++)
-         if(magic==LegMagic(id,leg))
+      for(int leg=1;leg<=TP4_LEG;leg++)
+         if(leg!=LAYER_LEG && magic==LegMagic(id,leg))
          {
             total+=HistoryDealGetDouble(deal,DEAL_VOLUME);
             break;
@@ -974,7 +1030,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
    // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
-   for(int leg=1;leg<=4;leg++)
+   for(int leg=1;leg<=TP4_LEG;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -991,7 +1047,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    }
    double target=GlobalVariableGet(targetKey);
    double needed=FloorLots(total-target);
-   for(int leg=4;leg>=1 && needed>=LotMin()-1e-8;leg--)
+   for(int leg=TP4_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
       ulong t=TicketForLeg(id,leg);
       if(t==0 || !PositionSelectByTicket(t)) continue;
@@ -1006,7 +1062,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       needed=FloorLots(needed-part);
    }
    double current=0;
-   for(int leg=1;leg<=4;leg++)
+   for(int leg=1;leg<=TP4_LEG;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -1286,7 +1342,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.08 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.09 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
