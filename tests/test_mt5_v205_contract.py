@@ -123,7 +123,7 @@ class V205SourceContract(unittest.TestCase):
         source = self.code
         for phrase in (
             '"PRICE_OUTSIDE_ENTRY_ZONE"', '"BROKER_SPREAD_TOO_WIDE"',
-            '"MINIMUM_THREE_LEG_SIZE_OR_MARGIN"', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
+            '"MINIMUM_LEG_SIZE_OR_MARGIN"', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
             '"LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL"',
             '"LAYER_ENTRIES_DISABLED"',
             '"ENTRY_WINDOW_EXPIRED"', '"MISSING_OR_INVALID_NATIVE_TP"',
