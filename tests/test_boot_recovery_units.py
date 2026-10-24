@@ -35,6 +35,18 @@ class BootRecoveryUnitTests(unittest.TestCase):
                 self.assertIn("Restart=always", text)
                 self.assertNotIn("ExecStart=/usr/bin/x11vnc -bg", text)
 
+    def test_account3_is_a_staged_unit_and_never_started_by_recovery(self):
+        unit = (ROOT / "ops/mt5/dkcapital-mt5-3.service").read_text()
+        self.assertIn("User=dkmt5c", unit)
+        self.assertIn("WorkingDirectory=/var/lib/dkcapital-mt5-3", unit)
+        self.assertIn("ExecStart=/usr/local/bin/dkcapital-mt5-run 3", unit)
+        installer = (OPS / "install-recovery.sh").read_text()
+        self.assertNotIn("dkcapital-mt5-3.service", installer)
+        self.assertNotIn("dkcapital-vnc3.service", installer)
+        audit = (OPS / "check_boot.py").read_text()
+        self.assertNotIn('dkcapital-mt5-3.service', audit)
+        self.assertNotIn('dkcapital-vnc3.service', audit)
+
     def test_audit_is_scheduled_after_boot(self):
         text = (OPS / "dkcapital-boot-audit.timer").read_text()
         self.assertIn("OnBootSec=4min", text)
