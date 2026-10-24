@@ -1,0 +1,21 @@
+[Unit]
+Description=DK Capital MT5 Account 3 (Dan - reserved, not provisioned)
+After=network-online.target
+Wants=network-online.target
+# Intentionally not enabled as part of any boot recovery installer.
+
+[Service]
+Type=simple
+User=dkmt5c
+Group=dkmt5c
+WorkingDirectory=/var/lib/dkcapital-mt5-3
+Environment=HOME=/var/lib/dkcapital-mt5-3
+ExecStart=/usr/local/bin/dkcapital-mt5-run 3
+Restart=always
+RestartSec=120
+RestartPreventExitStatus=78
+StartLimitIntervalSec=0
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
