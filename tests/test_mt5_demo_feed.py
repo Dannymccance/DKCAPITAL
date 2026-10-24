@@ -159,6 +159,36 @@ class DemoFeedTests(unittest.TestCase):
         self.assertEqual(len(fields), 13)
         self.assertEqual(fields[8:12], ["4010.0", "4020.0", "4030.0", "4040.0"])
 
+    def test_legacy_ea_cannot_start_four_target_trade_as_three_legs(self):
+        self.path.write_text(json.dumps({
+            "signals": [{
+                "symbol": "XAUUSD", "signal_id": "-1007:301",
+                "status": "ACTIVE", "direction": "BUY",
+                "entry_low": 4000, "entry_high": 4003,
+                "current_sl": 3996, "sl_mode": "PRICE",
+                "tps": {"1": 4010, "2": 4020, "3": 4030, "4": 4040},
+                "opened_at": datetime.now(UTC).isoformat(),
+            }]
+        }), encoding="utf-8")
+        old_url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        with urlopen(Request(old_url, headers={
+            "Authorization": "Bearer " + self.token
+        }), timeout=3) as response:
+            lines = response.read().decode("utf-8").splitlines()
+        self.assertEqual(lines[0], "DKDEMO2")
+        fields = lines[1].split("|")
+        self.assertEqual(len(fields), 12)
+        self.assertEqual(fields[2], "CANCELLED")
+        new_url = f"http://127.0.0.1:{self.server.server_port}/v3/demo/feed"
+        with urlopen(Request(new_url, headers={
+            "Authorization": "Bearer " + self.token
+        }), timeout=3) as response:
+            lines = response.read().decode("utf-8").splitlines()
+        self.assertEqual(lines[0], "DKDEMO3")
+        fields = lines[1].split("|")
+        self.assertEqual(len(fields), 13)
+        self.assertEqual(fields[2], "ACTIVE")
+
     def test_one_numeric_target_retains_wire_format(self):
         self.path.write_text(json.dumps({
             "signals": [{
