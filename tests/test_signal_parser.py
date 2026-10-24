@@ -52,6 +52,52 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(action.tps, {1: 4090, 2: 4098})
         self.assertEqual(action.sl, 4079)
 
+    def test_capital_explicit_open_runner_persists_without_invented_tp(self) -> None:
+        original = ("XAUUSD 4084-85 BUY\nTP1: 4090\nTP2: 4098\n"
+                    "TP3: OPEN\nSL: 4079")
+        action = parse_actions(original)[0]
+        self.assertTrue(action.tp3_open)
+        self.assertEqual(action.tps, {1: 4090, 2: 4098})
+        state = SignalState()
+        state.ingest_event(event(60, original, minute=0))
+        signal = state.signals["1:60"]
+        self.assertTrue(signal.tp3_open)
+        self.assertNotIn(3, signal.tps)
+        # A later explicit third numeric TP replaces the OPEN instruction.
+        state.ingest_event(event(61, "TP3: 4104", minute=1, reply_to=60))
+        self.assertFalse(state.signals["1:60"].tp3_open)
+        self.assertEqual(state.signals["1:60"].tps[3], 4104)
+
+    def test_provider_no_breakeven_yet_survives_tp1_report(self) -> None:
+        signal_text = ("BUY XAUUSD AT 4150 - 4148\nTP1 4155\n"
+                       "TP2 4160\nTP3 4165\nSL 4140")
+        state = SignalState()
+        state.ingest_event(event(70, signal_text, minute=0))
+        directive = "TP1 HIT +45 PIPS\nNo breakeven yet if it goes back enter again if not hold"
+        actions = parse_actions(directive, reply_to_message_id=70)
+        self.assertFalse(any(a.move_sl_to_be for a in actions))
+        self.assertTrue(any(a.defer_breakeven for a in actions))
+        state.ingest_event(event(71, directive, minute=1, reply_to=70))
+        signal = state.signals["1:70"]
+        self.assertTrue(signal.be_deferred)
+        self.assertEqual(signal.sl_mode, "PRICE")
+        self.assertEqual(signal.current_sl, 4140)
+        state.ingest_event(event(72, "SET ALL BREAKEVEN NOW", minute=2))
+        self.assertFalse(signal.be_deferred)
+        self.assertEqual(signal.sl_mode, "BREAKEVEN")
+
+    def test_no_be_comment_does_not_remove_earlier_broker_protection(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(80,
+            "BUY XAUUSD AT 4150\nTP1 4155\nTP2 4160\nTP3 4165\nSL 4140",
+            minute=0,
+        ))
+        state.ingest_event(event(81, "SET BE", minute=1, reply_to=80))
+        state.ingest_event(event(82, "NO BREAKEVEN YET", minute=2, reply_to=80))
+        sig = state.signals["1:80"]
+        self.assertEqual(sig.sl_mode, "BREAKEVEN")
+        self.assertFalse(sig.be_deferred)
+
     def test_capital_reverse_shorthand_and_full_price(self) -> None:
         cases = [
             ("XAUUSD 4121-20 BUY\nTP1: 4125\nSL: 4115", (4120, 4121)),
