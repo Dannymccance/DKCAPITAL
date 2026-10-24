@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from dkcapital.market_data import GoldSpotClient
 from dkcapital.paper_trading import PaperAccount
 from dkcapital.signal_state import SignalState
 from dkcapital.xau_strategy import XauSignalFollowingStrategy, XauStrategyConfig
+from dkcapital.paper_v2_strategy import V2PaperStrategy
 
 logger = logging.getLogger("dkcapital.paper_engine")
 
@@ -286,7 +288,9 @@ def _build_delayed_signal_state(
 
 
 def _strategy(settings: Settings) -> XauSignalFollowingStrategy:
-    return XauSignalFollowingStrategy(
+    strategy_class = (V2PaperStrategy if settings.paper_strategy_mode == "signal_follow_v2"
+                      else XauSignalFollowingStrategy)
+    return strategy_class(
         XauStrategyConfig(
             risk_pct=settings.paper_risk_pct,
             direction_risk_cap_pct=settings.paper_direction_risk_cap_pct,
@@ -341,10 +345,11 @@ async def run() -> None:
 
     account, first_start = _load_account(settings)
     event_store = JsonlEventStore(settings.paper_event_log_path)
-    gold_spot = GoldSpotClient(
-        settings.gold_spot_url,
-        settings.paper_mark_refresh_seconds,
-    )
+    # The second, independently persisted V2 profile consumes the existing
+    # market tape; only the original paper-engine writes live quotes.
+    market_tape_writer = os.getenv("PAPER_MARKET_TAPE_WRITER", "true").lower() in {"true", "1", "yes"}
+    gold_spot = (GoldSpotClient(settings.gold_spot_url, settings.paper_mark_refresh_seconds)
+                 if market_tape_writer else None)
     strategy = _strategy(settings)
     delay_state, delay_initialized = _load_delay_state(settings)
 
@@ -418,7 +423,7 @@ async def run() -> None:
     while True:
         now = datetime.now(UTC)
 
-        live_quote = await gold_spot.quote()
+        live_quote = await gold_spot.quote() if gold_spot is not None else None
         live_quote_key = _quote_key(live_quote)
         if live_quote is not None and live_quote_key != last_live_quote_key:
             tape_quote = dict(live_quote)
