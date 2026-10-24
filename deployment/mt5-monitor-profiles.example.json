@@ -7,7 +7,9 @@
       "expected_mode": "DEMO",
       "expected_currency": "GBP",
       "expected_login": 0,
-      "expect_entries": false
+      "expect_entries": false,
+      "auto_recover": false,
+      "recovery_policy": "disabled"
     },
     {
       "id": 2,
