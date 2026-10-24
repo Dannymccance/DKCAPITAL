@@ -197,3 +197,23 @@ For three numeric targets, if the trade cannot fund a **strictly larger TP2 exit
 Broker-native SL on every leg, TP1 broker-confirmed BE rules, distinct magic numbers, exactly-once broker history checks, risk cap at the **actual provider SL**, strict entry freshness and the existing optional GWS STORM / OPEN rules remain in place. This update **does not** change the independent live-account EA. Do not use V2.08 on a USD/REAL Vantage account; the EA intentionally checks Account 1 GBP DEMO identity.
 
 **Verification before arming V2.08:** test a fresh GWS `XAUUSD 4003 - 4000: Buy / TP1: 4107 / TP2: 4120 / SL: 3996`-format *synthetic* message in a controlled demo environment, confirm the 12-field DKDEMO2 wire format carries a numeric zero for absent TP3 (not OPEN), verify two TP2 broker tickets and one TP1 broker ticket at acceptable lot sizes, confirm TP1 close triggers BE only on broker-side confirmed fill, inspect broker ticket SL/TP and total planned risk, and restart the terminal with protected tickets to ensure TP mapping survives. Never backfill or auto-open the historical example as a new trade.
+
+
+## V2.09 — provider target count 1–4, TP2-priority
+
+V2.08 source was limited to a maximum of three native target legs. Telegram already parsed TP4 but the MT5 V2 gateway silently forwarded only three, which could misexecute a four-target setup. The new source uses a **separate authenticated `/v3/demo/feed` endpoint with `DKDEMO3` handshake** to ensure a new V2.09 EA cannot accidentally run on an old gateway. The original `/v2/demo/feed` stays available to old EAs; new four-target ACTIVE signals are marked non-executable on the old feed, preserving position-management instruction fields without submitting a partial three-target trade.
+
+| Explicit numeric TPs | Intended distribution | Native stopped MT5 legs |
+| --- | --- | --- |
+| 1 TP | TP1 100% | One leg (magic suffix 1) |
+| 2 TPs | TP1 25%, TP2 75% | Three legs, legs 2 and 3 both TP2 |
+| 3 TPs | TP1 25%, TP2 50%, TP3 25% | Three legs, original magic suffixes 1,2,3 |
+| 4 TPs | TP1 20%, TP2 40%, TP3 20%, TP4 20% | Four legs, magic suffixes **1,2,3,5** |
+
+Magic suffix **4 stays the existing optional 10% GWS layer**, ensuring positions and history from older EA versions remain identifiable. Suffix **5 is dedicated to TP4**, not a layer. The broker telemetry normalizer, pending-order recovery, result cards, trade-result PnL and Discord events now recognize suffix 5. Explicit provider SL and native TP orders are required for all closed-target legs; no TP is fabricated and the explicit TP3: OPEN runner remains a separate, disabled-by-default opt-in policy.
+
+Broker lot-step rounding may prevent ideal allocations. At minimum 0.01-lot steps, the four-target TP2-majority exit requires at least **0.05 total lots** (0.01/0.02/0.01/0.01), with enough margin and room inside existing risk limits. Three targets require at least 0.04 to keep TP2 strictly largest; two targets work at 0.03 (0.01 TP1, 0.02 TP2). A one-target trade needs only one broker leg. If any required configuration is impossible within 4% maximum provider-stop risk, available balance/lot limit, or Friday maximum, the EA **skips** rather than silently reallocating/ignoring a target. More than four numeric targets are not supported: the v3 feed does not send those signals rather than truncating them.
+
+Four-target execution mode is persisted as `FOUR_TARGET_ENTRY` before the first broker attempt so its fourth leg stays on the native TP4 across reconnects or subsequent provider amendments. Open/executed positions remain subject to broker-history deduplication, protective stop checks, and post-restart verification.
+
+**Release status:** This is a source and Python-test change only. It does NOT recompile, install, restart or arm MT5. The existing demo continues using its installed V2.07. To release V2.09, first confirm the running signal processor contains the current parser, upgrade the gateway to expose the authenticated /v3/demo/feed (without stopping terminals), compile V2.09 on the isolated MetaEditor 5903, run demo acceptance tests across 1–4 targets including live native SL/TP and broker-side TP1/BE behaviour, and only then install on demo account 5901. Dan's forthcoming live Vantage account requires its own USD/REAL EA implementation and tests; it must not use the demo-only V2.09.
