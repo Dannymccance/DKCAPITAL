@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.06"
+#property version "2.07"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -27,6 +27,8 @@ input double StopSlippageUSD = 0.25;
 input double EntryToleranceUSD = 1.0;
 input double MaxSpreadUSD = 1.5;
 input int MaximumSignalAgeSeconds = 180;
+input int StormInitialFreshnessSeconds = 45; // Must be observed promptly to arm a new STORM setup.
+input int StormEntryZoneWaitSeconds = 300; // Once armed, permit up to 5 minutes for price to enter zone.
 input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
@@ -467,6 +469,24 @@ bool IsStormSignal(const string id)
 {
    return StringFind(id,"-1004334637102:")==0;
 }
+int SignalAgeLimit(const string id)
+{
+   // The first STORM observation must be fresh, but the zone may arrive later.
+   return IsStormSignal(id) ? StormEntryZoneWaitSeconds : MaximumSignalAgeSeconds;
+}
+bool StormEntryArmed(const string id,const long age)
+{
+   if(!IsStormSignal(id)) return true;
+   string key=IDKey(id,"STORM_ENTRY_ARMED");
+   if(GlobalVariableCheck(key)) return true; // survives restart before the price arrives
+   if(age<0 || age>StormInitialFreshnessSeconds || !EnableNewEntries ||
+      !DemoIdentity() || !telemetry_healthy || last_feed_http!=200) return false;
+   GlobalVariableSet(key,(double)TimeGMT());
+   GlobalVariablesFlush();
+   Print("DK2 STORM entry armed awaiting zone id=",id," age=",age,
+         " expires_at=",TimeToString((datetime)(TimeGMT()+SignalAgeLimit(id)-age)));
+   return true;
+}
 bool StormTP1DrawdownReached(const string id,const string direction)
 {
    string key=IDKey(id,"STORM_DRAWDOWN_TP1");
@@ -556,14 +576,20 @@ void TryEntry(const string id,const string status,const string direction,
 {
    if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
-   if(age<0 || age>MaximumSignalAgeSeconds)
+   int maxAge=SignalAgeLimit(id);
+   if(age<0 || age>maxAge)
    {
-      if(age>MaximumSignalAgeSeconds && age<MaximumSignalAgeSeconds+120 &&
+      if(age>maxAge && age<maxAge+120 &&
          !HasBeenAttempted(id))
          RecordDecision(id,"ENTRY","ENTRY_WINDOW_EXPIRED",age);
       return;
    }
    if(!EnableNewEntries) {RecordDecision(id,"ENTRY","ENTRY_DISABLED",age);return;}
+   // The first STORM observation must arrive within 45 seconds while the
+   // demo feed is healthy. After arming, repeated polls can wait up to
+   // 5 minutes from the provider's original timestamp for the actual zone.
+   if(!StormEntryArmed(id,age))
+   {RecordDecision(id,"ENTRY","STORM_SIGNAL_NOT_ARMED",age);return;}
    if(!DemoIdentity()) {RecordDecision(id,"ENTRY","DEMO_IDENTITY_FAILED",age);return;}
    if(OrdersTotal()>0) {RecordDecision(id,"ENTRY","BROKER_PENDING_ORDERS",age);return;}
    if(!telemetry_healthy || last_feed_http!=200)
@@ -582,7 +608,12 @@ void TryEntry(const string id,const string status,const string direction,
    bool buy=direction=="BUY";
    double fill=buy?q.ask:q.bid;
    double zLow=MathMin(low,high),zHigh=MathMax(low,high);
-   if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD)
+   // STORM uses the exact provider entry zone: for BUY 4001-4003
+   // with broker ask 3998, keep armed until ask first reaches >=4001.
+   // The other providers retain the current +/-$1.00 tolerance.
+   double allowedLow=IsStormSignal(id)?zLow:zLow-EntryToleranceUSD;
+   double allowedHigh=IsStormSignal(id)?zHigh:zHigh+EntryToleranceUSD;
+   if(fill<allowedLow || fill>allowedHigh)
    {RecordDecision(id,"ENTRY","PRICE_OUTSIDE_ENTRY_ZONE",age);return;}
    // Provider's SL is the ONLY permitted entry stop.
    // Risk limits adjust lots, never the protective stop price.
@@ -794,6 +825,7 @@ void TryLayer(const string id,const long mid,const double percentage,
       MathAbs(percentage-10.0)>1e-8 || groupId=="" ||
       (direction!="BUY" && direction!="SELL")) return;
    long age=(long)TimeGMT()-sentAt;
+   // Layer commands are immediate amendments, not queued entry zones.
    if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds) return;
    if(!EnableNewEntries || !EnableLayerEntries)
    {RecordDecision(id,"LAYER","LAYER_ENTRIES_DISABLED",age);return;}
@@ -1221,7 +1253,8 @@ int OnInit()
       MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||
       DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
       RiskReferenceBalanceGBP<=0 || StormPipSizeUSD<=0 ||
-      StormDrawdownPips<=0)
+      StormDrawdownPips<=0 || StormInitialFreshnessSeconds<=0 ||
+      StormEntryZoneWaitSeconds<StormInitialFreshnessSeconds)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
    trade.SetAsyncMode(false);
@@ -1229,7 +1262,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.06 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.07 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }

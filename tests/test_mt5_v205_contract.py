@@ -78,6 +78,37 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("adverse=buy ? fill-quote.bid : quote.ask-fill", code)
         self.assertIn("slMode!=\"DEFER_BE\"", code)
 
+    def test_storm_signals_arm_promptly_but_can_wait_for_entry_zone(self):
+        source = self.code
+        self.assertIn("input int StormInitialFreshnessSeconds = 45;", source)
+        self.assertIn("input int StormEntryZoneWaitSeconds = 300;", source)
+        self.assertIn("int SignalAgeLimit(const string id)", source)
+        self.assertIn(
+            "IsStormSignal(id) ? StormEntryZoneWaitSeconds : MaximumSignalAgeSeconds",
+            source,
+        )
+        self.assertIn("bool StormEntryArmed(const string id,const long age)", source)
+        self.assertIn('IDKey(id,"STORM_ENTRY_ARMED")', source)
+        self.assertIn("GlobalVariableCheck(key)) return true", source)
+        self.assertIn("age>StormInitialFreshnessSeconds", source)
+        self.assertIn("GlobalVariableSet(key,(double)TimeGMT());", source)
+        self.assertIn("GlobalVariablesFlush();", source)
+        entry = source.split("void TryEntry(", 1)[1].split(
+            "// Original three-leg broker fills", 1)[0]
+        layer = source.split("void TryLayer(", 1)[1].split(
+            "bool ActionKeySeen(", 1)[0]
+        self.assertIn("int maxAge=SignalAgeLimit(id);", entry)
+        self.assertIn("if(age<0 || age>maxAge)", entry)
+        self.assertIn("if(!StormEntryArmed(id,age))", entry)
+        self.assertIn("double allowedLow=IsStormSignal(id)?zLow:zLow-EntryToleranceUSD;", entry)
+        self.assertIn("double allowedHigh=IsStormSignal(id)?zHigh:zHigh+EntryToleranceUSD;", entry)
+        self.assertIn("if(fill<allowedLow || fill>allowedHigh)", entry)
+        self.assertIn('RecordDecision(id,"ENTRY","STORM_SIGNAL_NOT_ARMED",age);', entry)
+        # Layer orders are separate immediate instructions, not inherited
+        # from the initial signal's five-minute entry-zone waiting period.
+        self.assertIn("age>MaximumSignalAgeSeconds", layer)
+        self.assertNotIn("age>SignalAgeLimit(id)", layer)
+
     def test_mt5_exit_reasons_never_inferred_from_provider(self):
         code = self.code
         self.assertIn("DEAL_REASON_TP", code)
