@@ -26,6 +26,27 @@ services:
       - dkcapital-data:/app/data
     restart: unless-stopped
 
+
+  # A second opt-in simulator. The historic paper-engine and MT5 accounts
+  # are NEVER replaced or restarted by starting this profile.
+  paper-v2:
+    build: .
+    command: ["python", "-m", "dkcapital.paper_engine"]
+    env_file:
+      - .env
+    environment:
+      PAPER_STRATEGY_MODE: signal_follow_v2
+      PAPER_ENTRY_POLICY: all_parsed
+      PAPER_MARKET_TAPE_WRITER: "false"
+      PAPER_STATE_PATH: /app/data/paper-v2-trading.json
+      PAPER_EVENT_LOG_PATH: /app/data/paper-v2-trade-events.jsonl
+      PAPER_DELAY_STATE_PATH: /app/data/paper-v2-delay-state.json
+    volumes:
+      - dkcapital-data:/app/data
+    restart: unless-stopped
+    profiles:
+      - paper-v2
+
   bybit-demo:
     build: .
     command: ["python", "-m", "dkcapital.bybit_demo_engine"]
