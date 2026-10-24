@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.06"
+#property version "2.07"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -27,6 +27,7 @@ input double StopSlippageUSD = 0.25;
 input double EntryToleranceUSD = 1.0;
 input double MaxSpreadUSD = 1.5;
 input int MaximumSignalAgeSeconds = 180;
+input int StormMaximumSignalAgeSeconds = 45; // Faster STORM scalps: skip stale messages.
 input int MaximumConcurrentGroups = 3; // proposed limit; needs final signoff
 input int PollSeconds = 3;
 input int TelemetryEverySeconds = 30;
@@ -467,6 +468,12 @@ bool IsStormSignal(const string id)
 {
    return StringFind(id,"-1004334637102:")==0;
 }
+int SignalAgeLimit(const string id)
+{
+   // Limit is source-specific; no stale entry or add-on may bypass it.
+   return IsStormSignal(id) ? MathMin(MaximumSignalAgeSeconds,StormMaximumSignalAgeSeconds)
+                            : MaximumSignalAgeSeconds;
+}
 bool StormTP1DrawdownReached(const string id,const string direction)
 {
    string key=IDKey(id,"STORM_DRAWDOWN_TP1");
@@ -556,9 +563,10 @@ void TryEntry(const string id,const string status,const string direction,
 {
    if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
-   if(age<0 || age>MaximumSignalAgeSeconds)
+   int maxAge=SignalAgeLimit(id);
+   if(age<0 || age>maxAge)
    {
-      if(age>MaximumSignalAgeSeconds && age<MaximumSignalAgeSeconds+120 &&
+      if(age>maxAge && age<maxAge+120 &&
          !HasBeenAttempted(id))
          RecordDecision(id,"ENTRY","ENTRY_WINDOW_EXPIRED",age);
       return;
@@ -794,7 +802,7 @@ void TryLayer(const string id,const long mid,const double percentage,
       MathAbs(percentage-10.0)>1e-8 || groupId=="" ||
       (direction!="BUY" && direction!="SELL")) return;
    long age=(long)TimeGMT()-sentAt;
-   if(sentAt<=0 || age<0 || age>MaximumSignalAgeSeconds) return;
+   if(sentAt<=0 || age<0 || age>SignalAgeLimit(id)) return;
    if(!EnableNewEntries || !EnableLayerEntries)
    {RecordDecision(id,"LAYER","LAYER_ENTRIES_DISABLED",age);return;}
    if(!TradeAllowed())
@@ -1221,7 +1229,7 @@ int OnInit()
       MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||
       DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
       RiskReferenceBalanceGBP<=0 || StormPipSizeUSD<=0 ||
-      StormDrawdownPips<=0)
+      StormDrawdownPips<=0 || StormMaximumSignalAgeSeconds<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
    trade.SetAsyncMode(false);
@@ -1229,7 +1237,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.06 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.07 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
