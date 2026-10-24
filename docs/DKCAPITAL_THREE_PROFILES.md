@@ -120,3 +120,62 @@ The watchdog **Docker image** must be rebuilt from the merged source to load new
 - **Never** apply the demo-only LiveUpdate quarantine algorithm to a live account. The Account 1 approved terminal hash gate is not automatically configured for future accounts; that remains commissioning work.
 
 This is an infrastructure **standard and implementation of monitoring**. It does not claim Dan or Kyle's accounts are configured, nor does it enable new trading entries. Their broker telemetry, independent gateway authentication and Discord result cards remain distinct future integration work. Verify alerts with a controlled test event before considering any account monitored end-to-end.
+
+
+## Fleet-wide automated crash/freeze recovery and Discord confirmation (PR #77)
+
+**Recovery contract:** MT5 account 1 (broker DEMO), account 2 (Kyle), and account 3 (Dan) are separate systemd-managed terminals. For every commissioned account:
+
+1. **Unexpected MT5 process exit:** its own \`dkcapital-mt5-N.service\` has \`Restart=always\`; other accounts and containers are not restarted. Binary approval failure / LiveUpdate exit code 78 must not be bypassed without reviewing the binary.
+2. **Frozen but running terminal:** the opt-in \`mt5_recovery_supervisor.py\` reads the last authenticated account-specific telemetry. It restarts **only that account** after >150s stale reports plus 180s persistence, with a 15-minute cooldown and at most two attempts in an hour.
+3. **Broker protection / unknown exposure:** the supervisor requires matching broker login, mode, currency, intentional EA entry toggle, native SL on every reported position, reconciled account-wide position/order counts and no unmanaged orders/positions. Pending orders must be owned, have valid native stops and reconcile to the broker snapshot. Upstream gateway outages and unapproved terminal binaries **never trigger terminal restarts**.
+4. **Live accounts:** last-known protected broker orders can survive terminal downtime. Restart is allowed only if the profile explicitly opts in to \`auto_recover=true\`, \`recovery_policy="broker_protected"\`, **and its authenticated EA telemetry includes \`restart_reconciliation_supported=true\`**. That capability must originate from a **tested EA implementation that re-reads broker positions/pending orders and history before permitting fresh entries**. The demo-only V2.07 EA DOES NOT implement or emit this live-account marker. Do not invent it in a JSON file or work around the gate to enable Dan's future live account.
+5. **Broker position reconciliation on reconnect:** before accepting new trade instructions, the commissioned EA must verify login, protective native SL, all active positions/pending orders including open group magics, history-based prior attempt IDs, previously filled TP1 and broker/deal events, and successfully reconcile the feed. Missing/ambiguous evidence must block **new orders** without attempting to close broker-protected positions. Restarting MT5 does not itself submit a trade.
+6. **Independent recovery confirmation:** the supervisor looks for fresh after-restart telemetry under the correct account identity with working HTTP 200 feed and verified broker protection. Missing verification after 150s generates a distinct \`WAITING_FOR_RECONNECT\` alert. Each attempted restart / failed restart / recovered state is kept as a durable account-tagged event for the independent watchdog to deliver to \`MT5_ALERT_CHANNEL_ID\`, even if the Discord bot itself is down.
+7. **Repeated failure or live unknown exposure:** alert and stop retrying until the cooldown or safe evidence returns. No script disables SL/TP, opens, alters or closes broker orders; each restart is only \`systemctl restart dkcapital-mt5-N.service\` for the approved account unit.
+
+**Safety limitation:** these checks use the last authenticated EA report, which becomes stale during an outage; they cannot independently prove the broker's instantaneous state. Native stops that were successfully accepted by the broker typically remain active during MT5 downtime, but EA-managed breakeven/trailing and future actions cannot run while disconnected. An independently authenticated broker-state recovery feed would strengthen live safety; confirm account/broker behaviour with controlled restart tests before funding.
+
+### Repo-to-VPS staged deployment
+
+**Pull merged GitHub code and run CI/test verification first.** Existing MT5 accounts must not be restarted as part of installation. New recovery units do not automatically enable Accounts 2 or 3.
+
+\`\`\`bash
+cd /opt/dkcapital
+git pull --ff-only origin main
+python3 -m py_compile scripts/mt5_recovery_supervisor.py scripts/mt5_profile_audit.py
+python3 -m unittest discover -s tests -p 'test_mt5_recovery*.py' -v
+# Install the single per-account supervisor timer, not the old account 2/3 templates.
+install -o root -g root -m 0644 deployment/dkcapital-mt5-recovery-supervisor.service /etc/systemd/system/
+install -o root -g root -m 0644 deployment/dkcapital-mt5-recovery-supervisor.timer /etc/systemd/system/
+systemctl daemon-reload
+# Safe dry-run: no broker account is restarted.
+python3 scripts/mt5_recovery_supervisor.py
+\`\`\`
+
+**Explicit account commissioning:** Start from \`deployment/mt5-monitor-profiles.example.json\`, replacing the invalid placeholder login with the *actual* known Account 1 broker login. Do not copy credentials into the repository. Place the validated registry at \`/app/data/mt5-monitor-profiles.json\` in the Docker named data volume (resolved via \`scripts/host_autoheal.py\`). Set \`auto_recover=true\` and \`recovery_policy="broker_protected"\` **only** on a tested and ready account; keep Kyle and Dan disabled until their authenticated telemetry routes are available. Live accounts must additionally emit the verified reconciliation capability marker.
+
+The legacy Account 1 \`dkcapital-mt5-autoheal.timer\` and the new \`dkcapital-mt5-recovery-supervisor.timer\` must **never concurrently restart the same demo terminal**. Before opting Account 1 into the new timer, inspect running timers and deliberately stop/disable the old one; leave the legacy LiveUpdate guard in place and never bypass its approved-binary checks. Record state/attempt history before switching timers. With the new registry and account-specific telemetry confirmed:
+
+\`\`\`bash
+systemctl list-timers --all | grep -Ei 'dkcapital.*(autoheal|recovery)' || true
+# Only after confirming the new monitor is configured and the demo has zero
+# unreviewed broker positions / pending orders, migrate one timer at a time:
+# systemctl disable --now dkcapital-mt5-autoheal.timer
+# systemctl enable --now dkcapital-mt5-recovery-supervisor.timer
+# systemctl start dkcapital-mt5-recovery-supervisor.service
+# journalctl -u dkcapital-mt5-recovery-supervisor.service --no-pager -n 40
+\`\`\`
+
+The updated \`dkcapital-watchdog\` Docker container requires a **separately scheduled** rebuild after merge to receive new recovery event handling. The \`mt5-profile-audit\` read-only timer is required for independent systemd state alerts. Neither rebuild should restart the two MT5 terminals or alter EA trade switches.
+
+### Acceptance tests per new broker account
+
+- Unexpected process exit: systemd restarts *only* the affected MT5 terminal; recent restart logged and Discord alert delivered.
+- Inject frozen telemetry in a controlled demo without real exposure: no restart until persistence threshold, exactly one restart, then healthy post-restart telemetry and Discord recovery notice.
+- With protected demo broker positions and orders: restart without closing them; verify broker-native stop and live ticket IDs survive, and the EA does not duplicate trades or retroactively reprocess TP1/BE.
+- With live account: verify an authenticated \`restart_reconciliation_supported\` implementation on **that broker/login**, plus correct mode/currency/hedging and zero unmanaged exposure before enabling opt-in. Wrong login, missing native SL, unknown pending orders or changed terminal binary must block automatic restart and alert.
+- Unplug gateway/Telegram: no mistaken MT5 restart for upstream failure. Reconnect and verify EA fetches new feed; no old signal replay.
+- One account down: other MT5/VNC profiles remain stable, P&L stays independently attributed, and the alert includes the correct account ID.
+
+**Deployment status:** code and tests can be merged without installing timers or restarting terminals. The two existing MT5 terminals keep their current services and EAs. The new live-account recovery contract remains unactivated until Dan's Vantage account is commissioned, and the existing demonstration account keeps its working guarded recovery in the meantime.
