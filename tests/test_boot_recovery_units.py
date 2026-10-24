@@ -25,7 +25,7 @@ class BootRecoveryUnitTests(unittest.TestCase):
         self.assertIn("RestartSec=120", text)
 
     def test_vnc_is_local_and_password_protected(self):
-        for number, display, port in (("1", ":150", "5901"), ("2", ":151", "5903")):
+        for number, display, port in (("1", ":150", "5901"), ("2", ":151", "5902")):
             with self.subTest(account=number):
                 text = (OPS / f"dkcapital-vnc{number}.service").read_text()
                 self.assertIn("-localhost", text)
