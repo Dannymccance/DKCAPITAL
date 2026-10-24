@@ -36,6 +36,44 @@ RESTART_STATE = Path("/var/lib/dkcapital-mt5-recovery/state.json")
 STATUS_NAME = "mt5-recovery-status.json"
 
 
+
+def protected_broker_inventory(snapshot: dict[str, Any]) -> tuple[bool, str]:
+    """Broker-native stop/order proof reusable pre- and post-restart."""
+    for key in ("broker_positions_total", "broker_orders_total",
+                "unmanaged_positions_count", "unmanaged_orders_count"):
+        if type(snapshot.get(key)) is not int or snapshot[key] < 0:
+            return False, f"missing broker exposure inventory: {key}"
+    if snapshot.get("broker_positions_protected") is not True:
+        return False, "unprotected broker position or missing SL verification"
+    positions = snapshot.get("positions")
+    if not isinstance(positions, list):
+        return False, "missing broker positions list"
+    if len(positions) + snapshot["unmanaged_positions_count"] != snapshot["broker_positions_total"]:
+        return False, "broker-wide position count mismatch"
+    if snapshot["unmanaged_positions_count"]:
+        return False, "unmanaged positions need separate broker reconciliation"
+    if snapshot["unmanaged_orders_count"]:
+        return False, "unmanaged pending orders need separate broker reconciliation"
+    for p in positions:
+        if not isinstance(p, dict):
+            return False, "invalid broker position"
+        try:
+            sl = float(p["sl"])
+            lots = float(p["lots"])
+            entry = float(p["entry"])
+        except (KeyError, ValueError, TypeError):
+            return False, "broker position missing native stop/volume"
+        if not all(math.isfinite(v) and v > 0 for v in (sl, lots, entry)):
+            return False, "broker position lacks native protective SL"
+        if p.get("side") not in {"BUY", "SELL"}:
+            return False, "unknown broker position side"
+        if not isinstance(p.get("ticket"), int) or p["ticket"] <= 0:
+            return False, "invalid broker position ticket"
+    pending_ok, pending_reason = pending_order_gate(snapshot)
+    if not pending_ok:
+        return False, "pending order inventory unsafe: " + pending_reason
+    return True, "protected broker positions and pending orders last reported; bounded restart eligible"
+
 def broker_recovery_gate(
     profile: dict[str, Any],
     snapshot: dict[str, Any],
@@ -74,40 +112,7 @@ def broker_recovery_gate(
 
     if profile["expected_mode"] == "REAL" and snapshot.get("restart_reconciliation_supported") is not True:
         return False, "live EA broker-history/order reconciliation not yet verified"
-    for key in ("broker_positions_total", "broker_orders_total",
-                "unmanaged_positions_count", "unmanaged_orders_count"):
-        if type(snapshot.get(key)) is not int or snapshot[key] < 0:
-            return False, f"missing broker exposure inventory: {key}"
-    if snapshot.get("broker_positions_protected") is not True:
-        return False, "unprotected broker position or missing SL verification"
-    positions = snapshot.get("positions")
-    if not isinstance(positions, list):
-        return False, "missing broker positions list"
-    if len(positions) + snapshot["unmanaged_positions_count"] != snapshot["broker_positions_total"]:
-        return False, "broker-wide position count mismatch"
-    if snapshot["unmanaged_positions_count"]:
-        return False, "unmanaged positions need separate broker reconciliation"
-    if snapshot["unmanaged_orders_count"]:
-        return False, "unmanaged pending orders need separate broker reconciliation"
-    for p in positions:
-        if not isinstance(p, dict):
-            return False, "invalid broker position"
-        try:
-            sl = float(p["sl"])
-            lots = float(p["lots"])
-            entry = float(p["entry"])
-        except (KeyError, ValueError, TypeError):
-            return False, "broker position missing native stop/volume"
-        if not all(math.isfinite(v) and v > 0 for v in (sl, lots, entry)):
-            return False, "broker position lacks native protective SL"
-        if p.get("side") not in {"BUY", "SELL"}:
-            return False, "unknown broker position side"
-        if not isinstance(p.get("ticket"), int) or p["ticket"] <= 0:
-            return False, "invalid broker position ticket"
-    pending_ok, pending_reason = pending_order_gate(snapshot)
-    if not pending_ok:
-        return False, "pending order inventory unsafe: " + pending_reason
-    return True, "protected broker positions and pending orders last reported; bounded restart eligible"
+    return protected_broker_inventory(snapshot)
 
 
 def restart_plan(prior: dict, eligible: bool, now: float) -> tuple[dict, bool, str]:
@@ -165,7 +170,7 @@ def _recovered(snapshot: dict, profile: dict, now: datetime, restarted_at: str |
         and snapshot.get("mode") == profile.get("expected_mode")
         and snapshot.get("currency") == profile.get("expected_currency")
         and snapshot.get("feed_http") == 200
-        and snapshot.get("broker_positions_protected") is True
+        and protected_broker_inventory(snapshot)[0]
         and snapshot.get("entry_enabled") is profile.get("expect_entries")
         and (profile.get("expected_mode") != "REAL" or
              snapshot.get("restart_reconciliation_supported") is True)
