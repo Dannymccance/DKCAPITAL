@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
+from unicodedata import normalize
 from typing import Any
 
 from telethon import TelegramClient, events, utils
@@ -47,7 +48,9 @@ def _discover_auto_gws_chats(dialogs: list[Any]) -> dict[int, str]:
         if not (getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False)):
             continue
         title = str(getattr(entity, "title", None) or dialog.name or "")
-        normalised = " ".join(title.split()).casefold()
+        # Telegram channel titles may use mathematical bold Unicode glyphs
+        # (e.g. "𝐆𝐖𝐒 (𝐕𝐈𝐏)"). NFKC folds these into ordinary letters.
+        normalised = " ".join(normalize("NFKC", title).split()).casefold()
         if normalised not in AUTO_GWS_TITLES:
             continue
         peer_id = utils.get_peer_id(entity)
