@@ -1,0 +1,102 @@
+name: Deploy Telegram and Discord chats mirror
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/dkcapital/telegram_listener.py
+      - src/dkcapital/telegram_discord_mirror.py
+      - src/dkcapital/discord_bot.py
+      - src/dkcapital/config.py
+      - .github/workflows/deploy-telegram-chats.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dkcapital-telegram-chats-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: mt5-recovery-deployment
+    timeout-minutes: 15
+    steps:
+      - name: Check out tested main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate Telegram mirror changes
+        run: |
+          python -m pip install -r requirements.txt
+          PYTHONPATH=src python -m unittest discover -s tests -q
+          python -m compileall -q src tests
+
+      - name: Confirm VPS deploy credentials
+        env:
+          VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
+          VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
+          VPS_KEY: ${{ secrets.DKCAPITAL_VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.DKCAPITAL_VPS_HOST_KEY }}
+        run: |
+          for v in VPS_HOST VPS_USER VPS_KEY VPS_HOST_KEY; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Missing ${v} deployment secret"
+              exit 1
+            fi
+          done
+
+      - name: Update only Telegram listener and Discord bot on VPS
+        env:
+          VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
+          VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
+          VPS_KEY: ${{ secrets.DKCAPITAL_VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.DKCAPITAL_VPS_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$VPS_KEY" > "$HOME/.ssh/dkcapital_deploy_key"
+          printf '%s\n' "$VPS_HOST_KEY" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/dkcapital_deploy_key" "$HOME/.ssh/known_hosts"
+          ssh -i "$HOME/.ssh/dkcapital_deploy_key" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$VPS_USER@$VPS_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/dkcapital
+
+          if [ "$(git branch --show-current)" != "main" ]; then
+            echo "Refusing deployment: /opt/dkcapital is not on main"
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "Refusing deployment: working tree has local tracked changes"
+            exit 1
+          fi
+
+          git fetch origin main
+          git merge --ff-only origin/main
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          content = Path(".env").read_text(encoding="utf-8")
+          found = re.findall(r"^DISCORD_TELEGRAM_CHATS_CHANNEL_ID\s*=\s*(\S+)\s*$", content, re.M)
+          if len(found) > 1 or (found and found[0] != "1559140564253806593"):
+              raise SystemExit("Refusing deployment: existing #chats ID differs from 1559140564253806593")
+          PY
+
+          docker compose --profile discord config -q
+          docker compose --profile discord up -d --build --no-deps telegram-listener discord-bot
+          docker compose --profile discord ps telegram-listener discord-bot
+          echo "Telegram listener and Discord mirror deployment requested; MT5 services untouched"
+          REMOTE
