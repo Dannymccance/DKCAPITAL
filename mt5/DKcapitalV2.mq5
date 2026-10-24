@@ -1,9 +1,9 @@
-// DKcapital V2: DEMO-only, single GBP Account 1, native 3-leg XAUUSD execution.
+// DKcapital V2: DEMO-only, single GBP Account 1, native three-leg XAUUSD execution.
 // Not production approved. Compile in MetaEditor and broker-test BEFORE enabling entries.
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.07"
+#property version "2.08"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -341,7 +341,7 @@ bool IsUKFriday()
    MqlDateTime local;TimeToStruct(utc+(dst?3600:0),local);
    return local.day_of_week==5;
 }
-bool Allocate(double total,double &a,double &b,double &c)
+bool Allocate(double total,double &a,double &b,double &c,const bool twoTargets)
 {
    double step=LotStep(),minlot=LotMin();
    if(step<=0 || minlot<=0) return false;
@@ -350,7 +350,10 @@ bool Allocate(double total,double &a,double &b,double &c)
    if(each<1) each=1;
    if(count<3*each) return false;
    int units[3];units[0]=each;units[1]=each;units[2]=each;
-   double w[3];w[0]=0.3;w[1]=0.3;w[2]=0.4;
+   // Target allocation: TP1=25%, TP2=50%, TP3=25%. If the
+   // provider has only TP1/TP2, legs 2 and 3 BOTH exit at TP2,
+   // producing a target of 25% at TP1 and 75% at TP2.
+   double w[3];w[0]=0.25;w[1]=0.50;w[2]=0.25;
    for(int k=3*each;k<count;k++)
    {
       int best=2;
@@ -365,7 +368,13 @@ bool Allocate(double total,double &a,double &b,double &c)
    a=NormalizeDouble(units[0]*step,8);
    b=NormalizeDouble(units[1]*step,8);
    c=NormalizeDouble(units[2]*step,8);
-   return a>=minlot-1e-7 && b>=minlot-1e-7 && c>=minlot-1e-7;
+   if(a<minlot-1e-7 || b<minlot-1e-7 || c<minlot-1e-7)
+      return false;
+   // Broker volume-step limits can prevent 25/50/25 on tiny trades.
+   // Never misrepresent an equal 1/1/1 three-target exit as TP2-majority.
+   // Two-target trades CAN honour the priority with minimum 1/1/1,
+   // because legs 2 and 3 are assigned to TP2.
+   return twoTargets ? b+c>a+1e-7 : (b>a+1e-7 && b>c+1e-7);
 }
 bool HasBeenAttempted(const string id)
 {
@@ -516,6 +525,10 @@ void ManageLegs(const string id,const string direction,const double stop,
    bool tp1Confirmed=TP1BrokerConfirmed(id);
    bool stormAdaptive=IsStormSignal(id) &&
       GlobalVariableCheck(IDKey(id,"STORM_TP_POLICY"));
+   // Persist the original two-target execution policy over gateway restarts
+   // or later provider amendments; do not silently move the TP2 exit leg
+   // to a newly added TP3 target.
+   bool wasTwoTargets=GlobalVariableCheck(IDKey(id,"TWO_TARGET_ENTRY"));
    bool stormUseTP1=stormAdaptive && StormTP1DrawdownReached(id,direction);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
@@ -553,7 +566,8 @@ void ManageLegs(const string id,const string direction,const double stop,
       }
       // The separately tracked 10% layer exits at TP2.
       double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;
-      double rawTP=leg==1?firstTarget:(leg==2 || leg==LAYER_LEG?tp2:tp3);
+      double rawTP=leg==1?firstTarget:(leg==2 || leg==LAYER_LEG ||
+                    (leg==3 && wasTwoTargets)?tp2:tp3);
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -628,9 +642,12 @@ void TryEntry(const string id,const string status,const string direction,
    }
    // Do not open an unintended runner when Telegram target numbering is
    // malformed or a native target is already behind the broker quote.
-   if(tp1<=0 || tp2<=0 || (!openRunner && tp3<=0) ||
+   // A provider may define exactly two targets. TP3=0 denotes "absent",
+   // never OPEN. Only the literal OPEN signal may opt into a runner.
+   bool twoTargets=!openRunner && tp3<=0;
+   if(tp1<=0 || tp2<=0 ||
       ValidTP(buy,tp1,q)<=0 || ValidTP(buy,tp2,q)<=0 ||
-      (!openRunner && ValidTP(buy,tp3,q)<=0))
+      (!twoTargets && !openRunner && ValidTP(buy,tp3,q)<=0))
    {RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);return;}
    if(openRunner && !EnableOpenRunnerEntries)
    {RecordDecision(id,"ENTRY","OPEN_RUNNER_REQUIRES_OPT_IN",age);return;}
@@ -672,7 +689,7 @@ void TryEntry(const string id,const string status,const string direction,
    bool possible=false;
    for(double total=targetLots;total>=3*minlot-1e-8;total=FloorLots(total-LotStep()))
    {
-      if(!Allocate(total,a,b,c)) continue;
+      if(!Allocate(total,a,b,c,twoTargets)) continue;
       vols[0]=a;vols[1]=b;vols[2]=c;
       double r1=RiskGBP(buy,a,fill,sl);
       double r2=RiskGBP(buy,b,fill,sl);
@@ -705,7 +722,7 @@ void TryEntry(const string id,const string status,const string direction,
       // Distinguish a broker's minimum three-leg size exceeding the 4%
       // total stop-risk budget from an unrelated free-margin failure.
       double minA=0,minB=0,minC=0;
-      bool minAvailable=Allocate(FloorLots(3*minlot),minA,minB,minC);
+      bool minAvailable=Allocate(FloorLots(3*minlot),minA,minB,minC,twoTargets);
       double minimumRisk=minAvailable ?
          RiskGBP(buy,minA,fill,sl)+RiskGBP(buy,minB,fill,sl)+
          RiskGBP(buy,minC,fill,sl) : -1;
@@ -714,6 +731,8 @@ void TryEntry(const string id,const string status,const string direction,
          reason="MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
       else if(targetLots<3*minlot-1e-8)
          reason="BALANCE_BASED_TARGET_BELOW_THREE_MINIMUM_LOTS";
+      else if(!twoTargets && targetLots<3*minlot+LotStep()-1e-8)
+         reason="TP2_MAJORITY_REQUIRES_ADDITIONAL_LOT_STEP";
       RecordDecision(id,"ENTRY",reason,age);
       Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
             " signalCapGBP=",signalLimit," targetLots=",targetLots,
@@ -723,12 +742,13 @@ void TryEntry(const string id,const string status,const string direction,
    // Durable intent before first broker request prevents duplicates on restart.
    bool stormAdaptive=EnableStormConditionalTP1 && IsStormSignal(id);
    if(stormAdaptive) GlobalVariableSet(IDKey(id,"STORM_TP_POLICY"),1);
+   if(twoTargets) GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);
    GlobalVariableSet(IDKey(id,"ATTEMPT"),(double)TimeGMT());
    GlobalVariablesFlush();
    // Default STORM first leg to TP2; use TP1 only if subsequent observed
    // adverse excursion reaches the configured 20-pip threshold.
    double targets[3];targets[0]=stormAdaptive?tp2:tp1;
-   targets[1]=tp2;targets[2]=openRunner?0:tp3;
+   targets[1]=tp2;targets[2]=openRunner?0:(twoTargets?tp2:tp3);
    bool allGood=true;
    for(int leg=1;leg<=3;leg++)
    {
@@ -755,7 +775,9 @@ void TryEntry(const string id,const string status,const string direction,
    else
    {
       RecordDecision(id,"ENTRY","BROKER_FILLED",age);
-      Print("DK2 trio opened id=",id," TP1=",a," TP2=",b," TP3=",c);
+      Print("DK2 trio opened id=",id," TP1_lots=",a,
+            " TP2_lots=",b+(twoTargets?c:0),
+            " TP3_lots=",(twoTargets?0:c)," twoTargets=",twoTargets);
    }
 }
 // Original three-leg broker fills are the fixed reference, even after partial closes.
@@ -1262,7 +1284,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.07 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.08 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
