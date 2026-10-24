@@ -47,8 +47,8 @@ class V2ProviderStopContract(unittest.TestCase):
     def test_failed_broker_risk_valuation_blocks_entry(self):
         code = SOURCE.read_text(encoding="utf-8")
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
-        self.assertIn("if(r1<0 || r2<0 || r3<0)", entry)
-        self.assertIn("double planned=r1+r2+r3;", entry)
+        self.assertIn("if(r1<0 || r2<0 || r3<0 || r4<0)", entry)
+        self.assertIn("double planned=r1+r2+r3+r4;", entry)
         self.assertNotIn(
             "double planned=RiskGBP(buy,a,fill,sl)+RiskGBP", entry
         )
@@ -110,9 +110,9 @@ class V2ProviderStopContract(unittest.TestCase):
 
     def test_layer_is_in_all_lifecycle_paths(self):
         code = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("magic%10<=4", code)
-        self.assertIn("for(int leg=1;leg<=4;leg++)", code)
-        self.assertIn("for(int leg=4;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
+        self.assertIn("magic%10<=TP4_LEG", code)
+        self.assertIn("for(int leg=1;leg<=TP4_LEG;leg++)", code)
+        self.assertIn("for(int leg=TP4_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
         self.assertIn("if(leg==1) protectiveSL=sl;", code)
 
 

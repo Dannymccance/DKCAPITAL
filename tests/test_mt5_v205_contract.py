@@ -16,7 +16,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("AccountInfoDouble(ACCOUNT_EQUITY)", source)
         self.assertIn("DAILY_WARN_", source)
         entry = source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split("bool ActionKeySeen(", 1)[0]
         self.assertNotIn("DailyEquityWarningActive", entry)
         self.assertNotIn("DailyEquityWarningActive", layer)
@@ -32,7 +32,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("RiskBalanceGBP()*MaxSignalRiskPct/100.0", source)
         self.assertIn("return MathMin(balance,equity);", source)
         entry = source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split(
             "bool ActionKeySeen(", 1)[0]
         # Do not replace the account-BALANCE target sizing with fixed
@@ -48,16 +48,16 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7", layer)
         self.assertIn("LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK", layer)
         self.assertIn("RiskGBP(buy,minA,fill,sl)", entry)
-        self.assertIn("MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
+        self.assertIn("MINIMUM_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
         self.assertIn("EnableLayerEntries = false", source)
         self.assertNotIn("DailyLossAllowed()", entry + layer)
 
     def test_only_explicit_provider_open_runner_with_demo_opt_in(self):
         entry = self.code.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         self.assertIn("input bool EnableOpenRunnerEntries = false;", self.code)
-        self.assertIn("bool twoTargets=!openRunner && tp3<=0;", entry)
-        self.assertIn("(!twoTargets && !openRunner && ValidTP(buy,tp3,q)<=0)", entry)
+        self.assertIn("bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;", entry)
+        self.assertIn("(!oneTarget && !twoTargets && !openRunner &&", entry)
         self.assertIn("targets[2]=openRunner?0:(twoTargets?tp2:tp3);", entry)
         self.assertIn('GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);', entry)
         self.assertIn('GlobalVariablesFlush();', entry)
@@ -65,7 +65,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn('"OPEN_RUNNER_REQUIRES_OPT_IN"', entry)
         self.assertIn('"MISSING_OR_INVALID_NATIVE_TP"', entry)
         self.assertIn("StopValid(buy,providerSL,q)", entry)
-        self.assertIn('double tp=(leg==3 && openRunner)?0:ValidTP', entry)
+        self.assertIn('double tp=(i==2 && openRunner)?0:ValidTP', entry)
 
     def test_storm_drawdown_tp1_rule_is_source_scoped_and_persistent(self):
         code = self.code
@@ -77,7 +77,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn('"STORM_DRAWDOWN_TP1"', code)
         self.assertIn("GlobalVariablesFlush();", code)
         self.assertIn("double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;", code)
-        self.assertIn("targets[0]=stormAdaptive?tp2:tp1;", code)
+        self.assertIn("targets[0]=stormAdaptive && !oneTarget?tp2:tp1;", code)
         self.assertIn("adverse=buy ? fill-quote.bid : quote.ask-fill", code)
         self.assertIn("slMode!=\"DEFER_BE\"", code)
 
@@ -97,7 +97,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("GlobalVariableSet(key,(double)TimeGMT());", source)
         self.assertIn("GlobalVariablesFlush();", source)
         entry = source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1)[0]
+            "// Broker-history original leg volume", 1)[0]
         layer = source.split("void TryLayer(", 1)[1].split(
             "bool ActionKeySeen(", 1)[0]
         self.assertIn("int maxAge=SignalAgeLimit(id);", entry)
@@ -123,7 +123,7 @@ class V205SourceContract(unittest.TestCase):
         source = self.code
         for phrase in (
             '"PRICE_OUTSIDE_ENTRY_ZONE"', '"BROKER_SPREAD_TOO_WIDE"',
-            '"MINIMUM_THREE_LEG_SIZE_OR_MARGIN"', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
+            '"MINIMUM_LEG_SIZE_OR_MARGIN"', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
             '"LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL"',
             '"LAYER_ENTRIES_DISABLED"',
             '"ENTRY_WINDOW_EXPIRED"', '"MISSING_OR_INVALID_NATIVE_TP"',
