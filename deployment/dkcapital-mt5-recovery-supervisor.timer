@@ -1,0 +1,12 @@
+[Unit]
+Description=Check commissioned DK Capital MT5 accounts for frozen terminals
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=false
+Unit=dkcapital-mt5-recovery-supervisor.service
+
+[Install]
+WantedBy=timers.target
