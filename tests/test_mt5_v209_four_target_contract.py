@@ -70,7 +70,7 @@ class FourTargetTests(unittest.TestCase):
         self.assertIn('StringFind(lines[0],"DKDEMO3")', EA)
         self.assertIn('lines = ["DKDEMO3" if v3 else "DKDEMO2"]', GATEWAY)
         self.assertIn('if four_targets and not v3 and status == "ACTIVE":', GATEWAY)
-        self.assertIn('if four_targets:', GATEWAY)
+        self.assertIn('if four_targets and v3:', GATEWAY)
         self.assertIn('fields.append(str(prices[6]))', GATEWAY)
         self.assertIn('if((fields==12 || fields==13) && f[0]=="S")', EA)
         self.assertIn('double fourth=fields==13?StringToDouble(f[11]):0;', EA)
@@ -91,7 +91,7 @@ class FourTargetTests(unittest.TestCase):
         for term in (
             'StopValid(buy,providerSL,q)', 'double planned=r1+r2+r3+r4;',
             'if(planned>budget+1e-7) continue;',
-            'if(fourTargets && ValidTP(buy,tp4,q)<=0)',
+            '(fourTargets && ValidTP(buy,tp4,q)<=0)',
             'if(fourTargets) GlobalVariableSet(IDKey(id,"FOUR_TARGET_ENTRY"),1);',
             'if(leg==LAYER_LEG || (leg==TP4_LEG && !fourTargets)) continue;',
         ):
