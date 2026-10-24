@@ -47,6 +47,30 @@ class AutoGwsDiscoveryTests(unittest.TestCase):
 
     @patch("dkcapital.telegram_listener.utils.get_peer_id",
            side_effect=lambda entity: entity.peer_id)
+    def test_actual_stylized_gws_vip_name_is_discovered(self, _get_id):
+        found = _discover_auto_gws_chats([
+            dialog(-1003765237177, "𝐆𝐖𝐒 (𝐕𝐈𝐏)"),
+            dialog(-1004334637102, "GWS - STORM"),
+            dialog(-1004406990046, "GWS - CAPITAL"),
+            dialog(-1004359492110, "GWS - MONEY HOUSE"),
+        ])
+        self.assertEqual(found, {
+            -1003765237177: "𝐆𝐖𝐒 (𝐕𝐈𝐏)",
+            -1004334637102: "GWS - STORM",
+            -1004406990046: "GWS - CAPITAL",
+            -1004359492110: "GWS - MONEY HOUSE",
+        })
+
+    @patch("dkcapital.telegram_listener.utils.get_peer_id",
+           side_effect=lambda entity: entity.peer_id)
+    def test_stylized_and_plain_duplicate_titles_are_rejected(self, _get_id):
+        self.assertEqual(_discover_auto_gws_chats([
+            dialog(-1001, "𝐆𝐖𝐒 (𝐕𝐈𝐏)"),
+            dialog(-1002, "GWS (VIP)"),
+        ]), {})
+
+    @patch("dkcapital.telegram_listener.utils.get_peer_id",
+           side_effect=lambda entity: entity.peer_id)
     def test_unrelated_channels_and_private_chats_are_ignored(self, _get_id):
         self.assertEqual(_discover_auto_gws_chats([
             dialog(-1001, "GWS - STORM RESULTS"),
