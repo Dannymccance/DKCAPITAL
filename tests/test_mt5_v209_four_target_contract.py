@@ -66,6 +66,10 @@ class FourTargetTests(unittest.TestCase):
 
     def test_four_target_feed_expanded_but_legacy_format_preserved(self):
         self.assertIn('prices.extend(float(tps.get(str(i), 0) or 0) for i in (1, 2, 3, 4))', GATEWAY)
+        self.assertIn('input string FeedUrl = "http://127.0.0.1:8765/v3/demo/feed";', EA)
+        self.assertIn('StringFind(lines[0],"DKDEMO3")', EA)
+        self.assertIn('lines = ["DKDEMO3" if v3 else "DKDEMO2"]', GATEWAY)
+        self.assertIn('if four_targets and not v3 and status == "ACTIVE":', GATEWAY)
         self.assertIn('if four_targets:', GATEWAY)
         self.assertIn('fields.append(str(prices[6]))', GATEWAY)
         self.assertIn('if((fields==12 || fields==13) && f[0]=="S")', EA)
