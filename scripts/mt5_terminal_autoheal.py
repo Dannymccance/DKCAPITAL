@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Opt-in recovery for a hung MT5 Account 1 terminal; DEMO ONLY.
+"""Opt-in per-account recovery for a hung MT5 terminal; DEMO GBP ONLY.
 
 This is distinct from the Docker autoheal. It NEVER trades, closes positions,
-touches account 2, or enables the EA. Uncertain exposure fails closed.
+touches any other account, or enables the EA. Uncertain exposure fails closed.
 Native broker SL remains a requirement for every reported open position.
 
 Dry-run by default. --apply invokes only:
-    systemctl restart dkcapital-mt5-1.service
+    systemctl restart dkcapital-mt5-{id}.service (only selected/demo-verified)
 
 The last trusted broker snapshot can become stale during a hang. A restart
 cannot independently prove current broker state; use a broker-side monitor for
@@ -269,8 +269,10 @@ def main(argv=None) -> int:
                 raise ValueError("profile in setup mode; unattended recovery disabled")
             expected = selected["expected_login"]
         target_service = service_unit(args.account_id)
-        state_file = args.state_file or Path(
-            f"/var/lib/dkcapital-mt5-autoheal/account{args.account_id}-state.json"
+        state_file = args.state_file or (
+            Path("/var/lib/dkcapital-mt5-autoheal/state.json")
+            if args.account_id == 1 else
+            Path(f"/var/lib/dkcapital-mt5-autoheal/account{args.account_id}-state.json")
         )
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         print(f"BLOCKED: insufficient configuration: {type(exc).__name__}: {exc}")
