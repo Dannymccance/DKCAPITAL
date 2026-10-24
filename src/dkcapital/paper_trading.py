@@ -43,6 +43,11 @@ class PaperCandidate:
     source_message_ids: list[int] = field(default_factory=list)
     signal_history: list[dict[str, Any]] = field(default_factory=list)
     fingerprint: str = ""
+    group_id: str | None = None
+    tp3_open: bool = False
+    be_deferred: bool = False
+    sl_mode: str = "PRICE"
+    layer_max: float | None = None
     execution_status: str = "OBSERVED"
     execution_note: str = ""
     processed_history_fingerprints: list[str] = field(default_factory=list)
@@ -82,6 +87,11 @@ class PaperPosition:
     temporary_stop_active: bool = False
     stop_source: str = "PROVIDER"
     last_provider_stop_seen: float | None = None
+    v2_storm_policy: bool = False
+    v2_storm_drawdown_seen: bool = False
+    v2_open_runner: bool = False
+    v2_original_lots: float = 0.0
+    v2_layer_attempted: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -290,6 +300,11 @@ class PaperAccount:
             "entry_low": signal.get("entry_low"),
             "entry_high": signal.get("entry_high"),
             "original_sl": signal.get("original_sl"),
+            "group_id": signal.get("group_id"),
+            "tp3_open": bool(signal.get("tp3_open", False)),
+            "be_deferred": bool(signal.get("be_deferred", False)),
+            "sl_mode": signal.get("sl_mode") or "PRICE",
+            "layer_max": signal.get("layer_max"),
             "current_sl": signal.get("current_sl"),
             "tps": signal.get("tps") or {},
             "remaining_fraction": signal.get("remaining_fraction", 1.0),
@@ -341,6 +356,11 @@ class PaperAccount:
                 partial_close_count=int(signal.get("partial_close_count", 0) or 0),
                 source_message_ids=[int(v) for v in signal.get("source_message_ids") or []],
                 signal_history=list(signal.get("history") or []),
+                group_id=str(signal.get("group_id")) if signal.get("group_id") is not None else None,
+                tp3_open=bool(signal.get("tp3_open", False)),
+                be_deferred=bool(signal.get("be_deferred", False)),
+                sl_mode=str(signal.get("sl_mode") or "PRICE"),
+                layer_max=float(signal["layer_max"]) if signal.get("layer_max") is not None else None,
                 fingerprint=fingerprint,
                 execution_status=(
                     "PENDING_STRATEGY"
@@ -414,6 +434,11 @@ class PaperAccount:
         targets_changed = incoming_tps != previous_tps
 
         existing.last_seen_at = now
+        existing.group_id = str(signal.get("group_id")) if signal.get("group_id") is not None else None
+        existing.tp3_open = bool(signal.get("tp3_open", False))
+        existing.be_deferred = bool(signal.get("be_deferred", False))
+        existing.sl_mode = str(signal.get("sl_mode") or "PRICE")
+        existing.layer_max = float(signal["layer_max"]) if signal.get("layer_max") is not None else None
         existing.signal_status = str(signal.get("status") or existing.signal_status)
         if not direction_change_while_open:
             existing.direction = direction
