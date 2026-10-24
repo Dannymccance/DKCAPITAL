@@ -650,8 +650,12 @@ class SignalState:
             history_event["sl_mode_before"] = signal.sl_mode
             if action.tps:
                 history_event["tps"] = dict(action.tps)
+                # A single explicit TP correction must not erase the
+                # untouched targets on the original provider signal.
+                revised_targets = dict(signal.tps)
+                revised_targets.update(action.tps)
                 signal.tps = self._validated_tps(
-                    action.tps,
+                    revised_targets,
                     signal.direction,
                     signal.entry_low,
                     signal.entry_high,
