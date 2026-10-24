@@ -1,0 +1,23 @@
+{
+  "accounts": [
+    {
+      "id": 1,
+      "enabled": true,
+      "label": "Paper Trading MT5",
+      "expected_mode": "DEMO",
+      "expected_currency": "GBP",
+      "expected_login": 0,
+      "expect_entries": false
+    },
+    {
+      "id": 2,
+      "enabled": false,
+      "label": "Kyle"
+    },
+    {
+      "id": 3,
+      "enabled": false,
+      "label": "Dan"
+    }
+  ]
+}
