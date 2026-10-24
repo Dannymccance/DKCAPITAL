@@ -100,11 +100,6 @@ def broker_recovery_gate(
             return False, "broker position missing native stop/volume"
         if not all(math.isfinite(v) and v > 0 for v in (sl, lots, entry)):
             return False, "broker position lacks native protective SL"
-        if (p.get("side") == "BUY" and sl >= entry or
-            p.get("side") == "SELL" and sl <= entry):
-            # A BE or trailed stop may legally be above/below entry. Only the
-            # existence of native SL matters once a position has advanced.
-            pass
         if p.get("side") not in {"BUY", "SELL"}:
             return False, "unknown broker position side"
         if not isinstance(p.get("ticket"), int) or p["ticket"] <= 0:
@@ -171,6 +166,7 @@ def _recovered(snapshot: dict, profile: dict, now: datetime, restarted_at: str |
         and snapshot.get("currency") == profile.get("expected_currency")
         and snapshot.get("feed_http") == 200
         and snapshot.get("broker_positions_protected") is True
+        and snapshot.get("entry_enabled") is profile.get("expect_entries")
         and (profile.get("expected_mode") != "REAL" or
              snapshot.get("restart_reconciliation_supported") is True)
     )
@@ -184,7 +180,7 @@ def cycle(
     *,
     apply: bool,
     gateway_ok: bool,
-) -> tuple[dict, list[dict]]:
+) -> tuple[dict, list[dict], dict]:
     results: dict = {"updated_at": now.isoformat(), "accounts": {}}
     state = dict(previous)
     accounts = state.setdefault("accounts", {})
@@ -256,7 +252,7 @@ def cycle(
             "last_restart_at": record.get("restart_at"),
             "auto_recover": bool(profile.get("auto_recover")),
         }
-    return results, events
+    return results, events, state
 
 
 def main(argv=None) -> int:
@@ -274,7 +270,7 @@ def main(argv=None) -> int:
             print("BLOCKED: invalid profile registry")
             return 2
         if not args.apply:
-            status, events = cycle(
+            status, events, _ = cycle(
                 profiles, root, read_json(args.state_file), datetime.now(UTC),
                 apply=False, gateway_ok=gateway_healthy(args.gateway),
             )
@@ -284,27 +280,11 @@ def main(argv=None) -> int:
         with args.state_file.with_suffix(".lock").open("a+") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             prior = read_json(args.state_file)
-            status, events = cycle(
+            status, events, next_state = cycle(
                 profiles, root, prior, datetime.now(UTC),
                 apply=True, gateway_ok=gateway_healthy(args.gateway),
             )
-            # Recover time-series attempts, cooldown and event markers from
-            # per-account structured records before the next timer run.
-            next_state = {
-                "accounts": {
-                    **prior.get("accounts", {}),
-                    **{k: {
-                        **(prior.get("accounts", {}).get(k) or {}),
-                        "result": row["result"],
-                        "reason": row["reason"],
-                        "restart_at": row["last_restart_at"],
-                    } for k, row in status["accounts"].items()},
-                }
-            }
-            # The full in-memory planner state is persisted below. Do not
-            # lose first_seen/attempts between timer executions.
-            if hasattr(cycle, "_last_accounts"):
-                next_state["accounts"].update(cycle._last_accounts)
+            # Persist first_seen and attempts as well as status, per profile.
             save_atomic(args.state_file, next_state)
             # Host-side status can be observed independently of Discord bot.
             save_atomic(root / STATUS_NAME, status)
