@@ -77,7 +77,7 @@ class ParserTests(unittest.TestCase):
         original = ("GWS - CAPITAL\\n"
                     "XAUUSD 4003 - 4000: Buy\\n"
                     "TP1: 4010\\nTP2: 4020\\nTP3: 4030\\nTP4: 4040\\nSL: 3996")
-        original = original.replace("\\\\n", "\\n")
+        original = original.replace("\\n", "\n")
         action = parse_actions(original)[0]
         self.assertEqual(action.kind, "new_signal")
         self.assertEqual(action.tps, {1: 4010, 2: 4020, 3: 4030, 4: 4040})
