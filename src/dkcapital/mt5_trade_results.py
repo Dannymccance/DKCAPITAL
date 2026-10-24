@@ -58,7 +58,7 @@ def completed_results(snapshot: dict[str, Any], signals: list[dict[str, Any]],
             continue
         root = str(signal.get("group_id") or sid)
         by_provider[root].append(signal)
-        for leg in (1, 2, 3, 4):
+        for leg in (1, 2, 3, 4, 5):
             magic = mt5_group(sid) * 10 + leg
             magics[magic] = (root, sid, leg)
 
@@ -130,10 +130,10 @@ def completed_results(snapshot: dict[str, Any], signals: list[dict[str, Any]],
         leg_rows = []
         for i, signal in enumerate(sorted_signals, 1):
             sid = str(signal.get("signal_id"))
-            for leg in (1, 2, 3, 4):
+            for leg in (1, 2, 3, 4, 5):
                 if (sid, leg) not in leg_pnl:
                     continue
-                name = "Layer (TP2)" if leg == 4 else f"TP{leg} leg"
+                name = "Layer (TP2)" if leg == 4 else ("TP4 leg" if leg == 5 else f"TP{leg} leg")
                 if len(sorted_signals) > 1:
                     name += f" (signal {i})"
                 leg_rows.append({"label": name, "pnl": round(leg_pnl[(sid, leg)], 2)})
