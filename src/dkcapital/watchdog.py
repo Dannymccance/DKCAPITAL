@@ -94,6 +94,20 @@ def check_health(data_dir: Path, now: datetime, gateway_ok: bool) -> set[str]:
                 restart_at = info.get("last_restart_at")
                 if restart_at and _age_seconds(restart_at, now) < 300:
                     problems.add(f"{name}_TERMINAL_RECENTLY_RESTARTED")
+    recoverable = [p for p in profiles if p.get("auto_recover")]
+    if recoverable:
+        recovery_status = _read(data_dir / "mt5-recovery-status.json")
+        if _age_seconds(recovery_status.get("updated_at"), now) > 180:
+            problems.add("MT5_RECOVERY_SUPERVISOR_STALE")
+        else:
+            rows = recovery_status.get("accounts") or {}
+            for profile in recoverable:
+                ident = profile["id"]
+                entry = rows.get(str(ident)) if isinstance(rows, dict) else None
+                if not isinstance(entry, dict):
+                    problems.add(f"MT5_ACCOUNT{ident}_RECOVERY_STATUS_MISSING")
+                elif entry.get("result") in {"RESTART_FAILED", "WAITING_FOR_RECONNECT"}:
+                    problems.add(f"MT5_ACCOUNT{ident}_{entry['result']}")
     recovery = _read(data_dir / "telegram-recovery-status.json")
     if _age_seconds(recovery.get("checked_at"), now) > 200:
         problems.add("TELEGRAM_CATCHUP_HEARTBEAT_STALE")
@@ -171,11 +185,12 @@ class Watchdog:
             logger.warning("Unable to deliver watchdog Discord notification: %s", type(exc).__name__)
             return False
 
-    def _write_state(self, active: set[str]) -> None:
+    def _write_state(self, active: set[str], delivered_events: list[str] | None = None) -> None:
         self.data.mkdir(parents=True, exist_ok=True)
         temp = self.state_path.with_suffix(".tmp")
         temp.write_text(json.dumps({
-            "active": sorted(active), "checked_at": datetime.now(UTC).isoformat()
+            "active": sorted(active), "checked_at": datetime.now(UTC).isoformat(),
+            "delivered_recovery_events": (delivered_events or [])[-300:],
         }))
         temp.replace(self.state_path)
 
@@ -198,7 +213,32 @@ class Watchdog:
         for issue in recovered:
             if self._notify(f"✅ DKcapital independent watchdog recovery: `{issue}` cleared.", telegram=issue.startswith("TELEGRAM_")):
                 delivered.discard(issue)
-        self._write_state(delivered)
+        # The host timer retains its last 100 transitions. Deliver each event
+        # exactly once across bot/watchdog restarts, even if two transitions
+        # occur between 60-second watchdog polls.
+        prior_events = _read(self.state_path).get("delivered_recovery_events") or []
+        seen = set(prior_events)
+        event_ids = list(prior_events)
+        recovery_state = _read(self.data / "mt5-recovery-status.json")
+        for event in recovery_state.get("events") or []:
+            if not isinstance(event, dict):
+                continue
+            ident, kind, eid = event.get("account"), event.get("result"), event.get("id")
+            if type(ident) is not int or kind not in {
+                "RESTART_REQUESTED", "RESTART_FAILED", "RECOVERED",
+                "WAITING_FOR_RECONNECT"
+            } or not isinstance(eid, str) or not eid or eid in seen:
+                continue
+            if not self._notify(
+                f"DKcapital MT5 Account {ident} recovery: {kind} at "
+                f"{str(event.get('at') or 'unknown time')[:32]}. "
+                "Verify broker orders, EA feed and native protective stops."
+            ):
+                # Failed deliveries are retried, not marked as delivered.
+                continue
+            seen.add(eid)
+            event_ids.append(eid)
+        self._write_state(delivered, event_ids)
         return problems
 
 
