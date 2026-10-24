@@ -42,6 +42,80 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(action.sl, 4333)
 
+    def test_capital_actual_gold_shorthand_entry(self) -> None:
+        action = parse_actions(
+            "XAUUSD 4084-85 BUY\nTP1 : 4090\nTP2 : 4098\nTP3: OPEN\nSL : 4079"
+        )[0]
+        self.assertEqual(action.kind, "new_signal")
+        self.assertEqual((action.entry_low, action.entry_high), (4084.0, 4085.0))
+        self.assertEqual(action.direction, "BUY")
+        self.assertEqual(action.tps, {1: 4090, 2: 4098})
+        self.assertEqual(action.sl, 4079)
+
+    def test_capital_reverse_shorthand_and_full_price(self) -> None:
+        cases = [
+            ("XAUUSD 4121-20 BUY\nTP1: 4125\nSL: 4115", (4120, 4121)),
+            ("XAUUSD 4132-4133 SELL\nTP1: 4128\nSL: 4138", (4132, 4133)),
+            ("XAUUSD 4049BUY\nTP1: 4054\nSL: 4044", (4049, 4049)),
+            ("XAUUSD 4003 - 4000: Buy\nTP1: 4107\nSL: 3996", (4000, 4003)),
+            ("XAUUSD 4099-01 BUY\nTP1 4105\nSL 4090", (4099, 4101)),
+        ]
+        for message, prices in cases:
+            with self.subTest(message=message):
+                action = parse_actions(message)[0]
+                self.assertEqual(action.kind, "new_signal")
+                self.assertEqual((action.entry_low, action.entry_high), prices)
+
+    def test_storm_actual_unnumbered_targets_and_short_zone(self) -> None:
+        cases = [
+            ("XAU USD BUY NOW 4129.5 - 4125.5\n"
+             "TP 4131.5\nTP 4132.5\nTP 4133.5\nTP 4136.5\nSL 4123.5",
+             (4125.5, 4129.5), {1: 4131.5, 2: 4132.5, 3: 4133.5, 4: 4136.5}),
+            ("XAU USD SELL NOW 4082-86\n"
+             "TP 4080\nSL 4087",
+             (4082, 4086), {1: 4080}),
+            ("XAU USD SELL NOW 4051.5 - 4055.5\n"
+             "TP 4049,5\nTP 4048.5\nTP 4047\nSL 4057",
+             (4051.5, 4055.5), {1: 4049.5, 2: 4048.5, 3: 4047}),
+            ("Buy Gold Now 4132 - 4126\n"
+             "TP 4135.5\nTP 4137.5\nTP 4140\nSL 4123",
+             (4126, 4132), {1: 4135.5, 2: 4137.5, 3: 4140}),
+        ]
+        for message, prices, tps in cases:
+            with self.subTest(message=message):
+                action = parse_actions(message)[0]
+                self.assertEqual(action.kind, "new_signal")
+                self.assertEqual((action.entry_low, action.entry_high), prices)
+                self.assertEqual(action.tps, tps)
+
+    def test_price_mentions_and_far_suffix_are_not_trades(self) -> None:
+        self.assertEqual(
+            parse_actions("XAUUSD 4084-20 BUY\nTP1 4090\nSL 4079")[0].kind,
+            "unparsed_new_signal",
+        )
+        for message in (
+            "XAUUSD Target Price 1: +60 Pips.",
+            "I will buy again with an SL of 4096",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(parse_actions(message)[0].kind, "commentary")
+
+    def test_close_partials_with_set_be_does_not_close_entire_trade(self) -> None:
+        actions = parse_actions("Close partials, set BE")
+        self.assertNotIn("close", {a.kind for a in actions})
+        updates = [a for a in actions if a.kind == "trade_update"]
+        self.assertEqual(len(updates), 1)
+        self.assertTrue(updates[0].move_sl_to_be)
+
+    def test_layer_permission_and_tp_recap_do_not_open_a_layer(self) -> None:
+        for message in (
+            "ALLOWED TO LAYER UNTIL MAX 4036.50",
+            "TP1 HIT +50 PIPS\nSL BREAKEVEN\n+LAYERS",
+            "If you layered the zone, make your trade risk free",
+        ):
+            with self.subTest(message=message):
+                self.assertNotIn("add_layer", {a.kind for a in parse_actions(message)})
+
     def test_rapid_same_direction_signal_without_correction_evidence_is_separate(self) -> None:
         state = SignalState()
         state.ingest_event(
