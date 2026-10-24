@@ -1,0 +1,10 @@
+[Unit]
+Description=DK Capital opt-in DEMO-only Account 2 frozen-terminal recovery
+After=docker.service dkcapital-mt5-2.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/mt5_terminal_autoheal.py --account-id 2 --apply
+TimeoutStartSec=120
+NoNewPrivileges=true
