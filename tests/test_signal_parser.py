@@ -83,22 +83,23 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(signal.sl_mode, "PRICE")
         self.assertEqual(signal.current_sl, 4140)
         state.ingest_event(event(72, "SET ALL BREAKEVEN NOW", minute=2))
+        signal = state.signals["1:70"]
         self.assertFalse(signal.be_deferred)
         self.assertEqual(signal.sl_mode, "BREAKEVEN")
 
     def test_explicit_all_be_covers_both_provider_sides_but_not_other_chat(self) -> None:
         state = SignalState()
         state.ingest_event(event(1,
-            "BUY XAUUSD AT 4150 - 4148\\nTP1 4155\\nTP2 4160\\nTP3 4165\\nSL 4140",
+            "BUY XAUUSD AT 4150 - 4148\nTP1 4155\nTP2 4160\nTP3 4165\nSL 4140",
             minute=0,
         ))
         state.ingest_event(event(2,
-            "SELL XAUUSD AT 4155 - 4158\\nTP1 4148\\nTP2 4145\\nTP3 4140\\nSL 4165",
+            "SELL XAUUSD AT 4155 - 4158\nTP1 4148\nTP2 4145\nTP3 4140\nSL 4165",
             minute=1,
         ))
         state.ingest_event({
             **event(1,
-                "SELL XAUUSD AT 4155 - 4158\\nTP1 4148\\nTP2 4145\\nTP3 4140\\nSL 4165",
+                "SELL XAUUSD AT 4155 - 4158\nTP1 4148\nTP2 4145\nTP3 4140\nSL 4165",
                 minute=1),
             "chat_id": 2,
         })
