@@ -215,10 +215,12 @@ class V2PaperStrategy(XauSignalFollowingStrategy):
         ))
         if not explicit or position.v2_layer_attempted or position.tp_hits:
             return False
-        if any(p.v2_layer_attempted and p.status == "OPEN" and
-               account.candidates.get(p.signal_id) is not None and
-               account.candidates[p.signal_id].group_id == candidate.group_id
-               for p in account.positions.values() if p.signal_id != candidate.signal_id):
+        if candidate.group_id is not None and any(
+            p.v2_layer_attempted and
+            account.candidates.get(p.signal_id) is not None and
+            account.candidates[p.signal_id].group_id == candidate.group_id
+            for p in account.positions.values() if p.signal_id != candidate.signal_id
+        ):
             return False
         # Do not allow repeated attempts after failed broker-equivalent sizing.
         position.v2_layer_attempted = True
@@ -245,6 +247,12 @@ class V2PaperStrategy(XauSignalFollowingStrategy):
             quantity_oz=layer_lots * self.config.contract_oz_per_lot,
             lot_size=layer_lots, risk_usd=risk,
             reason="v2_explicit_provider_layer", timestamp=timestamp,
+        )
+        # Account for the additional fourth leg as TP2-allocated simulated
+        # quantity, rather than leaving it hanging with the runner.
+        position.tp_close_quantities_oz["2"] = (
+            position.tp_close_quantities_oz.get("2", 0.0)
+            + layer_lots * self.config.contract_oz_per_lot
         )
         # This aggregate ledger does NOT perfectly model MT5's separate
         # fourth leg/TP2; report layer fills separately in audit, never claim
@@ -308,6 +316,8 @@ class V2PaperStrategy(XauSignalFollowingStrategy):
                             (position.direction == "SELL" and price < self._exit_fill(position.direction, quote))):
                             position.tp_prices[str(index)] = price
                             changed = True
+                if "3" in dict(item.get("tps") or {}) and 3 not in position.tp_hits:
+                    position.v2_open_runner = False
                 if item.get("tp3_open") and 3 not in position.tp_hits:
                     position.v2_open_runner = True
                     position.tp_prices.pop("3", None)
