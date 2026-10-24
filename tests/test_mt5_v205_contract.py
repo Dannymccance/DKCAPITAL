@@ -100,6 +100,9 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("int maxAge=SignalAgeLimit(id);", entry)
         self.assertIn("if(age<0 || age>maxAge)", entry)
         self.assertIn("if(!StormEntryArmed(id,age))", entry)
+        self.assertIn("double allowedLow=IsStormSignal(id)?zLow:zLow-EntryToleranceUSD;", entry)
+        self.assertIn("double allowedHigh=IsStormSignal(id)?zHigh:zHigh+EntryToleranceUSD;", entry)
+        self.assertIn("if(fill<allowedLow || fill>allowedHigh)", entry)
         self.assertIn('RecordDecision(id,"ENTRY","STORM_SIGNAL_NOT_ARMED",age);', entry)
         # Layer orders are separate immediate instructions, not inherited
         # from the initial signal's five-minute entry-zone waiting period.
