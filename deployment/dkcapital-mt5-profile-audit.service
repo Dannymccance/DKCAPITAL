@@ -1,0 +1,11 @@
+[Unit]
+Description=DK Capital read-only per-account MT5 service/recovery audit
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dkcapital
+ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/mt5_profile_audit.py
+TimeoutStartSec=60
+NoNewPrivileges=true

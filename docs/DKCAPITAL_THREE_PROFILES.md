@@ -69,3 +69,54 @@ When the user is ready to configure Dan's third account:
 The current Python `paper-engine` container is a **legacy independent simulation**, not the requested broker MT5 paper profile; do not count its synthetic P&L with broker-confirmed MT5 demo results. Its file and historical results are left untouched until an intentional retirement plan is approved.
 
 No changes to either already-running MT5 service should be made while preparing Account 3; specifically avoid bulk `systemctl restart`, `docker compose down`, resetting the existing MT5 Wine prefixes or replacing an installed EX5 with open broker positions.
+
+
+## Standard recovery and alert coverage (every commissioned MT5 account)
+
+The **independent watchdog** already alerts for Telegram catchup, gateway, signal processor, and Discord health. With the new registry it additionally monitors **each opted-in MT5 account**, not just Account 1:
+
+- stale broker telemetry (>150 seconds), feed not HTTP 200, unexpected EA arming/disarming based on the profile's intended setup/trading status
+- wrong account login or account type/currency (when account login is explicitly configured)
+- missing broker account-wide exposure counts or broker-native SL protection
+- unavailable systemd service, recent restart, stale host monitoring
+- recovery notifications when these faults clear, plus an invalid registry warning
+- shared base watchdog notifications remain operational; messages identify the account, so no failure of Kyle's account is attributed to Dan or the demo.
+
+The new root-side \`mt5_profile_audit.py\` probes only \`dkcapital-mt5-N.service\` via \`systemctl show\`. It **never starts/restarts/stops MT5, opens trades, or reads passwords**. The audit's short status file goes into the existing \`dkcapital-data\` Docker volume, where the container watchdog can read it. The watchdog alerts to the existing \`MT5_ALERT_CHANNEL_ID\`, and its alert/recovery deduplication persists.
+
+### How to register an account after broker telemetry is working
+
+Use \`deployment/mt5-monitor-profiles.example.json\` as a *template*, NOT a ready-to-use config: \`expected_login: 0\` is intentionally invalid. Provision only after you know the actual broker login, account mode, currency and whether new EA entries are expected. Store the completed file as \`/app/data/mt5-monitor-profiles.json\` in the shared Docker volume, with 0600 permissions. Account 1 must be included as enabled. **Accounts 2 and 3 remain disabled until their own EA telemetry and login restrictions work.** The registry contains no tokens, passwords or broker server credentials.
+
+Account identity \`id=N\` always refers to \`/app/data/mt5-accountN.json\` and \`dkcapital-mt5-N.service\`. There are no arbitrary user-specified service paths or shell commands. Existing no-registry Account 1 checks continue unchanged.
+
+For a deliberately disarmed account in setup mode use \`expect_entries=false\`; an unexpectedly armed EA generates an alert. Set to \`true\` only after the operator has approved entry activation. An account may be enabled for **monitoring** while still having unattended recovery disabled.
+
+### Install the read-only host audit only (post-CI and merge)
+
+First check the new account names/paths. This does not start any broker terminal or copy EAs:
+
+\`\`\`bash
+cd /opt/dkcapital
+git pull --ff-only origin main
+python3 -m py_compile scripts/mt5_profile_audit.py scripts/mt5_terminal_autoheal.py
+python3 -m unittest discover -s tests -p 'test_mt5_profile*.py' -v
+
+# Account 1's existing .env and all active terminals are left alone.
+install -o root -g root -m 0644 deployment/dkcapital-mt5-profile-audit.service /etc/systemd/system/
+install -o root -g root -m 0644 deployment/dkcapital-mt5-profile-audit.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now dkcapital-mt5-profile-audit.timer
+systemctl start dkcapital-mt5-profile-audit.service
+journalctl -u dkcapital-mt5-profile-audit.service --no-pager -n 25
+\`\`\`
+
+The watchdog **Docker image** must be rebuilt from the merged source to load new per-account alerts. Do so in a separate controlled rollout; the recovery template does not touch \`mt5-gateway\`, \`signal-processor\`, \`telegram-listener\`, \`discord-bot\`, any MT5 systemd terminal or VNC service. A profile registry is not required to keep historical Account 1 checks.
+
+### Unattended recovery policy per profile
+
+- **Paper/demo:** the existing Account 1 demo-only autoheal and LiveUpdate guarded recovery continue. The generic frozen-terminal script now also accepts \`--account-id N\`, with distinct persistent state and locking, after explicit registry opt-in and proof of GBP DEMO. The Account 1 legacy cooldown/state file is preserved. Future Account 2/3 **demo-only** timer/unit templates are staged in \`deployment/\`, but are not installed or enabled. Their timers may be enabled only after mode/login/currency validation, complete broker exposure telemetry, acceptance tests, and approval.
+- **Live Vantage (Dan or Kyle):** automated frozen-terminal recovery remains **blocked**. Restarting an MT5 process while an unknown trade or pending order exists can duplicate actions, interrupt management, or strand exposure. A stale snapshot cannot prove current broker state. Monitor and alert; obtain an independent broker-side source of truth and a separately reviewed safe restart policy before allowing unattended live recovery. Existing systemd unit automatic restart behaviour, if any, must also be reviewed before funding.
+- **Never** apply the demo-only LiveUpdate quarantine algorithm to a live account. The Account 1 approved terminal hash gate is not automatically configured for future accounts; that remains commissioning work.
+
+This is an infrastructure **standard and implementation of monitoring**. It does not claim Dan or Kyle's accounts are configured, nor does it enable new trading entries. Their broker telemetry, independent gateway authentication and Discord result cards remain distinct future integration work. Verify alerts with a controlled test event before considering any account monitored end-to-end.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Opt-in recovery for a hung MT5 Account 1 terminal; DEMO ONLY.
+"""Opt-in per-account recovery for a hung MT5 terminal; DEMO GBP ONLY.
 
 This is distinct from the Docker autoheal. It NEVER trades, closes positions,
-touches account 2, or enables the EA. Uncertain exposure fails closed.
+touches any other account, or enables the EA. Uncertain exposure fails closed.
 Native broker SL remains a requirement for every reported open position.
 
 Dry-run by default. --apply invokes only:
-    systemctl restart dkcapital-mt5-1.service
+    systemctl restart dkcapital-mt5-{id}.service (only selected/demo-verified)
 
 The last trusted broker snapshot can become stale during a hang. A restart
 cannot independently prove current broker state; use a broker-side monitor for
@@ -28,6 +28,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, build_opener
 
 from host_autoheal import age, discover_data_dir, read_json, save_atomic
+
+# Keep profile resolution within the repository. Never use arbitrary service
+# or telemetry paths supplied by runtime command arguments.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from dkcapital.mt5_profile_registry import profiles_from_registry, service_unit, telemetry_file
 
 TARGET_SERVICE = "dkcapital-mt5-1.service"
 STALE_SECONDS = 150
@@ -221,10 +226,10 @@ def plan(state: dict, eligible: bool, now_epoch: float) -> tuple[dict, bool, str
     return updated, True, "safe restart budget available"
 
 
-def service_running() -> bool:
+def service_running(target_service: str = TARGET_SERVICE) -> bool:
     try:
         result = subprocess.run(
-            ["systemctl", "is-active", "--quiet", TARGET_SERVICE],
+            ["systemctl", "is-active", "--quiet", target_service],
             timeout=5, capture_output=True, check=False,
         )
         return result.returncode == 0
@@ -235,20 +240,45 @@ def service_running() -> bool:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--account-id", type=int, default=1,
+                        help="Monitored broker DEMO profile only; LIVE never autoheals")
     parser.add_argument("--compose-dir", type=Path, default=Path("/opt/dkcapital"))
     parser.add_argument("--data-dir", type=Path, default=None)
-    parser.add_argument("--state-file", type=Path,
-                        default=Path("/var/lib/dkcapital-mt5-autoheal/state.json"))
+    parser.add_argument("--state-file", type=Path, default=None)
     parser.add_argument("--gateway", default="http://127.0.0.1:8765/health")
     args = parser.parse_args(argv)
     try:
-        expected = configured_login(args.compose_dir)
         data_dir = args.data_dir or discover_data_dir(args.compose_dir)
+        profiles, valid = profiles_from_registry(data_dir)
+        if not valid:
+            raise ValueError("profile registry invalid; recovery is disabled")
+        selected = next((p for p in profiles if p["id"] == args.account_id), None)
+        if args.account_id == 1:
+            expected = configured_login(args.compose_dir)
+            if selected is None or (
+                selected["expected_login"] is not None
+                and selected["expected_login"] != expected
+            ):
+                raise ValueError("account1 registry and configured login disagree")
+        else:
+            if selected is None:
+                raise ValueError("account not explicitly enabled in profile registry")
+            if selected["expected_mode"] != "DEMO" or selected["expected_currency"] != "GBP":
+                raise ValueError("LIVE or non-GBP account cannot use unattended recovery")
+            if not selected["expect_entries"]:
+                raise ValueError("profile in setup mode; unattended recovery disabled")
+            expected = selected["expected_login"]
+        target_service = service_unit(args.account_id)
+        state_file = args.state_file or (
+            Path("/var/lib/dkcapital-mt5-autoheal/state.json")
+            if args.account_id == 1 else
+            Path(f"/var/lib/dkcapital-mt5-autoheal/account{args.account_id}-state.json")
+        )
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         print(f"BLOCKED: insufficient configuration: {type(exc).__name__}: {exc}")
         return 2
     now = datetime.now(UTC)
-    snapshot = read_json(data_dir / "mt5-account1.json")
+    snapshot = read_json(telemetry_file(data_dir, args.account_id))
     generated_at = snapshot.get("generated_at")
     try:
         snapshot_time = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
@@ -260,33 +290,33 @@ def main(argv=None) -> int:
     eligible, reason = recovery_gate(
         snapshot, expected_login=expected, now=now,
         signals_ambiguous=ambiguous, gateway_ok=gateway_healthy(args.gateway),
-        service_active=service_running(),
+        service_active=service_running(target_service),
     )
     if not args.apply:
         updated, should_restart, planning = plan(
-            read_json(args.state_file), eligible, now.timestamp(),
+            read_json(state_file), eligible, now.timestamp(),
         )
         print(json.dumps({
-            "mode": "DRY_RUN", "target": TARGET_SERVICE, "eligible": eligible,
+            "mode": "DRY_RUN", "target": target_service, "eligible": eligible,
             "reason": reason, "would_restart": should_restart, "planning": planning,
             "last_snapshot_age_seconds": round(age(generated_at, now)),
         }, indent=2))
         return 0
 
-    args.state_file.parent.mkdir(parents=True, exist_ok=True)
-    with args.state_file.with_suffix(".lock").open("a+") as lock:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    with state_file.with_suffix(".lock").open("a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state, should_restart, planning = plan(
-            read_json(args.state_file), eligible, now.timestamp(),
+            read_json(state_file), eligible, now.timestamp(),
         )
         if should_restart:
             # Commit restart intent before invoking systemd, including failed
             # attempts, so timeouts/reboots cannot trigger rapid loops.
             state["attempts"].append(now.timestamp())
-            save_atomic(args.state_file, state)
+            save_atomic(state_file, state)
             try:
                 subprocess.run(
-                    ["systemctl", "restart", TARGET_SERVICE],
+                    ["systemctl", "restart", target_service],
                     check=True, timeout=90, capture_output=True, text=True,
                 )
                 print("RESTART_REQUESTED: verify new MT5 telemetry and native broker stops")
@@ -294,7 +324,7 @@ def main(argv=None) -> int:
                 print(f"RESTART_FAILED: {type(exc).__name__}", file=sys.stderr)
                 return 1
         else:
-            save_atomic(args.state_file, state)
+            save_atomic(state_file, state)
             print(f"NO_RESTART: {reason}; {planning}")
     return 0
 
