@@ -50,7 +50,7 @@ class Tp2MajorityContracts(unittest.TestCase):
 
     def test_native_three_leg_stops_and_broker_risk_controls_preserved(self):
         entry = self.source.split("void TryEntry(", 1)[1].split(
-            "// Original three-leg broker fills", 1
+            "// Broker-history original leg volume", 1
         )[0]
         for code in ('trade.Buy(', 'trade.Sell(', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
                      'GlobalVariableSet(IDKey(id,"ATTEMPT")', 'StopValid(buy,providerSL,q)',
@@ -84,7 +84,7 @@ class Tp2MajorityContracts(unittest.TestCase):
     def test_no_unintended_tp3_or_open_runner(self):
         s = self.source
         self.assertIn('bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;', s)
-        self.assertIn('if(tp1<=0 || tp2<=0 ||', s)
+        self.assertIn('if(tp1<=0 || ValidTP(buy,tp1,q)<=0 ||', s)
         self.assertIn('if(openRunner && !EnableOpenRunnerEntries)', s)
         self.assertIn('bool wasTwoTargets=GlobalVariableCheck', s)
         # A missing numeric third target is NEVER promoted to the OPEN option.
