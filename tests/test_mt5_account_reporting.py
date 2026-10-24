@@ -191,13 +191,13 @@ class ReportingUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
 
-    def test_rejects_unowned_fifth_leg(self):
+    def test_rejects_unowned_sixth_leg(self):
         data = example()
-        data["positions"][0]["magic"] = MAGIC + 5
+        data["positions"][0]["magic"] = MAGIC + 6
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
         data = example()
-        data["deals"][0]["magic"] = MAGIC + 5
+        data["deals"][0]["magic"] = MAGIC + 6
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
 
