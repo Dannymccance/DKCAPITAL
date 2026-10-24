@@ -89,9 +89,12 @@ class ParserTests(unittest.TestCase):
                 self.assertEqual(action.tps, tps)
 
     def test_price_mentions_and_far_suffix_are_not_trades(self) -> None:
+        self.assertEqual(
+            parse_actions("XAUUSD 4084-20 BUY\nTP1 4090\nSL 4079")[0].kind,
+            "unparsed_new_signal",
+        )
         for message in (
             "XAUUSD Target Price 1: +60 Pips.",
-            "XAUUSD 4084-20 BUY\nTP1 4090\nSL 4079",
             "I will buy again with an SL of 4096",
         ):
             with self.subTest(message=message):
