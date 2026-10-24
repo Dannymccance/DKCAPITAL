@@ -149,12 +149,12 @@ class DemoFeedTests(unittest.TestCase):
                 "history": [],
             }]
         }), encoding="utf-8")
-        url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        url = f"http://127.0.0.1:{self.server.server_port}/v3/demo/feed"
         with urlopen(Request(url, headers={
             "Authorization": "Bearer " + self.token
         }), timeout=3) as response:
             lines = response.read().decode("utf-8").splitlines()
-        self.assertEqual(lines[0], "DKDEMO2")
+        self.assertEqual(lines[0], "DKDEMO3")
         fields = lines[1].split("|")
         self.assertEqual(len(fields), 13)
         self.assertEqual(fields[8:12], ["4010.0", "4020.0", "4030.0", "4040.0"])
@@ -170,7 +170,7 @@ class DemoFeedTests(unittest.TestCase):
                 "opened_at": datetime.now(UTC).isoformat(),
             }]
         }), encoding="utf-8")
-        url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        url = f"http://127.0.0.1:{self.server.server_port}/v3/demo/feed"
         with urlopen(Request(url, headers={
             "Authorization": "Bearer " + self.token
         }), timeout=3) as response:
@@ -191,12 +191,12 @@ class DemoFeedTests(unittest.TestCase):
                 "opened_at": datetime.now(UTC).isoformat(),
             }]
         }), encoding="utf-8")
-        url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        url = f"http://127.0.0.1:{self.server.server_port}/v3/demo/feed"
         with urlopen(Request(url, headers={
             "Authorization": "Bearer " + self.token
         }), timeout=3) as response:
             lines = response.read().decode("utf-8").splitlines()
-        self.assertEqual(lines, ["DKDEMO2"])
+        self.assertEqual(lines, ["DKDEMO3"])
 
     def test_injected_ids_rejected(self):
         self.path.write_text(json.dumps({"signals": [{
