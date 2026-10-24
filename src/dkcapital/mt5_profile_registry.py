@@ -24,6 +24,7 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
         "id": 1, "label": "Paper MT5 demo",
         "expected_mode": "DEMO", "expected_currency": "GBP",
         "expected_login": None, "expect_entries": True,
+        "auto_recover": False, "recovery_policy": "disabled",
     }]
     if not path.exists():
         return default, True
@@ -62,12 +63,21 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
                 raise ValueError("expected_login must be a confirmed positive integer")
             if type(raw.get("expect_entries")) is not bool:
                 raise ValueError("expect_entries must be explicit boolean")
+            auto_recover = raw.get("auto_recover", False)
+            policy = raw.get("recovery_policy", "disabled")
+            if type(auto_recover) is not bool:
+                raise ValueError("auto_recover must be boolean")
+            if policy not in {"disabled", "broker_protected"}:
+                raise ValueError("invalid recovery policy")
+            if auto_recover != (policy == "broker_protected"):
+                raise ValueError("recovery requires explicit broker_protected policy")
             if raw["enabled"]:
                 result.append({
                     "id": ident, "label": label.strip(),
                     "expected_mode": mode, "expected_currency": currency.upper(),
                     "expected_login": login,
                     "expect_entries": raw["expect_entries"],
+                    "auto_recover": auto_recover, "recovery_policy": policy,
                 })
         if 1 not in {p["id"] for p in result}:
             raise ValueError("existing Account 1 must remain monitored")
