@@ -3,6 +3,7 @@ Description=DK Capital MT5 Account 3 (Dan - reserved, not provisioned)
 After=network-online.target
 Wants=network-online.target
 # Intentionally not enabled as part of any boot recovery installer.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -14,7 +15,6 @@ ExecStart=/usr/local/bin/dkcapital-mt5-run 3
 Restart=always
 RestartSec=120
 RestartPreventExitStatus=78
-StartLimitIntervalSec=0
 NoNewPrivileges=true
 
 [Install]
