@@ -608,7 +608,12 @@ void TryEntry(const string id,const string status,const string direction,
    bool buy=direction=="BUY";
    double fill=buy?q.ask:q.bid;
    double zLow=MathMin(low,high),zHigh=MathMax(low,high);
-   if(fill<zLow-EntryToleranceUSD || fill>zHigh+EntryToleranceUSD)
+   // STORM uses the exact provider entry zone: for BUY 4001-4003
+   // with broker ask 3998, keep armed until ask first reaches >=4001.
+   // The other providers retain the current +/-$1.00 tolerance.
+   double allowedLow=IsStormSignal(id)?zLow:zLow-EntryToleranceUSD;
+   double allowedHigh=IsStormSignal(id)?zHigh:zHigh+EntryToleranceUSD;
+   if(fill<allowedLow || fill>allowedHigh)
    {RecordDecision(id,"ENTRY","PRICE_OUTSIDE_ENTRY_ZONE",age);return;}
    // Provider's SL is the ONLY permitted entry stop.
    // Risk limits adjust lots, never the protective stop price.
