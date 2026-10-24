@@ -95,7 +95,7 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("maximum!=1", layer)
         self.assertIn("referenceLots*0.10", layer)
         self.assertIn("LayerPreviouslyAttempted(id,groupId)", layer)
-        self.assertIn("SignalAgeLimit(id)", layer)
+        self.assertIn("MaximumSignalAgeSeconds", layer)
         self.assertIn("StopValid(buy,protectiveSL,q)", layer)
         self.assertIn("GroupRiskLimitGBP()*LAYER_GROUP_RISK_SHARE", layer)
         self.assertIn("groupRisk+plannedRisk>GroupRiskLimitGBP()", layer)
