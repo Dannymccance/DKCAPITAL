@@ -31,6 +31,47 @@ def _number(value: str) -> float:
     return float(value.replace(",", ""))
 
 
+
+def _explicit_gold_entry(text: str) -> tuple[float, float] | None:
+    """Read explicit provider entries in gold-first or direction-first format.
+
+    In shorthand such as 'XAUUSD 4084-85 BUY', 85 means 4085, not 85.
+    Nearby hundred candidates are considered so 4099-01 means 4101.
+    A shortened suffix must be within $20 of its first price; otherwise
+    fail closed rather than guessing the intended entry zone.
+    """
+    gold = r"(?:XAU\s*/?\s*USD|XAUUSDT|XAU|GOLD)"
+    first = r"(\d{3,5}(?:[.,]\d{1,2})?)"
+    second = r"(\d{1,5}(?:[.,]\d{1,2})?)"
+    zone = rf"{first}(?:\s*-\s*{second})?"
+    patterns = (
+        rf"\b{gold}\s+(?:BUY|SELL)(?:\s+NOW)?\s+{zone}",
+        rf"\b(?:BUY|SELL)\s+{gold}(?:\s+NOW)?\s+{zone}",
+        rf"\b{gold}\s*:?\s*{zone}\s*:?\s*(?:BUY|SELL)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        raw_first, raw_second = match.groups()
+        base = float(raw_first.replace(",", "."))
+        if raw_second is None:
+            return base, base
+        value = float(raw_second.replace(",", "."))
+        first_digits = raw_first.split(".")[0].split(",")[0]
+        suffix_digits = raw_second.split(".")[0].split(",")[0]
+        if len(suffix_digits) < len(first_digits):
+            modulus = 10 ** len(suffix_digits)
+            century = int(base // modulus) * modulus
+            choices = [century - modulus + value, century + value,
+                       century + modulus + value]
+            value = min(choices, key=lambda candidate: abs(candidate - base))
+            if abs(value - base) > 20:
+                return None
+        return min(base, value), max(base, value)
+    return None
+
+
 def _labelled_price(text: str, label_pattern: str) -> float | None:
     """Extract a provider-labelled price without requiring whitespace after it.
 
@@ -66,6 +107,8 @@ def _direction(text: str) -> str | None:
 def _extract_tps(text: str) -> dict[int, float]:
     """Extract targets in message order and preserve repeated sequential labels."""
     result: dict[int, float] = {}
+    # Numbered labels take precedence. Keep explicit duplicate numbering
+    # (e.g. TP3 repeated) as the next sequential target.
     for raw_index, value in re.findall(
         r"\bTP\s*(\d+)\s*[:=@-]?\s*(\d+(?:\.\d+)?)\b",
         text,
@@ -74,6 +117,15 @@ def _extract_tps(text: str) -> dict[int, float]:
         while index in result:
             index += 1
         result[index] = _number(value)
+    if result:
+        return result
+    # STORM and MONEY HOUSE send consecutive unnumbered lines:
+    # TP 4135.5 / TP 4137.5 / TP 4140. Support decimal-comma prices too.
+    for value in re.findall(
+        r"(?m)^\s*TP\s*[:=@-]?\s*(\d{3,6}(?:[.,]\d{1,2})?)(?!\d)",
+        text,
+    ):
+        result[len(result) + 1] = float(value.replace(",", "."))
     return result
 
 
@@ -142,7 +194,8 @@ def _move_to_be(text: str) -> bool:
             r"\b(?:SL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY)|"
             r"(?:MOVE|SET|ADJUST)\s+(?:THE\s+|YOUR\s+)?"
             r"(?:SL|STOP(?:\s+LOSS)?)\s+(?:TO\s+)?"
-            r"(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY))\b",
+            r"(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY)|"
+            r"\b(?:SET|MOVE\s+TO)\s+(?:BE|BREAKEVEN|BREAK\s*EVEN))\b",
             text,
         )
     )
@@ -229,6 +282,28 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 tps=_extract_tps(normalized),
                 sl=_explicit_sl(normalized),
                 layer_max=_layer_max(normalized),
+                source_style="gws",
+                scope="new",
+                reply_to_message_id=reply_to_message_id,
+                raw_text=text,
+            )
+        ]
+
+    # GWS STORM / CAPITAL / MONEY HOUSE: XAU USD BUY NOW 4129-4125,
+    # XAUUSD 4084-85 BUY, BUY GOLD NOW 4132-4126, XAUUSD 4049BUY.
+    # These are new entries only when a direction and an explicit gold price
+    # appear together; trade results such as 'XAUUSD Target Price 1' are ignored.
+    gold_zone = _explicit_gold_entry(normalized) if symbol == "XAUUSD" and direction else None
+    if gold_zone is not None:
+        return [
+            ParsedAction(
+                kind="new_signal",
+                symbol="XAUUSD",
+                direction=direction,
+                entry_low=gold_zone[0],
+                entry_high=gold_zone[1],
+                tps=_extract_tps(normalized),
+                sl=_explicit_sl(normalized),
                 source_style="gws",
                 scope="new",
                 reply_to_message_id=reply_to_message_id,
@@ -381,7 +456,13 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
             )
         )
 
-    if re.search(
+    # "Close partials, set BE" is not an instruction to liquidate
+    # the full position. Unspecified partial sizes remain non-executable.
+    partial_only = bool(re.search(
+        r"(?:^|\n)\s*CLOSE\s+(?:PARTIALS?|HALF|\d{1,3}(?:\.\d+)?\s*%)\b",
+        normalized,
+    ))
+    if not partial_only and re.search(
         r"(?:^|\n)\s*(?:CLOSE(?:D)?|EXIT(?:ED)?|GET\s+OUT|I'?M\s+OUT)\b"
         r"|\b(?:CLOSE|EXIT|CUT)\s+(?:THIS|IT|NOW|ALL|GOLD|BTC|XAUUSD|TRADE|POSITION)\b"
         r"|\bOUT\s+OF\s+(?:GOLD|BTC)\b",
