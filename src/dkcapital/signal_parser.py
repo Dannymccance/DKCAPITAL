@@ -112,7 +112,7 @@ def _extract_tps(text: str) -> dict[int, float]:
     # Numbered labels take precedence. Keep explicit duplicate numbering
     # (e.g. TP3 repeated) as the next sequential target.
     for raw_index, value in re.findall(
-        r"\bTP\s*(\d{1,2})\s*[:=@-]?\s*(\d{3,6}(?:\.\d+)?)\b",
+        r"\bTP\s*(\d{1,2})(?:\s*[:=@-]\s*|\s+)(\d{3,6}(?:\.\d+)?)\b",
         text,
     ):
         index = int(raw_index)
