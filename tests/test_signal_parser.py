@@ -52,6 +52,27 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(action.tps, {1: 4090, 2: 4098})
         self.assertEqual(action.sl, 4079)
 
+    def test_gws_two_target_signal_does_not_invent_tp3(self) -> None:
+        message = (
+            "GWS - CAPITAL\n"
+            "XAUUSD 4003 - 4000: Buy\n"
+            "TP1: 4107\n"
+            "TP2: 4120\n"
+            "SL: 3996"
+        )
+        parsed = parse_actions(message)[0]
+        self.assertEqual(parsed.kind, "new_signal")
+        self.assertEqual((parsed.entry_low, parsed.entry_high), (4000, 4003))
+        self.assertEqual(parsed.direction, "BUY")
+        self.assertEqual(parsed.sl, 3996)
+        self.assertEqual(parsed.tps, {1: 4107, 2: 4120})
+        self.assertFalse(parsed.tp3_open)
+        state = SignalState()
+        state.ingest_event(event(63, message, minute=0))
+        stored = state.signals["1:63"]
+        self.assertEqual(stored.tps, {1: 4107, 2: 4120})
+        self.assertFalse(stored.tp3_open)
+
     def test_capital_explicit_open_runner_persists_without_invented_tp(self) -> None:
         original = ("XAUUSD 4084-85 BUY\nTP1: 4090\nTP2: 4098\n"
                     "TP3: OPEN\nSL: 4079")
