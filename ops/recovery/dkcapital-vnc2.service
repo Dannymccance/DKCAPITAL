@@ -1,7 +1,7 @@
 [Unit]
 Description=DK Capital MT5 Account 2 VNC (SSH tunnel only)
 After=network-online.target dkcapital-mt5-2.service
-Wants=dkcapital-mt5-2.service
+# Observation-only: starting VNC must not start or restart the MT5 terminal.
 StartLimitIntervalSec=0
 
 [Service]
@@ -12,7 +12,7 @@ WorkingDirectory=/var/lib/dkcapital-mt5-2
 Environment=HOME=/var/lib/dkcapital-mt5-2
 Environment=XAUTHORITY=/var/lib/dkcapital-mt5-2/.Xauthority
 ExecStartPre=/usr/bin/timeout 90 /bin/sh -c 'until test -S /tmp/.X11-unix/X151; do sleep 2; done'
-ExecStart=/usr/bin/x11vnc -display :151 -auth /var/lib/dkcapital-mt5-2/.Xauthority -rfbport 5903 -localhost -forever -shared -rfbauth /var/lib/dkcapital-mt5-2/.vnc/passwd -o /tmp/dkcapital-vnc2.log
+ExecStart=/usr/bin/x11vnc -display :151 -auth /var/lib/dkcapital-mt5-2/.Xauthority -rfbport 5902 -localhost -forever -shared -rfbauth /var/lib/dkcapital-mt5-2/.vnc/passwd -o /tmp/dkcapital-vnc2.log
 Restart=always
 RestartSec=15
 NoNewPrivileges=true
