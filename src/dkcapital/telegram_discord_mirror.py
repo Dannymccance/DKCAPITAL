@@ -6,11 +6,22 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import discord
 
 logger = logging.getLogger("dkcapital.telegram_mirror")
+
+# Existing private DK Capital Discord #chats channel. Preserve any deliberate
+# DISCORD_TELEGRAM_CHATS_CHANNEL_ID override, including 0 to disable mirroring.
+DEFAULT_CHATS_CHANNEL_ID = 1559140564253806593
+
+
+def chats_channel_id() -> int:
+    """Choose the already established #chats destination by default."""
+    configured = os.getenv("DISCORD_TELEGRAM_CHATS_CHANNEL_ID", "").strip()
+    return int(configured) if configured else DEFAULT_CHATS_CHANNEL_ID
 
 
 def format_message(event: dict) -> str:

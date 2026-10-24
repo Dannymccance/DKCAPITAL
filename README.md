@@ -65,6 +65,26 @@ The agreed V2 operating dashboard will show MT5 Account 1 **broker-verified** ba
 
 **Not yet implemented:** the existing Discord bot updates its source-signal and separate paper dashboards only; it does not receive authoritative Account 1 fills, balance or P&L. MT5 read-only telemetry plus tests must be implemented before broker results appear in Discord. Do not enable V2 trading yet.
 
+## Private Telegram messages in existing Discord #chats
+
+Every message from a monitored Telegram source (including GWS VIP, GWS - MONEY
+HOUSE, GWS - CAPITAL, GWS - STORM, Elite and sources explicitly listed in
+`TELEGRAM_SOURCE_CHATS`) is saved to the shared event log and mirrored into
+the **existing** private Discord `#chats` channel
+(`1559140564253806593`). The mirror includes normal messages, new signals,
+replies and TP/SL updates. Edits update the corresponding Discord message,
+and Telegram deletions delete the mirrored message.
+
+`DISCORD_TELEGRAM_CHATS_CHANNEL_ID` defaults to this existing channel ID
+when unset. An explicit `0` disables the mirror, and an explicit different
+ID overrides the destination. The Discord bot needs permission to view this
+private channel, send embeds, edit its own messages and manage its mirrored
+messages. The mirror polls the event log every five seconds and does not
+independently listen to unrelated private Telegram conversations.
+Messages are routed only after the Telegram listener and Discord bot have
+been updated on the VPS. No historical replay is performed on a freshly
+initialized mirror state, but existing mirror offsets remain intact.
+
 ## Discord dashboard
 
 Once the bot is online, run this slash command in the channel where you want the live dashboard:
