@@ -58,6 +58,7 @@ class Settings:
     telegram_api_hash: str | None
     telegram_session_string: str | None
     telegram_source_chats: tuple[ChatRef, ...]
+    telegram_auto_gws_sources: bool
     telegram_event_log_path: Path
     signal_state_path: Path
 
@@ -122,6 +123,7 @@ class Settings:
             telegram_api_hash=os.getenv("TELEGRAM_API_HASH", "").strip() or None,
             telegram_session_string=os.getenv("TELEGRAM_SESSION_STRING", "").strip() or None,
             telegram_source_chats=tuple(_chat_ref(v) for v in _csv("TELEGRAM_SOURCE_CHATS")),
+            telegram_auto_gws_sources=_bool("TELEGRAM_AUTO_GWS_SOURCES", True),
             telegram_event_log_path=Path(
                 os.getenv("TELEGRAM_EVENT_LOG_PATH", "/app/data/telegram-events.jsonl")
             ),
@@ -288,7 +290,7 @@ class Settings:
         missing: list[str] = []
         if not self.telegram_session_string:
             missing.append("TELEGRAM_SESSION_STRING")
-        if not self.telegram_source_chats:
+        if not self.telegram_source_chats and not self.telegram_auto_gws_sources:
             missing.append("TELEGRAM_SOURCE_CHATS")
 
         if missing:
