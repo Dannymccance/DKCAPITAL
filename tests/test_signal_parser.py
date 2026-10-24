@@ -73,6 +73,19 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(stored.tps, {1: 4107, 2: 4120})
         self.assertFalse(stored.tp3_open)
 
+    def test_four_target_telegram_is_retained_by_parser_and_state(self) -> None:
+        original = ("GWS - CAPITAL\\n"
+                    "XAUUSD 4003 - 4000: Buy\\n"
+                    "TP1: 4010\\nTP2: 4020\\nTP3: 4030\\nTP4: 4040\\nSL: 3996")
+        original = original.replace("\\\\n", "\\n")
+        action = parse_actions(original)[0]
+        self.assertEqual(action.kind, "new_signal")
+        self.assertEqual(action.tps, {1: 4010, 2: 4020, 3: 4030, 4: 4040})
+        state = SignalState()
+        state.ingest_event(event(64, original, minute=0))
+        self.assertEqual(state.signals["1:64"].tps,
+                         {1: 4010, 2: 4020, 3: 4030, 4: 4040})
+
     def test_capital_explicit_open_runner_persists_without_invented_tp(self) -> None:
         original = ("XAUUSD 4084-85 BUY\nTP1: 4090\nTP2: 4098\n"
                     "TP3: OPEN\nSL: 4079")
