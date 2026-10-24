@@ -307,7 +307,7 @@ def main(argv=None) -> int:
     with state_file.with_suffix(".lock").open("a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state, should_restart, planning = plan(
-            read_json(args.state_file), eligible, now.timestamp(),
+            read_json(state_file), eligible, now.timestamp(),
         )
         if should_restart:
             # Commit restart intent before invoking systemd, including failed
