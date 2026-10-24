@@ -195,24 +195,35 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 prices = [float(signal["entry_low"]), float(signal["entry_high"]),
                           float(signal["current_sl"]) if signal.get("current_sl") is not None else 0.0]
                 tps = signal.get("tps") or {}
-                prices.extend(float(tps.get(str(i), 0) or 0) for i in (1, 2, 3))
+                prices.extend(float(tps.get(str(i), 0) or 0) for i in (1, 2, 3, 4))
                 if not all(__import__("math").isfinite(v) and v >= 0 for v in prices):
                     continue
             except (ValueError, TypeError, KeyError, OverflowError):
                 continue
-            # Keep the 12-field V2 wire format: an explicit provider OPEN
-            # runner is represented by the literal OPEN at the TP3 position.
-            # Unspecified TP3 stays zero and is *not* an open-runner mandate.
+            # Retain the legacy 12-field wire format for <=3 targets.
+            # Exactly four numeric TPs use 13 fields (TP4 before timestamp).
+            # Legacy V2.07/V2.08 EAs ignore these rows rather than trade
+            # three legs and silently abandon the fourth target.
+            # Never invent a missing TP or infer an OPEN runner.
+            if any(str(k).isdigit() and int(k) > 4 for k in tps):
+                continue
+            four_targets = prices[6] > 0
+            if four_targets and (prices[3] <= 0 or prices[4] <= 0 or
+                                 prices[5] <= 0 or signal.get("tp3_open")):
+                continue
             stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
             if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
                 stop_mode = "DEFER_BE"
             tp3 = "OPEN" if signal.get("tp3_open") else str(prices[5])
-            lines.append("|".join([
+            fields = [
                 "S", ident, status, direction,
                 str(prices[0]), str(prices[1]), str(prices[2]),
                 stop_mode, str(prices[3]), str(prices[4]), tp3,
-                str(int(opened.timestamp())),
-            ]))
+            ]
+            if four_targets:
+                fields.append(str(prices[6]))
+            fields.append(str(int(opened.timestamp())))
+            lines.append("|".join(fields))
             for action in signal.get("history", []):
                 if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer"):
                     continue
