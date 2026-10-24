@@ -1,4 +1,4 @@
-"""Source contracts for V2.08 two/three-target profit distribution.
+"""Source contracts for V2.09 two/three-target profit distribution.
 
 These guard source intent only. MetaEditor compilation and broker demo testing
 are still required; CI Python tests cannot certify compiled MQL execution.
@@ -39,14 +39,14 @@ class Tp2MajorityContracts(unittest.TestCase):
 
     def test_v208_explicit_two_target_policy_is_persistent(self):
         s = self.source
-        self.assertIn('#property version "2.08"', s)
-        self.assertIn('bool twoTargets=!openRunner && tp3<=0;', s)
+        self.assertIn('#property version "2.09"', s)
+        self.assertIn('bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;', s)
         self.assertIn('if(twoTargets) GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);', s)
         self.assertIn('GlobalVariableFlush', s.replace("GlobalVariablesFlush", "GlobalVariableFlush"))
         self.assertIn('bool wasTwoTargets=GlobalVariableCheck(IDKey(id,"TWO_TARGET_ENTRY"));', s)
-        self.assertIn('(leg==3 && wasTwoTargets)?tp2:tp3', s)
+        self.assertIn('(leg==3 && wasTwoTargets)?tp2:', s)
         self.assertIn('targets[1]=tp2;targets[2]=openRunner?0:(twoTargets?tp2:tp3);', s)
-        self.assertIn('!twoTargets && !openRunner && ValidTP(buy,tp3,q)<=0', s)
+        self.assertIn('!oneTarget && !twoTargets && !openRunner &&', s)
 
     def test_native_three_leg_stops_and_broker_risk_controls_preserved(self):
         entry = self.source.split("void TryEntry(", 1)[1].split(
@@ -83,7 +83,7 @@ class Tp2MajorityContracts(unittest.TestCase):
 
     def test_no_unintended_tp3_or_open_runner(self):
         s = self.source
-        self.assertIn('bool twoTargets=!openRunner && tp3<=0;', s)
+        self.assertIn('bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;', s)
         self.assertIn('if(tp1<=0 || tp2<=0 ||', s)
         self.assertIn('if(openRunner && !EnableOpenRunnerEntries)', s)
         self.assertIn('bool wasTwoTargets=GlobalVariableCheck', s)
