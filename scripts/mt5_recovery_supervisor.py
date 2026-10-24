@@ -252,6 +252,13 @@ def cycle(
             "last_restart_at": record.get("restart_at"),
             "auto_recover": bool(profile.get("auto_recover")),
         }
+    durable = list(state.get("events") or [])
+    for ev in events:
+        ev["id"] = f"{ev['account']}:{ev['at']}:{ev['result']}"
+        durable.append(ev)
+    # Keep enough for a temporary Discord outage while bounding state size.
+    state["events"] = durable[-100:]
+    results["events"] = list(state["events"])
     return results, events, state
 
 
