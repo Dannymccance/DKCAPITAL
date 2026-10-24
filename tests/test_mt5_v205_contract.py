@@ -78,6 +78,22 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("adverse=buy ? fill-quote.bid : quote.ask-fill", code)
         self.assertIn("slMode!=\"DEFER_BE\"", code)
 
+    def test_storm_45_second_freshness_is_source_specific(self):
+        source = self.code
+        self.assertIn("input int StormMaximumSignalAgeSeconds = 45;", source)
+        self.assertIn("int SignalAgeLimit(const string id)", source)
+        self.assertIn(
+            "IsStormSignal(id) ? MathMin(MaximumSignalAgeSeconds,StormMaximumSignalAgeSeconds)",
+            source,
+        )
+        entry = source.split("void TryEntry(", 1)[1].split(
+            "// Original three-leg broker fills", 1)[0]
+        layer = source.split("void TryLayer(", 1)[1].split(
+            "bool ActionKeySeen(", 1)[0]
+        self.assertIn("int maxAge=SignalAgeLimit(id);", entry)
+        self.assertIn("if(age<0 || age>maxAge)", entry)
+        self.assertIn("age>SignalAgeLimit(id)", layer)
+
     def test_mt5_exit_reasons_never_inferred_from_provider(self):
         code = self.code
         self.assertIn("DEAL_REASON_TP", code)
