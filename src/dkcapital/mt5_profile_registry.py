@@ -44,6 +44,10 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
             seen.add(ident)
             if type(raw.get("enabled")) is not bool:
                 raise ValueError("enabled must be explicit boolean")
+            if not raw["enabled"]:
+                if ident == 1:
+                    raise ValueError("existing Account 1 must remain monitored")
+                continue
             label = raw.get("label")
             if not isinstance(label, str) or not label.strip() or len(label) > 80:
                 raise ValueError("invalid label")
