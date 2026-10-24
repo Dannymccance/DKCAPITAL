@@ -715,8 +715,8 @@ void TryEntry(const string id,const string status,const string direction,
    if(budget<=initialLegCount*RiskPaddingGBPPerLeg)
    {
       RecordDecision(id,"ENTRY",
-                     signalRemaining<=3*RiskPaddingGBPPerLeg ?
-                     "SIGNAL_RISK_TOO_SMALL_FOR_THREE_LEGS" :
+                     signalRemaining<=initialLegCount*RiskPaddingGBPPerLeg ?
+                     "SIGNAL_RISK_TOO_SMALL_FOR_REQUIRED_LEGS" :
                      "GROUP_OR_PORTFOLIO_RISK_LIMIT",age);
       return;
    }
@@ -778,18 +778,18 @@ void TryEntry(const string id,const string status,const string direction,
          RiskGBP(buy,minA,fill,sl)+
          (oneTarget?0:RiskGBP(buy,minB,fill,sl)+RiskGBP(buy,minC,fill,sl))+
          (fourTargets?RiskGBP(buy,minD,fill,sl):0) : -1;
-      string reason="MINIMUM_THREE_LEG_SIZE_OR_MARGIN";
+      string reason="MINIMUM_LEG_SIZE_OR_MARGIN";
       if(minAvailable && minimumRisk>=0 && minimumRisk>budget+1e-7)
-         reason="MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
+         reason="MINIMUM_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
       else if(targetLots<initialLegCount*minlot-1e-8)
-         reason="BALANCE_BASED_TARGET_BELOW_THREE_MINIMUM_LOTS";
+         reason="BALANCE_TARGET_BELOW_REQUIRED_MINIMUM_LOTS";
       else if(!oneTarget && !twoTargets &&
               targetLots<(fourTargets?5:4)*minlot-1e-8)
          reason="TP2_MAJORITY_REQUIRES_ADDITIONAL_LOT_STEP";
       RecordDecision(id,"ENTRY",reason,age);
       Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
             " signalCapGBP=",signalLimit," targetLots=",targetLots,
-            " minimumRiskGBP=",minimumRisk," three-leg minimum cannot fit");
+            " minimumRiskGBP=",minimumRisk," required legs/TP2 majority cannot fit");
       return;
    }
    // Durable intent before first broker request prevents duplicates on restart.
@@ -931,13 +931,16 @@ void TryLayer(const string id,const long mid,const double percentage,
       layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX))
    {RecordDecision(id,"LAYER","LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL",age);return;}
 
-   // No layer after TP1 or any missing original leg.
+   // No layer after TP1 or any missing original leg. On a four
+   // target trade, the TP4 position is original leg 5, not the layer 4.
+   bool fourTargets=GlobalVariableCheck(IDKey(id,"FOUR_TARGET_ENTRY"));
    double priceVolume=0,openVolume=0,protectiveSL=0;
-   for(int leg=1;leg<=3;leg++)
+   for(int leg=1;leg<=TP4_LEG;leg++)
    {
+      if(leg==LAYER_LEG || (leg==TP4_LEG && !fourTargets)) continue;
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket))
-      {RecordDecision(id,"LAYER","LAYER_REQUIRES_THREE_OPEN_ORIGINAL_LEGS",age);return;}
+      {RecordDecision(id,"LAYER","LAYER_REQUIRES_ALL_ORIGINAL_LEGS_OPEN",age);return;}
       if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) return;
       double lots=PositionGetDouble(POSITION_VOLUME);
       double sl=PositionGetDouble(POSITION_SL);
@@ -1269,18 +1272,21 @@ void ProcessFeed(const string content)
       string f[];StringTrimLeft(lines[i]);StringTrimRight(lines[i]);
       if(lines[i]=="") continue;
       int fields=StringSplit(lines[i],'|',f);
-      if(fields==12 && f[0]=="S")
+      if((fields==12 || fields==13) && f[0]=="S")
       {
          if(f[3]!="BUY" && f[3]!="SELL") continue;
          double low=StringToDouble(f[4]),high=StringToDouble(f[5]);
          if(low<=0 || high<=0) continue;
          bool openRunner=f[10]=="OPEN";
+         if(fields==13 && openRunner) continue;
+         double fourth=fields==13?StringToDouble(f[11]):0;
+         long openedAt=(long)StringToInteger(f[fields-1]);
          TryEntry(f[1],f[2],f[3],low,high,StringToDouble(f[6]),
-            (long)StringToInteger(f[11]),StringToDouble(f[8]),
-            StringToDouble(f[9]),StringToDouble(f[10]),openRunner);
+            openedAt,StringToDouble(f[8]),StringToDouble(f[9]),
+            StringToDouble(f[10]),fourth,openRunner);
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
-            StringToDouble(f[8]),StringToDouble(f[9]),StringToDouble(f[10]),
-            openRunner);
+            StringToDouble(f[8]),StringToDouble(f[9]),
+            StringToDouble(f[10]),fourth,openRunner);
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
@@ -1290,8 +1296,9 @@ void ProcessFeed(const string content)
          for(int j=1;j<i;j++)
          {
             string prior[];
-            if(StringSplit(lines[j],'|',prior)!=12 ||
-               prior[0]!="S" || prior[1]!=f[1]) continue;
+            int n=StringSplit(lines[j],'|',prior);
+            if((n!=12 && n!=13) || prior[0]!="S" || prior[1]!=f[1])
+               continue;
             TryLayer(f[1],(long)StringToInteger(f[2]),StringToDouble(f[3]),
                      (int)StringToInteger(f[4]),StringToDouble(f[5]),
                      (long)StringToInteger(f[6]),f[7],prior[2],prior[3],
