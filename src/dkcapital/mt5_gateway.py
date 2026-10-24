@@ -163,7 +163,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             result.append("|".join(fields))
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
-    def _demo_v2_feed(self) -> None:
+    def _demo_v2_feed(self, *, v3: bool = False) -> None:
         """Read-only V2 instruction feed: signals plus attributable explicit exits.
 
         Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
@@ -174,7 +174,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "demo_feed_disabled"})
             return
         state = _json(self.config.signal_state_path)
-        lines = ["DKDEMO2"]
+        lines = ["DKDEMO3" if v3 else "DKDEMO2"]
         for signal in state.get("signals", []):
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
                 continue
@@ -211,6 +211,11 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             if four_targets and (prices[3] <= 0 or prices[4] <= 0 or
                                  prices[5] <= 0 or signal.get("tp3_open")):
                 continue
+            # A legacy EA cannot place all four native exits. Keep its
+            # position-management feed but turn any new entry instruction
+            # into non-executable status. V2.09 uses DKDEMO3 instead.
+            if four_targets and not v3 and status == "ACTIVE":
+                status = "CANCELLED"
             stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
             if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
                 stop_mode = "DEFER_BE"
@@ -220,7 +225,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 str(prices[0]), str(prices[1]), str(prices[2]),
                 stop_mode, str(prices[3]), str(prices[4]), tp3,
             ]
-            if four_targets:
+            if four_targets and v3:
                 fields.append(str(prices[6]))
             fields.append(str(int(opened.timestamp())))
             lines.append("|".join(fields))
@@ -335,11 +340,11 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if self.path == "/v2/demo/feed":
+        if self.path in ("/v2/demo/feed", "/v3/demo/feed"):
             if not self._authorized():
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
                 return
-            self._demo_v2_feed()
+            self._demo_v2_feed(v3=self.path == "/v3/demo/feed")
             return
 
         if self.path == "/v2/demo/account1":
