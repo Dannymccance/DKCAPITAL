@@ -40,6 +40,17 @@ Ordinary commentary is ignored. Recognized updates that cannot be safely attache
 3. Generate a Telegram StringSession using `scripts/generate_telegram_session.py`.
 4. Put the generated session string in `.env`.
 5. Set `TELEGRAM_SOURCE_CHATS` to the channel/group IDs or usernames you want to listen to.
+
+   GWS channel discovery is also enabled by default using `TELEGRAM_AUTO_GWS_SOURCES=true`.
+   A joined channel with the exact title `GWS - MONEY HOUSE`, `GWS - CAPITAL`,
+   `GWS - STORM` or `GWS (VIP)` (also `GWS - VIP`/`GWS VIP`) joins
+   the monitored sources automatically, normally within one minute.
+   Other Telegram channels are ignored; ambiguous duplicate titles are rejected.
+   **Channel titles are not an identity guarantee.** Before allowing real-money
+   execution from a newly detected source, verify the channel ID using
+   `docker compose run --rm telegram-dialogs` and pin it in
+   `TELEGRAM_SOURCE_CHATS`. Disable title discovery with
+   `TELEGRAM_AUTO_GWS_SOURCES=false` if only verified IDs should be used.
 6. Add the Discord bot token and server ID.
 7. Start the services.
 
