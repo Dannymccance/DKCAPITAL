@@ -191,6 +191,14 @@ class ReportingUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
 
+    def test_accepts_owned_fifth_leg_for_native_tp4(self):
+        data = example()
+        data["positions"][0]["magic"] = MAGIC + 5
+        data["deals"][0]["magic"] = MAGIC + 5
+        normalized = normalize_telemetry(data, LOGIN)
+        self.assertEqual(normalized["positions"][0]["leg"], 5)
+        self.assertEqual(normalized["deals"][0]["magic"], MAGIC + 5)
+
     def test_rejects_unowned_sixth_leg(self):
         data = example()
         data["positions"][0]["magic"] = MAGIC + 6
