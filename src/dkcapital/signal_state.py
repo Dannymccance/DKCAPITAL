@@ -33,6 +33,8 @@ class Signal:
     original_sl: float | None = None
     current_sl: float | None = None
     sl_mode: str = "PRICE"
+    be_deferred: bool = False
+    tp3_open: bool = False
     tp_hits: list[int] = field(default_factory=list)
     layers: int = 1
     reentries: int = 0
@@ -170,6 +172,7 @@ class SignalState:
                         original_sl=action.sl,
                         current_sl=action.sl,
                         sl_mode="PRICE" if action.sl is not None else "UNSET",
+                        tp3_open=action.tp3_open,
                         layer_max=action.layer_max,
                         source_style=action.source_style,
                         last_update_at=timestamp,
@@ -436,6 +439,8 @@ class SignalState:
         signal.current_sl = action.sl
         signal.sl_mode = "PRICE" if action.sl is not None else "UNSET"
         signal.layer_max = action.layer_max
+        signal.tp3_open = action.tp3_open
+        signal.be_deferred = False
         if action.source_style is not None:
             signal.source_style = action.source_style
         signal.last_update_at = timestamp
@@ -645,12 +650,24 @@ class SignalState:
             history_event["sl_mode_before"] = signal.sl_mode
             if action.tps:
                 history_event["tps"] = dict(action.tps)
+                # A single explicit TP correction must not erase the
+                # untouched targets on the original provider signal.
+                revised_targets = dict(signal.tps)
+                revised_targets.update(action.tps)
                 signal.tps = self._validated_tps(
-                    action.tps,
+                    revised_targets,
                     signal.direction,
                     signal.entry_low,
                     signal.entry_high,
                 )
+                if 3 in action.tps:
+                    signal.tp3_open = False
+            if action.tp3_open:
+                signal.tp3_open = True
+                history_event["tp3_open"] = True
+            if action.defer_breakeven and signal.sl_mode != "BREAKEVEN":
+                signal.be_deferred = True
+                history_event["defer_breakeven"] = True
 
             if action.tp_hits:
                 history_event["tp_hits"] = list(action.tp_hits)
@@ -660,6 +677,7 @@ class SignalState:
             signal.tp_hits.sort()
 
             if action.move_sl_to_be:
+                signal.be_deferred = False
                 signal.sl_mode = "BREAKEVEN"
                 signal.current_sl = None
                 history_event["move_sl_to_be"] = True

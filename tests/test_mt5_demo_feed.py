@@ -72,6 +72,47 @@ class DemoFeedTests(unittest.TestCase):
         self.assertEqual(fields[:4], ["S", "-10077:43", "ACTIVE", "BUY"])
         self.assertEqual(fields[8:11], ["4112.0", "4114.5", "4146.5"])
 
+    def test_v2_open_runner_and_explicit_be_defer_use_twelve_fields(self):
+        self.path.write_text(json.dumps({
+            "signals": [{
+                "symbol": "XAUUSD", "signal_id": "-1004334637102:8",
+                "status": "ACTIVE", "direction": "BUY",
+                "entry_low": 4084, "entry_high": 4085, "current_sl": 4079,
+                "sl_mode": "PRICE", "be_deferred": True,
+                "tp3_open": True, "tps": {"1": 4090, "2": 4098},
+                "opened_at": datetime.now(UTC).isoformat(),
+                "history": [],
+            }],
+        }), encoding="utf-8")
+        url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        with urlopen(Request(url, headers={
+            "Authorization": "Bearer " + self.token
+        }), timeout=3) as response:
+            lines = response.read().decode("utf-8").splitlines()
+        self.assertEqual(lines[0], "DKDEMO2")
+        f = lines[1].split("|")
+        self.assertEqual(len(f), 12)
+        self.assertEqual(f[1], "-1004334637102:8")
+        self.assertEqual(f[7], "DEFER_BE")
+        self.assertEqual(f[8:11], ["4090.0", "4098.0", "OPEN"])
+
+    def test_missing_third_tp_does_not_become_runner(self):
+        self.path.write_text(json.dumps({
+            "signals": [{
+                "symbol": "XAUUSD", "signal_id": "-1004334637102:9",
+                "status": "ACTIVE", "direction": "SELL",
+                "entry_low": 4084, "entry_high": 4085, "current_sl": 4090,
+                "sl_mode": "PRICE", "tps": {"1": 4080, "2": 4078},
+                "opened_at": datetime.now(UTC).isoformat(),
+            }],
+        }), encoding="utf-8")
+        url = f"http://127.0.0.1:{self.server.server_port}/v2/demo/feed"
+        with urlopen(Request(url, headers={
+            "Authorization": "Bearer " + self.token
+        }), timeout=3) as response:
+            f = response.read().decode("utf-8").splitlines()[1].split("|")
+        self.assertEqual(f[10], "0.0")
+
     def test_injected_ids_rejected(self):
         self.path.write_text(json.dumps({"signals": [{
             "symbol": "XAUUSD", "signal_id": "malicious\nS|",

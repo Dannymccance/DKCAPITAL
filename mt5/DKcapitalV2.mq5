@@ -3,7 +3,7 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.05"
+#property version "2.06"
 #include <Trade/Trade.mqh>
 
 input string FeedUrl = "http://127.0.0.1:8765/v2/demo/feed";
@@ -13,6 +13,11 @@ input string GoldSymbol = "XAUUSD";
 input long ExpectedDemoLogin = 0;
 input bool EnableNewEntries = false; // MUST remain false until accepted on demo.
 input bool EnableLayerEntries = false; // Separate opt-in after broker-side layer tests.
+// Provider-specific optional rules. Both remain OFF until isolated broker demo testing.
+input bool EnableOpenRunnerEntries = false; // Only TP3 explicitly marked OPEN may use no native TP.
+input bool EnableStormConditionalTP1 = false; // GWS STORM: TP1 only after 20 pips adverse.
+input double StormPipSizeUSD = 0.10; // Explicit USD/pip conversion for GWS STORM.
+input double StormDrawdownPips = 20.0;
 input double MaxGroupRiskGBP = 75.0;
 input double MaxSignalRiskPct = 4.0; // Maximum planned stop risk at the PROVIDER SL, across all TP legs and layer.
 input double MaxPortfolioRiskGBP = 150.0;
@@ -458,11 +463,40 @@ bool TP1BrokerConfirmed(const string id)
    }
    return false;
 }
+bool IsStormSignal(const string id)
+{
+   return StringFind(id,"-1004334637102:")==0;
+}
+bool StormTP1DrawdownReached(const string id,const string direction)
+{
+   string key=IDKey(id,"STORM_DRAWDOWN_TP1");
+   if(GlobalVariableCheck(key) && GlobalVariableGet(key)==1) return true;
+   if(!GlobalVariableCheck(IDKey(id,"STORM_TP_POLICY"))) return false;
+   ulong ticket=TicketForLeg(id,1);
+   if(ticket==0 || !PositionSelectByTicket(ticket)) return false;
+   MqlTick quote;
+   if(!SymbolInfoTick(GoldSymbol,quote) || quote.bid<=0 || quote.ask<=0) return false;
+   bool buy=direction=="BUY";
+   double fill=PositionGetDouble(POSITION_PRICE_OPEN);
+   // Observed adverse excursion at the poll time, not an assumed intrabar low.
+   double adverse=buy ? fill-quote.bid : quote.ask-fill;
+   double threshold=StormDrawdownPips*StormPipSizeUSD;
+   if(threshold<=0 || adverse<threshold) return false;
+   GlobalVariableSet(key,1);
+   GlobalVariablesFlush();
+   Print("DK2 STORM TP1 activated after observed drawdown id=",id,
+         " adverseUSD=",adverse," thresholdUSD=",threshold);
+   return true;
+}
 void ManageLegs(const string id,const string direction,const double stop,
-                const string slMode,const double tp1,const double tp2,const double tp3)
+                const string slMode,const double tp1,const double tp2,const double tp3,
+                const bool openRunner)
 {
    bool buy=direction=="BUY";
    bool tp1Confirmed=TP1BrokerConfirmed(id);
+   bool stormAdaptive=IsStormSignal(id) &&
+      GlobalVariableCheck(IDKey(id,"STORM_TP_POLICY"));
+   bool stormUseTP1=stormAdaptive && StormTP1DrawdownReached(id,direction);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
    for(int leg=1;leg<=4;leg++)
@@ -479,7 +513,8 @@ void ManageLegs(const string id,const string direction,const double stop,
       // caps are intentionally checked only when opening a new position.
       bool slAlreadyAtOrBeyondBE=(currentSL>0 &&
                                    (buy ? currentSL>=fill : currentSL<=fill));
-      bool preserveBE=(slMode=="BREAKEVEN" || (tp1Confirmed && leg!=1) ||
+      bool preserveBE=(slMode=="BREAKEVEN" ||
+                       (tp1Confirmed && leg!=1 && slMode!="DEFER_BE") ||
                        slAlreadyAtOrBeyondBE);
       if(preserveBE)
       {
@@ -497,7 +532,8 @@ void ManageLegs(const string id,const string direction,const double stop,
          wantedSL=NormalizePrice(stop);
       }
       // The separately tracked 10% layer exits at TP2.
-      double rawTP=leg==1?tp1:(leg==2 || leg==LAYER_LEG?tp2:tp3);
+      double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;
+      double rawTP=leg==1?firstTarget:(leg==2 || leg==LAYER_LEG?tp2:tp3);
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -516,7 +552,7 @@ void ManageLegs(const string id,const string direction,const double stop,
 }
 void TryEntry(const string id,const string status,const string direction,
               double low,double high,double providerSL,const long opened,
-              double tp1,double tp2,double tp3)
+              double tp1,double tp2,double tp3,const bool openRunner)
 {
    if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
@@ -561,10 +597,12 @@ void TryEntry(const string id,const string status,const string direction,
    }
    // Do not open an unintended runner when Telegram target numbering is
    // malformed or a native target is already behind the broker quote.
-   if(tp1<=0 || tp2<=0 || tp3<=0 ||
+   if(tp1<=0 || tp2<=0 || (!openRunner && tp3<=0) ||
       ValidTP(buy,tp1,q)<=0 || ValidTP(buy,tp2,q)<=0 ||
-      ValidTP(buy,tp3,q)<=0)
+      (!openRunner && ValidTP(buy,tp3,q)<=0))
    {RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);return;}
+   if(openRunner && !EnableOpenRunnerEntries)
+   {RecordDecision(id,"ENTRY","OPEN_RUNNER_REQUIRES_OPT_IN",age);return;}
    double sl=NormalizePrice(providerSL);
    if(!StopValid(buy,sl,q))
    {RecordDecision(id,"ENTRY","BROKER_SL_INVALID",age);return;}
@@ -652,14 +690,19 @@ void TryEntry(const string id,const string status,const string direction,
       return;
    }
    // Durable intent before first broker request prevents duplicates on restart.
+   bool stormAdaptive=EnableStormConditionalTP1 && IsStormSignal(id);
+   if(stormAdaptive) GlobalVariableSet(IDKey(id,"STORM_TP_POLICY"),1);
    GlobalVariableSet(IDKey(id,"ATTEMPT"),(double)TimeGMT());
    GlobalVariablesFlush();
-   double targets[3];targets[0]=tp1;targets[1]=tp2;targets[2]=tp3;
+   // Default STORM first leg to TP2; use TP1 only if subsequent observed
+   // adverse excursion reaches the configured 20-pip threshold.
+   double targets[3];targets[0]=stormAdaptive?tp2:tp1;
+   targets[1]=tp2;targets[2]=openRunner?0:tp3;
    bool allGood=true;
    for(int leg=1;leg<=3;leg++)
    {
       trade.SetExpertMagicNumber(LegMagic(id,leg));
-      double tp=ValidTP(buy,targets[leg-1],q);
+      double tp=(leg==3 && openRunner)?0:ValidTP(buy,targets[leg-1],q);
       bool sent=buy?trade.Buy(vols[leg-1],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg)):
                     trade.Sell(vols[leg-1],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg));
       ulong ticket=TicketForLeg(id,leg);
@@ -1119,11 +1162,13 @@ void ProcessFeed(const string content)
          if(f[3]!="BUY" && f[3]!="SELL") continue;
          double low=StringToDouble(f[4]),high=StringToDouble(f[5]);
          if(low<=0 || high<=0) continue;
+         bool openRunner=f[10]=="OPEN";
          TryEntry(f[1],f[2],f[3],low,high,StringToDouble(f[6]),
             (long)StringToInteger(f[11]),StringToDouble(f[8]),
-            StringToDouble(f[9]),StringToDouble(f[10]));
+            StringToDouble(f[9]),StringToDouble(f[10]),openRunner);
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
-            StringToDouble(f[8]),StringToDouble(f[9]),StringToDouble(f[10]));
+            StringToDouble(f[8]),StringToDouble(f[9]),StringToDouble(f[10]),
+            openRunner);
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
@@ -1175,7 +1220,8 @@ int OnInit()
       MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
       MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||
       DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
-      RiskReferenceBalanceGBP<=0)
+      RiskReferenceBalanceGBP<=0 || StormPipSizeUSD<=0 ||
+      StormDrawdownPips<=0)
    {Print("DK2 invalid configuration");return INIT_PARAMETERS_INCORRECT;}
    if(!SymbolSelect(GoldSymbol,true)) return INIT_FAILED;
    trade.SetAsyncMode(false);
@@ -1183,7 +1229,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.05 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.06 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }

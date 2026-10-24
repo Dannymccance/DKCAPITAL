@@ -190,7 +190,24 @@ def _partial_percent(text: str) -> float | None:
     return None
 
 
+def _defer_breakeven(text: str) -> bool:
+    """Provider explicitly says TP1 does not authorize a BE move yet."""
+    return bool(re.search(
+        r"\b(?:NO|NOT|DON'?T\s+(?:SET|MOVE)\s+(?:TO\s+)?)\s*"
+        r"(?:BREAKEVEN|BREAK\s*EVEN|BE)\s+YET\b",
+        text,
+    ))
+
+
+def _tp3_open(text: str) -> bool:
+    return bool(re.search(r"\bTP\s*3\s*[:=@-]?\s*OPEN\b", text))
+
+
 def _move_to_be(text: str) -> bool:
+    if _defer_breakeven(text):
+        return False
+    if re.search(r"\b(?:SET|SETTY|MOVE)\s+(?:ALL\s+)?(?:TO\s+)?BREAKEVEN\b", text):
+        return True
     return bool(
         re.search(
             r"\b(?:SL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN|ENTRY)|"
@@ -208,6 +225,14 @@ def _scope(
     reply_to_message_id: int | None,
     symbol: str | None,
 ) -> str:
+    # An explicit ALL-provider breakeven command applies across that
+    # provider's active positions; replying to one post doesn't reduce ALL.
+    if re.search(
+        r"\b(?:SET|SETTY|MOVE)\s+ALL\s+(?:TO\s+)?(?:BE|BREAKEVEN|BREAK\s*EVEN)\b"
+        r"|\bALL\s+(?:SL|STOP(?:\s+LOSS)?)\s+TO\s+(?:BE|BREAKEVEN|BREAK\s*EVEN)\b",
+        text,
+    ):
+        return "all_direction"
     if reply_to_message_id is not None:
         return "reply"
     if re.search(r"\bALL\s+(?:GOLD|XAU(?:USD|USDT)?|BTC(?:USD|USDT)?)\b", text):
@@ -230,6 +255,8 @@ class ParsedAction:
     sl: float | None = None
     tp_hits: tuple[int, ...] = ()
     move_sl_to_be: bool = False
+    defer_breakeven: bool = False
+    tp3_open: bool = False
     layer_max: float | None = None
     partial_percent: float | None = None
     source_style: str | None = None
@@ -248,6 +275,8 @@ class ParsedAction:
             "sl": self.sl,
             "tp_hits": list(self.tp_hits),
             "move_sl_to_be": self.move_sl_to_be,
+            "defer_breakeven": self.defer_breakeven,
+            "tp3_open": self.tp3_open,
             "layer_max": self.layer_max,
             "partial_percent": self.partial_percent,
             "source_style": self.source_style,
@@ -282,6 +311,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 entry_low=min(first, second),
                 entry_high=max(first, second),
                 tps=_extract_tps(normalized),
+                tp3_open=_tp3_open(normalized),
                 sl=_explicit_sl(normalized),
                 layer_max=_layer_max(normalized),
                 source_style="gws",
@@ -305,6 +335,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 entry_low=gold_zone[0],
                 entry_high=gold_zone[1],
                 tps=_extract_tps(normalized),
+                tp3_open=_tp3_open(normalized),
                 sl=_explicit_sl(normalized),
                 source_style="gws",
                 scope="new",
@@ -362,6 +393,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                     entry_low=structured_entry,
                     entry_high=structured_entry,
                     tps=_extract_tps(normalized),
+                    tp3_open=_tp3_open(normalized),
                     sl=structured_sl,
                     source_style="elite",
                     scope="new",
@@ -517,6 +549,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
 
     tp_hits = _extract_tp_hits(normalized)
     move_to_be = _move_to_be(normalized)
+    defer_be = _defer_breakeven(normalized)
+    tp3_open = _tp3_open(normalized)
     sl = None if move_to_be else _explicit_sl(normalized)
     tps = _extract_tps(normalized)
     layer_max = _layer_max(normalized)
@@ -525,7 +559,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
         action.kind in {"stop_loss", "setup_failed", "breakeven_close"}
         for action in actions
     )
-    if tps or tp_hits or move_to_be or sl is not None or layer_max is not None:
+    if tps or tp_hits or move_to_be or defer_be or tp3_open or sl is not None or layer_max is not None:
         if not terminal_result or tp_hits:
             actions.append(
                 ParsedAction(
@@ -536,6 +570,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                     sl=sl,
                     tp_hits=tuple(tp_hits),
                     move_sl_to_be=move_to_be,
+                    defer_breakeven=defer_be,
+                    tp3_open=tp3_open,
                     layer_max=layer_max,
                     scope=scope,
                     reply_to_message_id=reply_to_message_id,

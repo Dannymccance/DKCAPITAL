@@ -52,14 +52,31 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("EnableLayerEntries = false", source)
         self.assertNotIn("DailyLossAllowed()", entry + layer)
 
-    def test_no_unplanned_tp_runner(self):
+    def test_only_explicit_provider_open_runner_with_demo_opt_in(self):
         entry = self.code.split("void TryEntry(", 1)[1].split(
             "// Original three-leg broker fills", 1)[0]
-        self.assertIn("if(tp1<=0 || tp2<=0 || tp3<=0 ||", entry)
-        for target in ("tp1", "tp2", "tp3"):
-            self.assertIn(f"ValidTP(buy,{target},q)<=0", entry)
+        self.assertIn("input bool EnableOpenRunnerEntries = false;", self.code)
+        self.assertIn("(!openRunner && tp3<=0)", entry)
+        self.assertIn("(!openRunner && ValidTP(buy,tp3,q)<=0)", entry)
+        self.assertIn('if(openRunner && !EnableOpenRunnerEntries)', entry)
+        self.assertIn('"OPEN_RUNNER_REQUIRES_OPT_IN"', entry)
         self.assertIn('"MISSING_OR_INVALID_NATIVE_TP"', entry)
         self.assertIn("StopValid(buy,providerSL,q)", entry)
+        self.assertIn('double tp=(leg==3 && openRunner)?0:ValidTP', entry)
+
+    def test_storm_drawdown_tp1_rule_is_source_scoped_and_persistent(self):
+        code = self.code
+        self.assertIn("input bool EnableStormConditionalTP1 = false;", code)
+        self.assertIn("input double StormPipSizeUSD = 0.10;", code)
+        self.assertIn("input double StormDrawdownPips = 20.0;", code)
+        self.assertIn('StringFind(id,"-1004334637102:")==0', code)
+        self.assertIn('"STORM_TP_POLICY"', code)
+        self.assertIn('"STORM_DRAWDOWN_TP1"', code)
+        self.assertIn("GlobalVariablesFlush();", code)
+        self.assertIn("double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;", code)
+        self.assertIn("targets[0]=stormAdaptive?tp2:tp1;", code)
+        self.assertIn("adverse=buy ? fill-quote.bid : quote.ask-fill", code)
+        self.assertIn("slMode!=\"DEFER_BE\"", code)
 
     def test_mt5_exit_reasons_never_inferred_from_provider(self):
         code = self.code
