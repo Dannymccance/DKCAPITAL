@@ -48,7 +48,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7", layer)
         self.assertIn("LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK", layer)
         self.assertIn("RiskGBP(buy,minA,fill,sl)", entry)
-        self.assertIn("MINIMUM_THREE_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
+        self.assertIn("MINIMUM_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
         self.assertIn("EnableLayerEntries = false", source)
         self.assertNotIn("DailyLossAllowed()", entry + layer)
 
@@ -56,8 +56,8 @@ class V205SourceContract(unittest.TestCase):
         entry = self.code.split("void TryEntry(", 1)[1].split(
             "// Original three-leg broker fills", 1)[0]
         self.assertIn("input bool EnableOpenRunnerEntries = false;", self.code)
-        self.assertIn("bool twoTargets=!openRunner && tp3<=0;", entry)
-        self.assertIn("(!twoTargets && !openRunner && ValidTP(buy,tp3,q)<=0)", entry)
+        self.assertIn("bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;", entry)
+        self.assertIn("(!oneTarget && !twoTargets && !openRunner &&", entry)
         self.assertIn("targets[2]=openRunner?0:(twoTargets?tp2:tp3);", entry)
         self.assertIn('GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);', entry)
         self.assertIn('GlobalVariablesFlush();', entry)
@@ -65,7 +65,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn('"OPEN_RUNNER_REQUIRES_OPT_IN"', entry)
         self.assertIn('"MISSING_OR_INVALID_NATIVE_TP"', entry)
         self.assertIn("StopValid(buy,providerSL,q)", entry)
-        self.assertIn('double tp=(leg==3 && openRunner)?0:ValidTP', entry)
+        self.assertIn('double tp=(i==2 && openRunner)?0:ValidTP', entry)
 
     def test_storm_drawdown_tp1_rule_is_source_scoped_and_persistent(self):
         code = self.code
@@ -77,7 +77,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn('"STORM_DRAWDOWN_TP1"', code)
         self.assertIn("GlobalVariablesFlush();", code)
         self.assertIn("double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;", code)
-        self.assertIn("targets[0]=stormAdaptive?tp2:tp1;", code)
+        self.assertIn("targets[0]=stormAdaptive && !oneTarget?tp2:tp1;", code)
         self.assertIn("adverse=buy ? fill-quote.bid : quote.ask-fill", code)
         self.assertIn("slMode!=\"DEFER_BE\"", code)
 
