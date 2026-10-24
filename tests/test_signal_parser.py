@@ -66,7 +66,7 @@ class ParserTests(unittest.TestCase):
         # A later explicit third numeric TP replaces the OPEN instruction.
         state.ingest_event(event(61, "TP3: 4104", minute=1, reply_to=60))
         self.assertFalse(state.signals["1:60"].tp3_open)
-        self.assertEqual(state.signals["1:60"].tps[3], 4104)
+        self.assertEqual(state.signals["1:60"].tps, {1: 4090, 2: 4098, 3: 4104})
 
     def test_provider_no_breakeven_yet_survives_tp1_report(self) -> None:
         signal_text = ("BUY XAUUSD AT 4150 - 4148\nTP1 4155\n"
@@ -85,6 +85,27 @@ class ParserTests(unittest.TestCase):
         state.ingest_event(event(72, "SET ALL BREAKEVEN NOW", minute=2))
         self.assertFalse(signal.be_deferred)
         self.assertEqual(signal.sl_mode, "BREAKEVEN")
+
+    def test_explicit_all_be_covers_both_provider_sides_but_not_other_chat(self) -> None:
+        state = SignalState()
+        state.ingest_event(event(1,
+            "BUY XAUUSD AT 4150 - 4148\\nTP1 4155\\nTP2 4160\\nTP3 4165\\nSL 4140",
+            minute=0,
+        ))
+        state.ingest_event(event(2,
+            "SELL XAUUSD AT 4155 - 4158\\nTP1 4148\\nTP2 4145\\nTP3 4140\\nSL 4165",
+            minute=1,
+        ))
+        state.ingest_event({
+            **event(1,
+                "SELL XAUUSD AT 4155 - 4158\\nTP1 4148\\nTP2 4145\\nTP3 4140\\nSL 4165",
+                minute=1),
+            "chat_id": 2,
+        })
+        state.ingest_event(event(3, "SETTY ALL BREAKEVEN NOWW", minute=2))
+        self.assertEqual(state.signals["1:1"].sl_mode, "BREAKEVEN")
+        self.assertEqual(state.signals["1:2"].sl_mode, "BREAKEVEN")
+        self.assertEqual(state.signals["2:1"].sl_mode, "PRICE")
 
     def test_no_be_comment_does_not_remove_earlier_broker_protection(self) -> None:
         state = SignalState()
