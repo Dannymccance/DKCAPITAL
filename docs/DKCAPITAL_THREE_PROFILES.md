@@ -1,14 +1,21 @@
-# DK Capital: three separate environments
+# DK Capital: three actual MT5 trading accounts
+
+The agreed three-profile model is **three independent MT5 terminals and broker accounts** receiving the same four GWS channels from the existing Telegram listener, shared signal parser and MT5 gateway feed. This is **not** one Python trading ledger replicated three ways.
+
+The original MT5 DEMO account under Account 1 remains the paper-trading broker profile. Account 2 remains Kyle's existing MT5 terminal (VNC now working; broker setup postponed). Account 3 is the reserved new Dan terminal (not provisioned yet). Preserve all current account files and never reassign broker profiles or logins automatically.
 
 ## VNC/desktop isolation
 
-| Purpose | Linux service/process | Display | VNC port | SSH-only connection |
+| Profile | MT5 Linux identity | X display | VNC loopback port | Broker setup |
 | --- | --- | --- | --- | --- |
-| Owner MT5 Account 1 | `dkcapital-mt5-1`, user `dkmt5` | `:150` | 5901 | `ssh -N -L 5901:127.0.0.1:5901 root@<VPS>` |
-| Kyle MT5 Account 2 | `dkcapital-mt5-2`, user `dkmt5b` | `:151` | 5902 | `ssh -N -L 5902:127.0.0.1:5902 root@<VPS>` |
-| Isolated MetaEditor compiler | Docker `dkcapital-mt5-compiler-vnc`, user compiler | `:99` | 5903 | `ssh -N -L 5903:127.0.0.1:5903 root@<VPS>` |
+| Paper trading (existing MT5 demo) | Account 1, `dkmt5` | `:150` | 5901 | Existing demo; do not change its login |
+| Kyle's account (existing terminal) | Account 2, `dkmt5b` | `:151` | 5902 | Deferred |
+| Dan's account (reserved third terminal) | Account 3, `dkmt5c` | `:152` | 5904 | Deferred; files NOT installed |
+| Isolated MetaEditor compiler, NOT a trading profile | Docker compiler | `:99` | 5903 | V2.07 compilation only |
 
-Never expose VNC on the VPS public interface. VNC terminals each require their existing locally stored password; the compiler port is unauthenticated at VNC level and depends entirely on localhost binding plus the SSH tunnel. Do not use a single MT5 terminal for two broker accounts.
+All four VNC servers must be bound to 127.0.0.1 and accessed only through SSH tunnels. MT5 Account 1 and Account 2 VNC servers require their independent existing local VNC passwords; Account 3 requires its own password at provisioning.
+
+**Account 3 installation is deliberately not automatic.** The new code merely stages a systemd terminal unit and VNC unit; this PR does not create `dkmt5c`, a Wine prefix, a trading account, or any broker credential. Account 1 and Account 2 trading terminals and their currently installed EAs are unchanged.
 
 ### Install the Account 2 VNC-only service update
 
@@ -49,10 +56,16 @@ docker exec -d -u compiler -w '/workspace/MetaTrader 5' dkcapital-mt5-compiler-v
 
 Recheck after a few seconds; if it exits again, preserve the new log for diagnosis instead of restarting a trading terminal, replacing the EX5 or upgrading production Wine.
 
-## Intended application profiles
+## Account 3 commissioning (future, separate approved work)
 
-1. Paper: `paper-engine` is a Python simulation. Isolate simulated account ledger, strategy settings and Discord paper dashboard; never treat simulations as broker fills.
-2. Owner: existing MT5 Account 1 with its own Wine prefix, broker account, EA settings, broker-native orders and telemetry. Currently the V2 gateway uses account-one-only login and GBP DEMO validation.
-3. Kyle: existing MT5 Account 2 has a separate Wine prefix and service, but independent account-two V2 authenticated gateway telemetry, monitoring, risk policy and Discord routing are **not implemented** merely by enabling VNC.
+When the user is ready to configure Dan's third account:
 
-No common credentials or session-specific account settings should be stored in GitHub. Real-money activation requires currency/broker/hedging checks and separate protective-order acceptance. Do not enable Account 2 entries until the gateway and account-specific controls are actually built and tested.
+1. Provision a distinct Linux service identity `dkmt5c`, home `/var/lib/dkcapital-mt5-3`, and a *new* isolated Wine/MetaTrader 5 installation without copying Account 1 or Kyle's browser/login/session state. The signed installer/binary should be verified independently before running. Set a private VNC password for this identity.
+2. Deploy an account-three-capable version of the host launcher `ops/mt5/dkcapital-mt5-run` after CI. Install the unit `ops/mt5/dkcapital-mt5-3.service`, without enabling or starting it until the binary and the expected broker account are verified. The unit uses display :152 and X server authentication unique to `dkmt5c`.
+3. Install `ops/recovery/dkcapital-vnc3.service` after provisioning, with loopback-only port 5904, only after the account 3 X display is up. It must not start the trading terminal as a side effect.
+4. Extend authenticated gateway **per-account telemetry** and bot reporting: the current V2 reporting code hardcodes only MT5 Account 1, GBP, DEMO. Account 3 must have its own expected login, currency/mode policy, telemetry snapshot, magic/position namespace, order dedup state, result channel and alarms. Do not reuse Account 1 credentials or its telemetry path. Kyle's account requires the same independent route.
+5. Only after controlled broker-mode, symbol, hedging, tick-size, provider SL, lot-step, TP management, heartbeat, and 4% risk checks: compile/install the correct EA to that terminal (entry disabled by default); authorize simulated/demo entry trials. **V2.07 refuses LIVE accounts and currently assumes GBP DEMO**, so live or USD account support would require a separate design, tests and explicit approval.
+
+The current Python `paper-engine` container is a **legacy independent simulation**, not the requested broker MT5 paper profile; do not count its synthetic P&L with broker-confirmed MT5 demo results. Its file and historical results are left untouched until an intentional retirement plan is approved.
+
+No changes to either already-running MT5 service should be made while preparing Account 3; specifically avoid bulk `systemctl restart`, `docker compose down`, resetting the existing MT5 Wine prefixes or replacing an installed EX5 with open broker positions.
