@@ -87,10 +87,9 @@ class ParserTests(unittest.TestCase):
                          {1: 4010, 2: 4020, 3: 4030, 4: 4040})
 
     def test_six_targets_remain_distinct_in_parser_and_state(self) -> None:
-        message = ("GWS - CAPITAL\\nXAUUSD 4003 - 4000: Buy\\n"
-                   + "\\n".join(f"TP{i}: {4000+i*10}" for i in range(1, 7))
-                   + "\\nSL: 3996")
-        message = message.replace("\\\\n", "\\n")
+        message = ("GWS - CAPITAL\nXAUUSD 4003 - 4000: Buy\n"
+                   + "\n".join(f"TP{i}: {4000+i*10}" for i in range(1, 7))
+                   + "\nSL: 3996")
         action = parse_actions(message)[0]
         self.assertEqual(action.kind, "new_signal")
         expected = {i: 4000+i*10 for i in range(1, 7)}
