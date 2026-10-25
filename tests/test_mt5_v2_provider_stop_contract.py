@@ -113,7 +113,7 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertIn("magic%10<=TP6_LEG", code)
         self.assertIn("for(int leg=1;leg<=TP6_LEG;leg++)", code)
         self.assertIn("for(int leg=TP6_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
-        self.assertIn("if(leg==1) protectiveSL=sl;", code)
+        self.assertIn("if(i==0) protectiveSL=sl;", code)
 
 
 if __name__ == "__main__":
