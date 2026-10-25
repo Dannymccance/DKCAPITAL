@@ -22,7 +22,7 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
     def test_compiler_isolated_from_trading_prefix(self):
         s = self.text
         self.assertIn("/opt/dkcapital-mt5-compiler/workspace", s)
-        self.assertIn("DKcapitalV210_TP1to6_Candidate", s)
+        self.assertIn("DKcapitalV210_TP1to6_SignFix1", s)
         self.assertIn("stage-compiler)", s)
         self.assertIn("verify-compiler)", s)
         self.assertIn("DKDEMO4", s)
