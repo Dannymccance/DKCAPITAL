@@ -1,12 +1,12 @@
-// DKcapital V2: DEMO-only, single GBP Account 1, native three-leg XAUUSD execution.
+// DKcapital V2.10: DEMO-only GBP Account 1, one protected XAUUSD leg per actual TP (1–6).
 // Not production approved. Compile in MetaEditor and broker-test BEFORE enabling entries.
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.09"
+#property version "2.10"
 #include <Trade/Trade.mqh>
 
-input string FeedUrl = "http://127.0.0.1:8765/v3/demo/feed";
+input string FeedUrl = "http://127.0.0.1:8765/v4/demo/feed";
 input string TelemetryUrl = "http://127.0.0.1:8765/v2/demo/telemetry";
 input string FeedToken = "";
 input string GoldSymbol = "XAUUSD";
@@ -46,7 +46,10 @@ const ulong MAGIC_MAX = 48049672950;
 const double INITIAL_GROUP_RISK_SHARE = 0.85;
 const double LAYER_GROUP_RISK_SHARE = 0.15;
 const int LAYER_LEG = 4;
-const int TP4_LEG = 5; // Preserve pre-existing layer magic 4 on broker trades.
+const int TP4_LEG = 5; // Original layer keeps suffix 4.
+const int TP5_LEG = 6;
+const int TP6_LEG = 7;
+const int MAX_NATIVE_TARGETS = 6;
 
 // Bounded, broker-sourced decisions. Never call a feed-only price rejection a
 // broker rejection; record the EA gate that actually prevented submission.
@@ -190,8 +193,8 @@ ulong GroupBase(const string id) { return MAGIC_BASE + (ulong)Hash(id)*10; }
 ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
-   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+TP4_LEG &&
-          magic%10>=1 && magic%10<=TP4_LEG;
+   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+TP6_LEG &&
+          magic%10>=1 && magic%10<=TP6_LEG;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
@@ -342,69 +345,36 @@ bool IsUKFriday()
    MqlDateTime local;TimeToStruct(utc+(dst?3600:0),local);
    return local.day_of_week==5;
 }
-bool Allocate(double total,double &a,double &b,double &c,const bool twoTargets)
+// Allocate the whole broker-valid total *equally* across actual numeric TPs.
+// Any unavoidable remainder is distributed in one step increments; the gap
+// between largest and smallest leg is never more than one broker volume step.
+bool AllocateEqual(const double total,const int targetCount,double &lots[])
 {
    double step=LotStep(),minlot=LotMin();
-   if(step<=0 || minlot<=0) return false;
-   int count=(int)MathFloor(total/step+1e-6);
-   int each=(int)MathCeil(minlot/step-1e-6);
-   if(each<1) each=1;
-   if(count<3*each) return false;
-   int units[3];units[0]=each;units[1]=each;units[2]=each;
-   // Three-target goal: TP1=25%, TP2=50%, TP3=25%.
-   // Two-target goal: TP1=25%, TP2=75%, split TP2 across two
-   // independently stopped native legs so TP1 fill still drives BE.
-   double w[3];w[0]=0.25;
-   w[1]=twoTargets?0.375:0.50;
-   w[2]=twoTargets?0.375:0.25;
-   for(int k=3*each;k<count;k++)
-   {
-      int best=2;
-      double gap=-1e10;
-      for(int j=2;j>=0;j--)
-      {
-         double missing=w[j]*count-units[j];
-         if(missing>gap+1e-7) {gap=missing;best=j;}
-      }
-      units[best]++;
-   }
-   a=NormalizeDouble(units[0]*step,8);
-   b=NormalizeDouble(units[1]*step,8);
-   c=NormalizeDouble(units[2]*step,8);
-   if(a<minlot-1e-7 || b<minlot-1e-7 || c<minlot-1e-7)
+   if(step<=0 || minlot<=0 || targetCount<1 || targetCount>MAX_NATIVE_TARGETS)
       return false;
-   // Broker volume-step limits can prevent 25/50/25 on tiny trades.
-   // Never misrepresent an equal 1/1/1 three-target exit as TP2-majority.
-   // Two-target trades CAN honour the priority with minimum 1/1/1,
-   // because legs 2 and 3 are assigned to TP2.
-   return twoTargets ? b+c>a+1e-7 : (b>a+1e-7 && b>c+1e-7);
-}
-bool AllocateFour(double total,double &a,double &b,double &c,double &d)
-{
-   double step=LotStep(),minlot=LotMin();
-   if(step<=0 || minlot<=0) return false;
-   int count=(int)MathFloor(total/step+1e-6);
-   int each=(int)MathCeil(minlot/step-1e-6);
-   if(each<1) each=1;
-   // Four native targets: 20%, 40%, 20%, 20%, TP2 strictly largest.
-   if(count<5*each) return false;
-   int units[4];for(int i=0;i<4;i++) units[i]=each;
-   double w[4];w[0]=0.20;w[1]=0.40;w[2]=0.20;w[3]=0.20;
-   for(int k=4*each;k<count;k++)
+   int totalUnits=(int)MathFloor(total/step+1e-7);
+   int minimumUnits=(int)MathCeil(minlot/step-1e-7);
+   if(minimumUnits<1) minimumUnits=1;
+   if(totalUnits<targetCount*minimumUnits) return false;
+   ArrayResize(lots,targetCount);
+   int base=totalUnits/targetCount;
+   int remainder=totalUnits%targetCount;
+   for(int i=0;i<targetCount;i++)
    {
-      int best=3;double gap=-1e10;
-      for(int j=3;j>=0;j--)
-      {
-         double missing=w[j]*count-units[j];
-         if(missing>gap+1e-7) {gap=missing;best=j;}
-      }
-      units[best]++;
+      int units=base+(i<remainder?1:0);
+      lots[i]=NormalizeDouble(units*step,8);
+      if(lots[i]<minlot-1e-7 ||
+         lots[i]>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)+1e-7)
+         return false;
    }
-   a=NormalizeDouble(units[0]*step,8);
-   b=NormalizeDouble(units[1]*step,8);
-   c=NormalizeDouble(units[2]*step,8);
-   d=NormalizeDouble(units[3]*step,8);
-   return b>a+1e-7 && b>c+1e-7 && b>d+1e-7;
+   return true;
+}
+int TargetLeg(const int i)
+{
+   // Preserve existing GWS layer magic suffix 4 across EA updates.
+   // TP1,2,3 are 1,2,3; TP4,5,6 are 5,6,7.
+   return i<3?i+1:i+2;
 }
 bool HasBeenAttempted(const string id)
 {
@@ -470,7 +440,7 @@ bool CloseTicket(ulong ticket)
 bool CloseGroup(const string id)
 {
    bool ok=true;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket>0 && !CloseTicket(ticket)) ok=false;
@@ -549,7 +519,7 @@ bool StormTP1DrawdownReached(const string id,const string direction)
 }
 void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3,
-                const double tp4,const bool openRunner)
+                const double tp4,const double tp5,const double tp6,const bool openRunner)
 {
    bool buy=direction=="BUY";
    bool tp1Confirmed=TP1BrokerConfirmed(id);
@@ -563,9 +533,12 @@ void ManageLegs(const string id,const string direction,const double stop,
    bool stormUseTP1=stormAdaptive && StormTP1DrawdownReached(id,direction);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
-      if(leg==TP4_LEG && !wasFourTargets) continue;
+      // Legacy 4-target groups and new 5/6-target groups share suffix 5.
+      // No synthetic positions are created by this loop.
+      if(leg==TP4_LEG && !wasFourTargets &&
+         !GlobalVariableCheck(IDKey(id,"TARGET_COUNT"))) continue;
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
       if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) continue;
@@ -600,7 +573,8 @@ void ManageLegs(const string id,const string direction,const double stop,
       double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;
       double rawTP=leg==1?firstTarget:
                     (leg==2 || leg==LAYER_LEG || (leg==3 && wasTwoTargets)?tp2:
-                    (leg==TP4_LEG?tp4:tp3));
+                    (leg==TP4_LEG?tp4:(leg==TP5_LEG?tp5:
+                    (leg==TP6_LEG?tp6:tp3))));
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
@@ -619,7 +593,7 @@ void ManageLegs(const string id,const string direction,const double stop,
 }
 void TryEntry(const string id,const string status,const string direction,
               double low,double high,double providerSL,const long opened,
-              double tp1,double tp2,double tp3,double tp4,const bool openRunner)
+              double tp1,double tp2,double tp3,double tp4,double tp5,double tp6,const bool openRunner)
 {
    if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
@@ -673,24 +647,35 @@ void TryEntry(const string id,const string status,const string direction,
             " providerSL=",providerSL);
       return;
    }
-   // Do not open an unintended runner when Telegram target numbering is
-   // malformed or a native target is already behind the broker quote.
-   // A provider may define exactly two targets. TP3=0 denotes "absent",
-   // never OPEN. Only the literal OPEN signal may opt into a runner.
-   bool oneTarget=!openRunner && tp2<=0 && tp3<=0 && tp4<=0;
-   bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;
-   bool fourTargets=!openRunner && tp2>0 && tp3>0 && tp4>0;
-   int initialLegCount=oneTarget?1:(fourTargets?4:3);
-   if(tp1<=0 || ValidTP(buy,tp1,q)<=0 ||
-      (!oneTarget && (tp2<=0 || ValidTP(buy,tp2,q)<=0)) ||
-      (!oneTarget && !twoTargets && !openRunner &&
-       (tp3<=0 || ValidTP(buy,tp3,q)<=0)) ||
-      (fourTargets && ValidTP(buy,tp4,q)<=0) ||
-      (tp4>0 && !fourTargets) ||
-      (tp3<=0 && tp2>0 && !twoTargets && !openRunner))
+   // Only contiguous numeric provider targets TP1..TPN (N=1..6).
+   // Explicit TP3 OPEN is the only non-numeric runner, opt-in as before.
+   double targets[6];
+   targets[0]=tp1;targets[1]=tp2;targets[2]=tp3;
+   targets[3]=tp4;targets[4]=tp5;targets[5]=tp6;
+   int targetCount=0;
+   bool seenGap=false,badTargets=false;
+   for(int t=0;t<MAX_NATIVE_TARGETS;t++)
+   {
+      if(targets[t]>0)
+      {
+         if(seenGap || ValidTP(buy,targets[t],q)<=0)
+            badTargets=true;
+         targetCount++;
+      }
+      else seenGap=true;
+   }
+   // OPEN sentinel occupies target slot 3, and can only follow TP1/TP2.
+   if(openRunner)
+   {
+      if(!EnableOpenRunnerEntries)
+      {RecordDecision(id,"ENTRY","OPEN_RUNNER_REQUIRES_OPT_IN",age);return;}
+      if(tp1<=0 || tp2<=0 || tp3>0 || tp4>0 || tp5>0 || tp6>0)
+         badTargets=true;
+      targetCount=3;
+   }
+   if(badTargets || targetCount<1 || targetCount>MAX_NATIVE_TARGETS)
    {RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);return;}
-   if(openRunner && !EnableOpenRunnerEntries)
-   {RecordDecision(id,"ENTRY","OPEN_RUNNER_REQUIRES_OPT_IN",age);return;}
+   int initialLegCount=targetCount;
    double sl=NormalizePrice(providerSL);
    if(!StopValid(buy,sl,q))
    {RecordDecision(id,"ENTRY","BROKER_SL_INVALID",age);return;}
@@ -724,97 +709,91 @@ void TryEntry(const string id,const string status,const string direction,
    double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/100)*0.01);
    if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);
    targetLots=MathMin(targetLots,SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)*initialLegCount);
-   double a=0,b=0,c=0,d=0;
-   double vols[4];
+   double vols[];
    bool possible=false;
    for(double total=targetLots;
        total>=initialLegCount*minlot-1e-8;total=FloorLots(total-LotStep()))
    {
-      if(oneTarget) {a=total;b=0;c=0;d=0;}
-      else if(fourTargets)
-      {
-         if(!AllocateFour(total,a,b,c,d)) continue;
-      }
-      else if(!Allocate(total,a,b,c,twoTargets)) continue;
-      vols[0]=a;vols[1]=b;vols[2]=c;vols[3]=d;
-      double r1=RiskGBP(buy,a,fill,sl);
-      double r2=initialLegCount>1?RiskGBP(buy,b,fill,sl):0;
-      double r3=initialLegCount>2?RiskGBP(buy,c,fill,sl):0;
-      double r4=fourTargets?RiskGBP(buy,d,fill,sl):0;
-      // OrderCalcProfit may fail for a broker contract/currency conversion.
-      // Its -1 sentinel is NOT negative exposure or spare risk capacity.
-      if(r1<0 || r2<0 || r3<0 || r4<0)
-      {
-         RecordDecision(id,"ENTRY","BROKER_RISK_VALUATION_FAILED",age);
-         Print("DK2 RISK BLOCK: failed broker stop-risk valuation id=",id);
-         return;
-      }
-      double planned=r1+r2+r3+r4;
-      if(planned>budget+1e-7) continue;
-      double requiredMargin=0,margin=0;
-      bool marginOK=true;
+      if(!AllocateEqual(total,initialLegCount,vols)) continue;
+      double planned=0,requiredMargin=0,margin=0;
+      bool riskOK=true,marginOK=true;
       ENUM_ORDER_TYPE type=buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
       for(int i=0;i<initialLegCount;i++)
       {
-         if(!OrderCalcMargin(type,GoldSymbol,vols[i],fill,margin) || margin<0 || !MathIsValidNumber(margin))
-         { marginOK=false;break; }
+         double risk=RiskGBP(buy,vols[i],fill,sl);
+         if(risk<0)
+         {riskOK=false;break;}
+         planned+=risk;
+         if(!OrderCalcMargin(type,GoldSymbol,vols[i],fill,margin) ||
+            margin<0 || !MathIsValidNumber(margin))
+         {marginOK=false;break;}
          requiredMargin+=margin;
       }
-      if(!marginOK || AccountInfoDouble(ACCOUNT_MARGIN_FREE)<requiredMargin*1.1)
+      if(!riskOK)
+      {
+         RecordDecision(id,"ENTRY","BROKER_RISK_VALUATION_FAILED",age);
+         return;
+      }
+      if(planned>budget+1e-7 || !marginOK ||
+         AccountInfoDouble(ACCOUNT_MARGIN_FREE)<requiredMargin*1.1)
          continue;
       possible=true;break;
    }
    if(!possible)
    {
-      // Distinguish a broker's minimum three-leg size exceeding the 4%
-      // total stop-risk budget from an unrelated free-margin failure.
-      double minA=0,minB=0,minC=0,minD=0;
-      bool minAvailable=oneTarget?true:
-         (fourTargets?
-           AllocateFour(FloorLots(5*minlot),minA,minB,minC,minD):
-           Allocate(FloorLots(3*minlot),minA,minB,minC,twoTargets));
-      if(oneTarget) minA=LotMin();
-      double minimumRisk=minAvailable ?
-         RiskGBP(buy,minA,fill,sl)+
-         (oneTarget?0:RiskGBP(buy,minB,fill,sl)+RiskGBP(buy,minC,fill,sl))+
-         (fourTargets?RiskGBP(buy,minD,fill,sl):0) : -1;
+      double minimumRisk=0;
+      double minimumLots[];
+      bool minAvailable=AllocateEqual(FloorLots(initialLegCount*minlot),
+                                      initialLegCount,minimumLots);
+      if(minAvailable)
+      {
+         for(int i=0;i<initialLegCount;i++)
+         {
+            double legRisk=RiskGBP(buy,minimumLots[i],fill,sl);
+            if(legRisk<0)
+            {minimumRisk=-1;break;}
+            minimumRisk+=legRisk;
+         }
+      }
       string reason="MINIMUM_LEG_SIZE_OR_MARGIN";
-      if(minAvailable && minimumRisk>=0 && minimumRisk>budget+1e-7)
-         reason="MINIMUM_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
-      else if(targetLots<initialLegCount*minlot-1e-8)
+      if(targetLots<initialLegCount*minlot-1e-8)
          reason="BALANCE_TARGET_BELOW_REQUIRED_MINIMUM_LOTS";
-      else if(!oneTarget && !twoTargets &&
-              targetLots<(fourTargets?5:4)*minlot-1e-8)
-         reason="TP2_MAJORITY_REQUIRES_ADDITIONAL_LOT_STEP";
+      else if(minAvailable && minimumRisk>budget+1e-7)
+         reason="MINIMUM_LEG_SIZE_EXCEEDS_SIGNAL_RISK";
       RecordDecision(id,"ENTRY",reason,age);
-      Print("DK2 RISK BLOCK signal=",id," capacityGBP=",budget,
-            " signalCapGBP=",signalLimit," targetLots=",targetLots,
-            " minimumRiskGBP=",minimumRisk," required legs/TP2 majority cannot fit");
+      Print("DK2 RISK BLOCK signal=",id," targetCount=",targetCount,
+            " availableLots=",targetLots," minimumRiskGBP=",minimumRisk);
       return;
    }
    // Durable intent before first broker request prevents duplicates on restart.
-   bool stormAdaptive=EnableStormConditionalTP1 && IsStormSignal(id);
+   bool stormAdaptive=EnableStormConditionalTP1 && IsStormSignal(id) && targetCount>=2;
    if(stormAdaptive) GlobalVariableSet(IDKey(id,"STORM_TP_POLICY"),1);
-   if(twoTargets) GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);
-   if(fourTargets) GlobalVariableSet(IDKey(id,"FOUR_TARGET_ENTRY"),1);
+   GlobalVariableSet(IDKey(id,"TARGET_COUNT"),targetCount);
    GlobalVariableSet(IDKey(id,"ATTEMPT"),(double)TimeGMT());
    GlobalVariablesFlush();
-   // Default STORM first leg to TP2; use TP1 only if subsequent observed
-   // adverse excursion reaches the configured 20-pip threshold.
-   double targets[4];targets[0]=stormAdaptive && !oneTarget?tp2:tp1;
-   targets[1]=tp2;targets[2]=openRunner?0:(twoTargets?tp2:tp3);
-   targets[3]=tp4;
    bool allGood=true;
    for(int i=0;i<initialLegCount;i++)
    {
-      int leg=i==3?TP4_LEG:i+1;
+      int leg=TargetLeg(i);
       trade.SetExpertMagicNumber(LegMagic(id,leg));
-      double tp=(i==2 && openRunner)?0:ValidTP(buy,targets[i],q);
-      bool sent=buy?trade.Buy(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg)):
-                    trade.Sell(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg));
+      double target=targets[i];
+      if(i==0 && stormAdaptive) target=tp2;
+      // Only explicit TP3: OPEN is allowed to omit a native TP.
+      double tp=(openRunner && i==2)?0:ValidTP(buy,target,q);
+      if(tp<=0 && !(openRunner && i==2))
+      {RecordDecision(id,"ENTRY","BROKER_TP_INVALID",age);allGood=false;break;}
+      bool sent=buy?
+         trade.Buy(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg)):
+         trade.Sell(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg));
       ulong ticket=TicketForLeg(id,leg);
-      if(!sent || !BrokerDone() || ticket==0 || !PositionSelectByTicket(ticket) ||
-         PositionGetDouble(POSITION_SL)<=0 ||
+      bool ticketValid=ticket>0 && PositionSelectByTicket(ticket);
+      double nativeTP=ticketValid?PositionGetDouble(POSITION_TP):-1;
+      double tick=SymbolInfoDouble(GoldSymbol,SYMBOL_POINT);
+      bool tpVerified=ticketValid && (tp>0 ?
+          (nativeTP>0 && MathAbs(nativeTP-tp)<=MathMax(tick,1e-7)*1.01) :
+          (openRunner && i==2 && nativeTP<=0));
+      if(!sent || !BrokerDone() || !ticketValid ||
+         PositionGetDouble(POSITION_SL)<=0 || !tpVerified ||
          MathAbs(PositionGetDouble(POSITION_VOLUME)-vols[i])>LotStep()/2)
       {
          RecordDecision(id,"ENTRY","BROKER_ORDER_REJECTED_OR_PARTIAL",age,trade.ResultRetcode());
@@ -831,11 +810,10 @@ void TryEntry(const string id,const string status,const string direction,
    else
    {
       RecordDecision(id,"ENTRY","BROKER_FILLED",age);
-      Print("DK2 execution filled id=",id," TP1_lots=",a,
-            " TP2_lots=",b+(twoTargets?c:0),
-            " TP3_lots=",(twoTargets?0:c),
-            " TP4_lots=",d," numTargets=",
-            oneTarget?1:(twoTargets?2:(fourTargets?4:3)));
+      double filledTotal=0;
+      for(int i=0;i<initialLegCount;i++) filledTotal+=vols[i];
+      Print("DK2 filled signal=",id," targets=",targetCount,
+            " actualLots=",filledTotal," provider SL risk capped");
    }
 }
 // Broker-history original leg volume is fixed even after partial closes.
@@ -849,7 +827,7 @@ double OriginalVolume(const string id)
       if(deal==0 || HistoryDealGetString(deal,DEAL_SYMBOL)!=GoldSymbol ||
          HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
       ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
-      for(int leg=1;leg<=TP4_LEG;leg++)
+      for(int leg=1;leg<=TP6_LEG;leg++)
          if(leg!=LAYER_LEG && magic==LegMagic(id,leg))
          {
             total+=HistoryDealGetDouble(deal,DEAL_VOLUME);
@@ -931,13 +909,19 @@ void TryLayer(const string id,const long mid,const double percentage,
       layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX))
    {RecordDecision(id,"LAYER","LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL",age);return;}
 
-   // No layer after TP1 or any missing original leg. On a four
-   // target trade, the TP4 position is original leg 5, not the layer 4.
+   // A new signal uses exactly TARGET_COUNT native original TP legs;
+   // never treat reserved suffix 4 as an original. Legacy 2-target V2.09
+   // had three original positions; legacy 4-target had magic suffix 5.
+   int targetCount=3;
    bool fourTargets=GlobalVariableCheck(IDKey(id,"FOUR_TARGET_ENTRY"));
+   if(GlobalVariableCheck(IDKey(id,"TARGET_COUNT")))
+      targetCount=(int)GlobalVariableGet(IDKey(id,"TARGET_COUNT"));
+   else if(fourTargets) targetCount=4;
+   if(targetCount<1 || targetCount>MAX_NATIVE_TARGETS) return;
    double priceVolume=0,openVolume=0,protectiveSL=0;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int i=0;i<targetCount;i++)
    {
-      if(leg==LAYER_LEG || (leg==TP4_LEG && !fourTargets)) continue;
+      int leg=TargetLeg(i);
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket))
       {RecordDecision(id,"LAYER","LAYER_REQUIRES_ALL_ORIGINAL_LEGS_OPEN",age);return;}
@@ -948,7 +932,7 @@ void TryLayer(const string id,const long mid,const double percentage,
       {RecordDecision(id,"LAYER","LAYER_INVALID_NATIVE_SL_OR_RISK",age);return;}
       priceVolume+=PositionGetDouble(POSITION_PRICE_OPEN)*lots;
       openVolume+=lots;
-      if(leg==1) protectiveSL=sl;
+      if(i==0) protectiveSL=sl;
       else if(buy) protectiveSL=MathMax(protectiveSL,sl);
       else protectiveSL=MathMin(protectiveSL,sl);
    }
@@ -1033,7 +1017,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
    // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -1050,7 +1034,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    }
    double target=GlobalVariableGet(targetKey);
    double needed=FloorLots(total-target);
-   for(int leg=TP4_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)
+   for(int leg=TP6_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
       ulong t=TicketForLeg(id,leg);
       if(t==0 || !PositionSelectByTicket(t)) continue;
@@ -1065,7 +1049,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       needed=FloorLots(needed-part);
    }
    double current=0;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -1265,28 +1249,30 @@ void ProcessFeed(const string content)
 {
    string lines[];
    int count=StringSplit(content,'\n',lines);
-   if(count<1 || StringFind(lines[0],"DKDEMO3")!=0)
+   if(count<1 || StringFind(lines[0],"DKDEMO4")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
    for(int i=1;i<count;i++)
    {
       string f[];StringTrimLeft(lines[i]);StringTrimRight(lines[i]);
       if(lines[i]=="") continue;
       int fields=StringSplit(lines[i],'|',f);
-      if((fields==12 || fields==13) && f[0]=="S")
+      if(fields==15 && f[0]=="S")
       {
          if(f[3]!="BUY" && f[3]!="SELL") continue;
          double low=StringToDouble(f[4]),high=StringToDouble(f[5]);
          if(low<=0 || high<=0) continue;
          bool openRunner=f[10]=="OPEN";
-         if(fields==13 && openRunner) continue;
-         double fourth=fields==13?StringToDouble(f[11]):0;
+         double fourth=StringToDouble(f[11]);
+         double fifth=StringToDouble(f[12]);
+         double sixth=StringToDouble(f[13]);
+         if(openRunner && (fourth>0 || fifth>0 || sixth>0)) continue;
          long openedAt=(long)StringToInteger(f[fields-1]);
          TryEntry(f[1],f[2],f[3],low,high,StringToDouble(f[6]),
             openedAt,StringToDouble(f[8]),StringToDouble(f[9]),
-            StringToDouble(f[10]),fourth,openRunner);
+            StringToDouble(f[10]),fourth,fifth,sixth,openRunner);
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
             StringToDouble(f[8]),StringToDouble(f[9]),
-            StringToDouble(f[10]),fourth,openRunner);
+            StringToDouble(f[10]),fourth,fifth,sixth,openRunner);
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
@@ -1297,7 +1283,7 @@ void ProcessFeed(const string content)
          {
             string prior[];
             int n=StringSplit(lines[j],'|',prior);
-            if((n!=12 && n!=13) || prior[0]!="S" || prior[1]!=f[1])
+            if(n!=15 || prior[0]!="S" || prior[1]!=f[1])
                continue;
             TryLayer(f[1],(long)StringToInteger(f[2]),StringToDouble(f[3]),
                      (int)StringToInteger(f[4]),StringToDouble(f[5]),
@@ -1349,7 +1335,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.09 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.10 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }

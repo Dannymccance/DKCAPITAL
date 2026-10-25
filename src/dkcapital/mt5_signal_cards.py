@@ -45,7 +45,7 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
         if not isinstance(item, dict) or item.get("group") != group:
             continue
         leg = int(item.get("magic", 0)) % 10
-        if leg not in (1, 2, 3, 4, 5):
+        if leg not in (1, 2, 3, 4, 5, 6, 7):
             continue
         if item.get("entry_type") == "IN":
             by_leg[leg]["entries"].append(item)
@@ -54,10 +54,10 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
     for item in telemetry.get("positions", []):
         if isinstance(item, dict) and item.get("group") == group:
             leg = int(item.get("leg") or 0)
-            if leg in (1, 2, 3, 4, 5):
+            if leg in (1, 2, 3, 4, 5, 6, 7):
                 positions[leg] = item
     legs: dict[int, dict[str, Any]] = {}
-    for leg in (1, 2, 3, 4, 5):
+    for leg in (1, 2, 3, 4, 5, 6, 7):
         entries = by_leg[leg]["entries"]
         exits = by_leg[leg]["exits"]
         pos = positions.get(leg)
@@ -130,22 +130,22 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     declared = signal.get("tps") or {}
     num_numeric = len(declared)
     has_runner = bool(signal.get("tp3_open"))
-    expected = 1 if num_numeric == 1 else (4 if num_numeric >= 4 else 3)
-    for leg in (1, 2, 3, 4, 5):
+    expected = 3 if has_runner else min(num_numeric, 6)
+    for leg in (1, 2, 3, 4, 5, 6, 7):
         # 4 has always been the optional layer; 5 denotes numeric TP4.
-        if leg == 5 and num_numeric < 4 and leg not in state["legs"]:
+        if leg >= 5 and num_numeric < leg - 1 and leg not in state["legs"]:
             continue
-        if leg in (2, 3) and expected == 1 and leg not in state["legs"]:
+        if leg in (1, 2, 3) and leg > expected and leg not in state["legs"]:
             continue
         item = state["legs"].get(leg)
-        if leg in (4, 5) and (item is None or item.get("entry") is None):
+        if leg >= 4 and (item is None or item.get("entry") is None):
             continue
         if item is None or item["entry"] is None:
-            rows.append(f"⬜ {'TP2 (additional)' if leg == 3 and num_numeric == 2 and not has_runner else f'TP{leg}'} leg — **Not filled on MT5**")
+            rows.append(f"⬜ TP{leg - 1 if leg >= 5 else leg} leg — **Not filled on MT5**")
             continue
         status = item["status"]
         mark = "✅"  # Confirmed broker entry fill; closing reason shown separately.
-        label = "10% layer (TP2)" if leg == 4 else ("TP4 leg" if leg == 5 else ("TP2 (additional) leg" if leg == 3 and num_numeric == 2 and not has_runner else f"TP{leg} leg"))
+        label = "10% layer (TP2)" if leg == 4 else f"TP{leg - 1 if leg >= 5 else leg} leg"
         line = f"{mark} **{label}** — {item['lots']:.2f} lots, fill **{item['entry']:.2f}**"
         line += f"\n{status}"
         if item.get("exit_price") is not None:

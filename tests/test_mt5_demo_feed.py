@@ -209,7 +209,7 @@ class DemoFeedTests(unittest.TestCase):
         self.assertEqual(len(fields), 12)
         self.assertEqual(fields[8:11], ["3990.0", "0.0", "0.0"])
 
-    def test_above_four_targets_skipped_instead_of_silent_truncation(self):
+    def test_legacy_v3_five_targets_non_executable_not_truncated(self):
         self.path.write_text(json.dumps({
             "signals": [{
                 "symbol": "XAUUSD", "signal_id": "-1007:110",
@@ -226,7 +226,81 @@ class DemoFeedTests(unittest.TestCase):
             "Authorization": "Bearer " + self.token
         }), timeout=3) as response:
             lines = response.read().decode("utf-8").splitlines()
-        self.assertEqual(lines, ["DKDEMO3"])
+        self.assertEqual(lines[0], "DKDEMO3")
+        fields = lines[1].split("|")
+        self.assertEqual(len(fields), 13)
+        self.assertEqual(fields[2], "CANCELLED")
+
+    def test_v4_six_numeric_targets_all_delivered_and_legacy_protected(self):
+        self.path.write_text(json.dumps({
+            "signals": [{
+                "symbol": "XAUUSD", "signal_id": "-1007:551",
+                "status": "ACTIVE", "direction": "BUY",
+                "entry_low": 4000, "entry_high": 4003,
+                "current_sl": 3996, "sl_mode": "PRICE",
+                "tps": {str(i): 4000 + i*10 for i in range(1, 7)},
+                "opened_at": datetime.now(UTC).isoformat(),
+            }]
+        }), encoding="utf-8")
+        for route, version, expected_len, expected_status in (
+            ("/v2/demo/feed", "DKDEMO2", 12, "CANCELLED"),
+            ("/v3/demo/feed", "DKDEMO3", 13, "CANCELLED"),
+            ("/v4/demo/feed", "DKDEMO4", 15, "ACTIVE"),
+        ):
+            with self.subTest(route=route):
+                url = f"http://127.0.0.1:{self.server.server_port}{route}"
+                with urlopen(Request(url, headers={
+                    "Authorization": "Bearer " + self.token
+                }), timeout=3) as response:
+                    lines = response.read().decode("utf-8").splitlines()
+                self.assertEqual(lines[0], version)
+                fields = lines[1].split("|")
+                self.assertEqual(fields[2], expected_status)
+                self.assertEqual(len(fields), expected_len)
+                if version == "DKDEMO4":
+                    self.assertEqual(fields[8:14],
+                                     [str(float(4000+i*10)) for i in range(1, 7)])
+
+    def test_v4_five_targets_pad_tp6_with_zero(self):
+        self.path.write_text(json.dumps({
+            "signals": [{
+                "symbol": "XAUUSD", "signal_id": "-1007:552",
+                "status": "ACTIVE", "direction": "SELL",
+                "entry_low": 4000, "entry_high": 4003,
+                "current_sl": 4010, "sl_mode": "PRICE",
+                "tps": {str(i): 4000 - i*10 for i in range(1, 6)},
+                "opened_at": datetime.now(UTC).isoformat(),
+            }]
+        }), encoding="utf-8")
+        url = f"http://127.0.0.1:{self.server.server_port}/v4/demo/feed"
+        with urlopen(Request(url, headers={
+            "Authorization": "Bearer " + self.token
+        }), timeout=3) as response:
+            fields = response.read().decode().splitlines()[1].split("|")
+        self.assertEqual(len(fields), 15)
+        self.assertEqual(fields[8:14], [str(float(4000-i*10)) for i in range(1, 6)] + ["0.0"])
+
+    def test_seven_or_nonsequential_targets_skipped_in_v4(self):
+        for tps in (
+            {str(i): 4000 + 10*i for i in range(1, 8)},
+            {"1": 4010, "2": 4020, "4": 4040},
+        ):
+            with self.subTest(tps=tps):
+                self.path.write_text(json.dumps({
+                    "signals": [{
+                        "symbol": "XAUUSD", "signal_id": "-1007:553",
+                        "status": "ACTIVE", "direction": "BUY",
+                        "entry_low": 4000, "entry_high": 4003,
+                        "current_sl": 3996, "sl_mode": "PRICE",
+                        "tps": tps,
+                        "opened_at": datetime.now(UTC).isoformat(),
+                    }]
+                }), encoding="utf-8")
+                url = f"http://127.0.0.1:{self.server.server_port}/v4/demo/feed"
+                with urlopen(Request(url, headers={
+                    "Authorization": "Bearer " + self.token
+                }), timeout=3) as response:
+                    self.assertEqual(response.read().decode().splitlines(), ["DKDEMO4"])
 
     def test_injected_ids_rejected(self):
         self.path.write_text(json.dumps({"signals": [{

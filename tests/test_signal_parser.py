@@ -86,6 +86,18 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(state.signals["1:64"].tps,
                          {1: 4010, 2: 4020, 3: 4030, 4: 4040})
 
+    def test_six_targets_remain_distinct_in_parser_and_state(self) -> None:
+        message = ("GWS - CAPITAL\nXAUUSD 4003 - 4000: Buy\n"
+                   + "\n".join(f"TP{i}: {4000+i*10}" for i in range(1, 7))
+                   + "\nSL: 3996")
+        action = parse_actions(message)[0]
+        self.assertEqual(action.kind, "new_signal")
+        expected = {i: 4000+i*10 for i in range(1, 7)}
+        self.assertEqual(action.tps, expected)
+        state = SignalState()
+        state.ingest_event(event(65, message, minute=0))
+        self.assertEqual(state.signals["1:65"].tps, expected)
+
     def test_capital_explicit_open_runner_persists_without_invented_tp(self) -> None:
         original = ("XAUUSD 4084-85 BUY\nTP1: 4090\nTP2: 4098\n"
                     "TP3: OPEN\nSL: 4079")

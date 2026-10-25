@@ -131,8 +131,8 @@ def pending_order_gate(snapshot: dict) -> tuple[bool, str]:
         if type(ticket) is not int or ticket <= 0 or ticket in seen_tickets:
             return False, "missing or duplicate broker pending ticket"
         if (type(magic) is not int or
-                not 5100000001 <= magic <= 48049672955 or
-                magic % 10 not in (1, 2, 3, 4, 5) or
+                not 5100000001 <= magic <= 48049672957 or
+                magic % 10 not in (1, 2, 3, 4, 5, 6, 7) or
                 magic in seen_magics or magic in pos_magics):
             return False, "unknown or conflicting broker pending order magic"
         if order.get("symbol") != "XAUUSD":
