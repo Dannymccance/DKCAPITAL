@@ -25,10 +25,10 @@ def _lookup(signals: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
             continue
         name = {"gws": "GWS", "elite": "Elite Portfolios"}.get(
             str(signal.get("source_style") or "").lower(), "Telegram provider")
-        for leg in (1, 2, 3, 4, 5):
+        for leg in (1, 2, 3, 4, 5, 6, 7):
             mapping[mt5_group(sid) * 10 + leg] = {
                 "provider": name, "signal_id": sid,
-                "leg": "LAYER (TP2)" if leg == 4 else ("TP4" if leg == 5 else f"TP{leg}"),
+                "leg": "LAYER (TP2)" if leg == 4 else f"TP{leg - 1 if leg >= 5 else leg}",
             }
     return mapping
 
