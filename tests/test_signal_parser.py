@@ -73,6 +73,19 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(stored.tps, {1: 4107, 2: 4120})
         self.assertFalse(stored.tp3_open)
 
+    def test_source_channel_title_survives_rebuild_and_edits(self) -> None:
+        source = event(66, "XAUUSD 4003-4000 BUY\\nTP1 4010\\nSL 3996",
+                       minute=0)
+        source["chat_title"] = "GWS - CAPITAL"
+        state = SignalState()
+        state.ingest_event(source)
+        self.assertEqual(state.signals["1:66"].source_chat_title, "GWS - CAPITAL")
+        state.ingest_event(event(67, "SL 3997", minute=1, reply_to=66))
+        self.assertEqual(state.snapshot()["signals"][0]["source_chat_title"],
+                         "GWS - CAPITAL")
+        state.rebuild()
+        self.assertEqual(state.signals["1:66"].source_chat_title, "GWS - CAPITAL")
+
     def test_four_target_telegram_is_retained_by_parser_and_state(self) -> None:
         original = ("GWS - CAPITAL\\n"
                     "XAUUSD 4003 - 4000: Buy\\n"
