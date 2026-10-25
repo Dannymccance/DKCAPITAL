@@ -62,7 +62,7 @@ class SixTargetContracts(unittest.TestCase):
             'const int TP5_LEG = 6;',
             'const int TP6_LEG = 7;',
             'return i<3?i+1:i+2;',
-            'magic%10<=TP6_LEG',
+            'magic%10<=(ulong)TP6_LEG',
             'for(int leg=1;leg<=TP6_LEG;leg++)',
             'for(int leg=TP6_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)',
         ):
