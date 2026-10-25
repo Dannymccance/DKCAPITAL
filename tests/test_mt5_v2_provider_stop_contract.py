@@ -47,10 +47,10 @@ class V2ProviderStopContract(unittest.TestCase):
     def test_failed_broker_risk_valuation_blocks_entry(self):
         code = SOURCE.read_text(encoding="utf-8")
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
-        self.assertIn("if(r1<0 || r2<0 || r3<0 || r4<0)", entry)
-        self.assertIn("double planned=r1+r2+r3+r4;", entry)
+        self.assertIn("if(risk<0)", entry)
+        self.assertIn("planned+=risk;", entry)
         self.assertNotIn(
-            "double planned=RiskGBP(buy,a,fill,sl)+RiskGBP", entry
+            "double planned=RiskGBP(buy,vols[i],fill,sl)+RiskGBP", entry
         )
 
     def test_risk_caps_resize_lots_not_stop(self):
@@ -58,7 +58,7 @@ class V2ProviderStopContract(unittest.TestCase):
         entry = code.split("void TryEntry(", 1)[1].split("bool ActionKeySeen(", 1)[0]
         self.assertIn("groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk", entry)
         self.assertIn("portfolioLimit-portfolio", entry)
-        self.assertIn("RiskGBP(buy,a,fill,sl)", entry)
+        self.assertIn("RiskGBP(buy,vols[i],fill,sl)", entry)
         self.assertIn("FloorLots(total-LotStep())", entry)
 
     def test_balance_scaled_risk_limits_and_full_broker_snapshot(self):
@@ -110,9 +110,9 @@ class V2ProviderStopContract(unittest.TestCase):
 
     def test_layer_is_in_all_lifecycle_paths(self):
         code = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("magic%10<=TP4_LEG", code)
-        self.assertIn("for(int leg=1;leg<=TP4_LEG;leg++)", code)
-        self.assertIn("for(int leg=TP4_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
+        self.assertIn("magic%10<=TP6_LEG", code)
+        self.assertIn("for(int leg=1;leg<=TP6_LEG;leg++)", code)
+        self.assertIn("for(int leg=TP6_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
         self.assertIn("if(leg==1) protectiveSL=sl;", code)
 
 
