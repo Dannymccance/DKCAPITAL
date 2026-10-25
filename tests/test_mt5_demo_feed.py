@@ -209,7 +209,7 @@ class DemoFeedTests(unittest.TestCase):
         self.assertEqual(len(fields), 12)
         self.assertEqual(fields[8:11], ["3990.0", "0.0", "0.0"])
 
-    def test_above_four_targets_skipped_instead_of_silent_truncation(self):
+    def test_legacy_v3_five_targets_non_executable_not_truncated(self):
         self.path.write_text(json.dumps({
             "signals": [{
                 "symbol": "XAUUSD", "signal_id": "-1007:110",
@@ -226,7 +226,10 @@ class DemoFeedTests(unittest.TestCase):
             "Authorization": "Bearer " + self.token
         }), timeout=3) as response:
             lines = response.read().decode("utf-8").splitlines()
-        self.assertEqual(lines, ["DKDEMO3"])
+        self.assertEqual(lines[0], "DKDEMO3")
+        fields = lines[1].split("|")
+        self.assertEqual(len(fields), 13)
+        self.assertEqual(fields[2], "CANCELLED")
 
     def test_v4_six_numeric_targets_all_delivered_and_legacy_protected(self):
         self.path.write_text(json.dumps({
