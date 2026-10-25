@@ -193,8 +193,10 @@ ulong GroupBase(const string id) { return MAGIC_BASE + (ulong)Hash(id)*10; }
 ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
-   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+TP6_LEG &&
-          magic%10>=1 && magic%10<=TP6_LEG;
+   // magic is ulong; cast the int suffix limit before comparisons to
+   // avoid MQL5 compiler "sign mismatch" and preserve the same magic set.
+   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+(ulong)TP6_LEG &&
+          magic%10>=1 && magic%10<=(ulong)TP6_LEG;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
