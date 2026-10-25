@@ -72,40 +72,17 @@ This checks source parity, compilation timestamp, binary size and EX5 digest;
 the operator must still visually verify the MetaEditor compiler result.
 The reviewed source/binary is only staged in the compiler at this point.
 
-## 2. Disarm existing V2.07 before touching backend
+## 2. Stage the verified binary first (no EA currently attached)
 
-In VNC **5901** open old EA F7 Inputs and set `EnableNewEntries=false`.
-Leave the EA attached and existing broker-native stops intact. Verify no
-open positions or pending broker orders. Wait for authenticated Account 1
-telemetry with `entry_enabled=false`, HTTP 200 and age under 120 seconds.
+If the GBP DEMO terminal currently has **no EA attached**, a new-entry
+toggle cannot be used as a precondition to copying an EA into the filesystem.
+The `stage-demo` action is therefore independent of a live gateway
+probe and broker telemetry; it **only copies** the compiler-verified
+EX5 into the demo terminal's Experts folder. It cannot attach an EA,
+send an order, change a chart, or start/stop a service.
 
-The legacy signal processor reconstructs Telegram state at startup. A
-second safety gate after Docker image build exists to prevent retroactive
-reprocessing while the EA is armed. On a market-closed weekend, telemetry
-may remain stale; **do not bypass the release gate or fabricate snapshots**.
-
-## 3. Back up state and update only backend processor/gateway
-
-```bash
-cd /opt/dkcapital
-bash scripts/release_mt5_v210.sh deploy-backend
-bash scripts/release_mt5_v210.sh check-backend
-```
-
-The script backs up Telegram events, signal state and Account 1 broker
-telemetry inside the shared Docker volume at `/app/data/backups/pre-v210-*`.
-It rebuilds/recreates **only signal-processor and mt5-gateway**. It does
-not restart Telegram listener, Discord, legacy Python paper-engine, VNC,
-or either MT5 terminal.
-
-The new authenticated endpoint `/v4/demo/feed` must return
-`DKDEMO4`. The old `/v2/demo/feed` continues for legacy V2.07 but marks
-four-target ACTIVE signals as non-executable, avoiding silently omitted TP4
-while old EAs are still running.
-
-## 4. Stage compiler-verified EX5 alongside the existing demo EA
-
-After inspecting zero errors/warnings in isolated MetaEditor:
+After separately confirming **0 errors and 0 warnings** in MetaEditor and
+running `verify-compiler`:
 
 ```bash
 cd /opt/dkcapital
@@ -113,47 +90,89 @@ METAEDITOR_ERRORS=0 METAEDITOR_WARNINGS=0 \
   bash scripts/release_mt5_v210.sh stage-demo
 ```
 
-The script copies the new EX5 **alongside** the original. It prints both
-hashes, and it **never attaches, enables, disarms or restarts MT5**. The
-candidate name on Account 1 is `DKcapitalV210_TP1to6_SignFix1`.
+Do not use the older EX5 with the compiler warning. This command stages
+only `DKcapitalV210_TP1to6_SignFix1.ex5` alongside historic demo EAs.
 
-## 5. Human-controlled 5901 EA changeover
+## 3. Attach safely on DEMO chart, with entries OFF
 
-Confirm Account 1 is disarmed and broker-flat. Save a local input `.set`
-file from the current V2.07 EA (it includes a private gateway token; never
-paste, upload or send it). Detach the old EA *before* attaching the new one.
+In VNC 5901: confirm GBP DEMO login `5057220041`, XAUUSD,
+**zero open positions and zero pending orders** in the MT5 Trade tab,
+and confirm no competing EA is attached to any chart.
 
-Refresh the Navigator, attach the candidate with all new entries OFF and
-verify these **locally**:
+Refresh Navigator, attach **V2.10 SignFix1**. Set these inputs before
+confirming the dialog:
 
-- Demo broker login 5057220041, currency GBP, mode DEMO, symbol XAUUSD.
+- `ExpectedDemoLogin=5057220041`
 - `FeedUrl=http://127.0.0.1:8765/v4/demo/feed`
 - `TelemetryUrl=http://127.0.0.1:8765/v2/demo/telemetry`
-- Existing private FeedToken restored from the local settings.
+- `FeedToken`: existing private token from the local saved inputs/preset.
+  Do not paste credentials into logs, chats, or GitHub.
 - `EnableNewEntries=false`, `EnableLayerEntries=false`,
-  `EnableOpenRunnerEntries=false`, `EnableStormConditionalTP1=false`
-  during validation.
-- Original MaxSignalRiskPct=4.0, original provider SL, 2% warning-only
-  daily loss, fixed group/portfolio limits.
-- Experts log reports `version=2.09`, fresh telemetry, HTTP 200 feed,
-  account-wide positions/orders and correct native stop protection.
+  `EnableOpenRunnerEntries=false`,
+  `EnableStormConditionalTP1=false`.
 
-## 6. Controlled broker-demo acceptance testing
+Check Experts tab confirms `version=2.10` and no
+`invalid configuration` errors. With the old gateway, the
+V4 instruction request can temporarily log HTTP **404**, because
+`/v4/demo/feed` is not deployed yet. That is **expected only during
+this disarmed bootstrap period**, and it must not generate entries.
 
-Test synthetic one/two/three/four-target messages **only in a controlled
-non-production signal fixture**, never by injecting an old Telegram message
-with a new timestamp into the active processor:
+The attached, disarmed V2.10 EA reports fresh broker-side identity,
+positions, orders, account state and its `entry_enabled=false` over
+the **existing** `/v2/demo/telemetry` POST endpoint.
 
-- Native stop and take profit for every leg; no made-up TP4.
-- Two target exits use two TP2 broker tickets.
-- Three/four-target allocations actually place TP2 at the largest volume.
-- Magic suffix 5 for TP4 is distinct from optional layer suffix 4.
-- TP1 broker-confirmed fill, subsequent BE/proposed provider deferral.
-- Closed trades use actual MT5 deals and PnL, not Telegram TP claims.
-- Group planned stop risk stays within 4%; invalid stops, wide spreads,
-  insufficient lot steps, stale instructions and poor margin are skipped.
-- Existing positions, broker stops, and executed-trade deduplication survive
-  controlled restart; Discord alerts and recovery report correct identity.
+## 4. Deploy backend after disarmed broker telemetry is fresh
+
+```bash
+cd /opt/dkcapital
+bash scripts/release_mt5_v210.sh deploy-backend
+bash scripts/release_mt5_v210.sh check-backend
+```
+
+Both pre- and post-Docker-build preflight gates still **require**:
+fresh authenticated telemetry (age under 120 seconds), GBP DEMO
+login `5057220041`, no broker positions, no pending orders,
+`entry_enabled=false`, and broker stops protected. The HTTP feed
+status must be **200 or the pre-upgrade 404** during bootstrap.
+A 404 **does not waive any trading or risk checks**. The
+post-deployment `check-backend` requires authenticated
+`DKDEMO4` from `/v4/demo/feed` with HTTP **200**.
+
+`deploy-backend` backs up Telegram events, signal state and
+broker telemetry, then rebuilds/recreates **only signal-processor
+and mt5-gateway**. It does not restart either MT5 terminal or
+automatically arm the EA. The existing paper-engine remains separate.
+
+The old `/v2/demo/feed` remains for legacy EAs and safely marks
+unsupported signals non-executable rather than silently truncating TPs.
+
+## 5. Confirm the new gateway from attached V2.10
+
+In VNC 5901 check the Experts log for a working V4 feed; refresh
+the gateway telemetry and confirm `feed_http=200` and
+`entry_enabled=false`. Leave new entries off through acceptance testing.
+
+Do not delete old EAs, clear genuine broker telemetry or spoof snapshot
+JSON to make release gates pass.
+
+## 6. Controlled broker-demo acceptance tests
+
+In a segregated TEST fixture rather than replaying live Telegram messages,
+exercise **1, 2, 3, 4, 5, and 6 numeric TPs**.
+
+- Exactly one native, provider-protected broker position per numeric TP.
+- **Equal distribution of the total permitted lots**, rounded by broker
+  volume step so that no legs differ by more than one step.
+- No size inflation when adding targets; no synthetic exits.
+- All positions use the actual provider SL; each has its own native TP.
+- Native TP1-confirmed completion triggers protective BE as configured.
+- Hard planned signal stop risk stays within 4%; spread, minimum lot,
+  margin, total exposure and invalid stop gates remain in force.
+- The 0.03 **Friday total** may prevent execution of a 4/5/6-TP
+  signal under 0.01 broker minimum lot size; skip the **whole** trade.
+- TP4/TP5/TP6 magic suffixes 5/6/7 remain separate from optional GWS
+  layer suffix 4. Verify account broker history, Discord results
+  and controlled recovery before considering any automated arming.
 
 Only after broker tests pass should Account 1 be approved for new entries.
 V2.10 is **GBP DEMO only** and MUST NOT be attached to Dan's future USD REAL
