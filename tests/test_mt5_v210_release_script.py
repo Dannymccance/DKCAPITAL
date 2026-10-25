@@ -54,7 +54,7 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
 
     def test_staging_only_does_not_require_a_preexisting_attached_ea(self):
         s = self.text
-        stage = s.split(" stage-demo)\\n", 1)[1].split(" ;;", 1)[0]
+        stage = s.split(" stage-demo)", 1)[1].split(" ;;", 1)[0]
         self.assertIn("root_only;source_check;terminals", stage)
         self.assertNotIn("flat_disarmed", stage)
         self.assertNotIn("backend_probe", stage)
