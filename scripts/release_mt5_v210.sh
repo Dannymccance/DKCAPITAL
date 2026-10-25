@@ -4,7 +4,7 @@ set -euo pipefail
 umask 077
 ROOT=/opt/dkcapital
 SRC="$ROOT/mt5/DKcapitalV2.mq5"
-NAME=DKcapitalV210_TP1to6_Candidate
+NAME=DKcapitalV210_TP1to6_SignFix1
 EXPERTS="/opt/dkcapital-mt5-compiler/workspace/MetaTrader 5/MQL5/Experts"
 DEMO="/var/lib/dkcapital-mt5/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
 MQ5="$EXPERTS/$NAME.mq5"
@@ -19,6 +19,7 @@ source_check() {
  grep -qx '#property version "2.10"' "$SRC" || fail "source is not V2.10"
  grep -q 'DKDEMO4' "$SRC" || fail "wrong EA feed handshake"
  grep -q 'const int TP6_LEG = 7;' "$SRC" || fail "TP6 native broker magic missing"
+ grep -Fq 'magic%10<=(ulong)TP6_LEG;' "$SRC" || fail "unsigned broker magic fix missing"
  [[ "$(git -C "$ROOT" branch --show-current)" == main ]] || fail "VPS checkout not on main"
  git -C "$ROOT" diff --quiet HEAD -- mt5/DKcapitalV2.mq5 || fail "EA source uncommitted"
  git -C "$ROOT" diff --cached --quiet -- mt5/DKcapitalV2.mq5 || fail "EA source staged locally"
@@ -81,7 +82,7 @@ case "$COMMAND" in
   install -o 11050 -g 11050 -m 0644 "$SRC" "$MQ5"
   cmp -s "$SRC" "$MQ5" || fail "compiler source differs"
   echo "STAGED: $MQ5"
-  echo 'On VNC 5903 open Z:\workspace\MetaTrader 5\MQL5\Experts\DKcapitalV210_TP1to6_Candidate.mq5'
+  echo 'On VNC 5903 open Z:\workspace\MetaTrader 5\MQL5\Experts\DKcapitalV210_TP1to6_SignFix1.mq5'
   echo "Press F7, verify 0 errors AND 0 warnings; Account 1 is untouched"
   ;;
  verify-compiler)
