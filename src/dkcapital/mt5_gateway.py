@@ -206,7 +206,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 nums = sorted(int(k) for k in tps)
             except (ValueError, TypeError):
                 continue
-            if not nums or nums != list(range(1, len(nums) + 1)) or len(nums) > 6:
+            if (nums and nums != list(range(1, len(nums) + 1))) or len(nums) > 6:
                 continue
             count = len(nums)
             if signal.get("tp3_open") and (count != 2 or any(prices[6:])):
