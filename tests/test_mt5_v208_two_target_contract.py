@@ -1,94 +1,58 @@
-"""Source contracts for V2.09 two/three-target profit distribution.
+"""Backward compatibility coverage for 2/3-TP legacy V2.08/V2.09 tickets.
 
-These guard source intent only. MetaEditor compilation and broker demo testing
-are still required; CI Python tests cannot certify compiled MQL execution.
+Latest V2.10 uses equal volumes, not historical TP2-majority sizing. Source
+contract checks are complementary to isolated MetaEditor/broker testing.
 """
 from pathlib import Path
-import re
 import unittest
 
 SOURCE = Path(__file__).resolve().parents[1] / "mt5" / "DKcapitalV2.mq5"
 
 
-def allocation(total_units: int, *, two_targets: bool):
-    """Mirror the EA's discrete lot-step target allocation for regression cases."""
-    if total_units < 3:
-        return None
-    units = [1, 1, 1]
-    weights = [0.25, 0.375 if two_targets else 0.50,
-               0.375 if two_targets else 0.25]
-    for _ in range(3, total_units):
-        best = 2
-        gap = -1e10
-        for j in (2, 1, 0):
-            missing = weights[j] * total_units - units[j]
-            if missing > gap + 1e-7:
-                gap = missing
-                best = j
-        units[best] += 1
-    a, b, c = units
-    if two_targets:
-        return units if b + c > a else None
-    return units if b > a and b > c else None
-
-
-class Tp2MajorityContracts(unittest.TestCase):
+class TwoTargetCompatibility(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = SOURCE.read_text(encoding="utf-8")
 
-    def test_v208_explicit_two_target_policy_is_persistent(self):
+    def test_two_targets_now_use_two_equal_native_legs(self):
         s = self.source
-        self.assertIn('#property version "2.09"', s)
-        self.assertIn('bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;', s)
-        self.assertIn('if(twoTargets) GlobalVariableSet(IDKey(id,"TWO_TARGET_ENTRY"),1);', s)
-        self.assertIn('GlobalVariableFlush', s.replace("GlobalVariablesFlush", "GlobalVariableFlush"))
+        self.assertIn('#property version "2.10"', s)
+        self.assertIn('int initialLegCount=targetCount;', s)
+        self.assertIn('bool AllocateEqual(const double total,const int targetCount,double &lots[])', s)
+        self.assertIn('ArrayResize(lots,targetCount);', s)
+        self.assertIn('int base=totalUnits/targetCount;', s)
+        self.assertIn('int leg=TargetLeg(i);', s)
+        self.assertIn('for(int i=0;i<initialLegCount;i++)', s)
+        self.assertIn('GlobalVariableSet(IDKey(id,"TARGET_COUNT"),targetCount);', s)
+
+    def test_historical_2tp_3leg_remapping_and_legacy_magic_remain(self):
+        s = self.source
         self.assertIn('bool wasTwoTargets=GlobalVariableCheck(IDKey(id,"TWO_TARGET_ENTRY"));', s)
         self.assertIn('(leg==3 && wasTwoTargets)?tp2:', s)
-        self.assertIn('targets[1]=tp2;targets[2]=openRunner?0:(twoTargets?tp2:tp3);', s)
-        self.assertIn('!oneTarget && !twoTargets && !openRunner &&', s)
+        self.assertIn('const int LAYER_LEG = 4;', s)
+        self.assertIn('if(leg!=LAYER_LEG && magic==LegMagic(id,leg))', s)
+        self.assertIn('HistoryDealsTotal()', s)
 
-    def test_native_three_leg_stops_and_broker_risk_controls_preserved(self):
-        entry = self.source.split("void TryEntry(", 1)[1].split(
-            "// Broker-history original leg volume", 1
-        )[0]
-        for code in ('trade.Buy(', 'trade.Sell(', '"BROKER_ORDER_REJECTED_OR_PARTIAL"',
-                     'GlobalVariableSet(IDKey(id,"ATTEMPT")', 'StopValid(buy,providerSL,q)',
-                     'RiskGBP(buy,a,fill,sl)', 'RiskGBP(buy,b,fill,sl)',
-                     'RiskGBP(buy,c,fill,sl)', 'SignalRiskLimitGBP()', 'ValidTP(buy,tp1,q)',
-                     'ValidTP(buy,tp2,q)', 'if(openRunner && !EnableOpenRunnerEntries)'):
-            self.assertIn(code, entry)
-        self.assertIn('return twoTargets ? b+c>a+1e-7 : (b>a+1e-7 && b>c+1e-7);',
-                      self.source)
-
-    def test_two_targets_largest_exit_tp2_at_all_allowed_lot_sizes(self):
-        for count in range(3, 90):
-            with self.subTest(steps=count):
-                result = allocation(count, two_targets=True)
-                self.assertIsNotNone(result)
-                a, b, c = result
-                self.assertGreater(b+c, a)
-                self.assertEqual(a+b+c, count)
-
-    def test_three_targets_never_equal_tp2_at_minimum_size(self):
-        self.assertIsNone(allocation(3, two_targets=False))
-        for count in range(4, 90):
-            with self.subTest(steps=count):
-                result = allocation(count, two_targets=False)
-                self.assertIsNotNone(result)
-                a, b, c = result
-                self.assertGreater(b, a)
-                self.assertGreater(b, c)
-                self.assertEqual(a+b+c, count)
-
-    def test_no_unintended_tp3_or_open_runner(self):
+    def test_provider_stop_and_trade_duplicate_safety_remain(self):
         s = self.source
-        self.assertIn('bool twoTargets=!openRunner && tp2>0 && tp3<=0 && tp4<=0;', s)
-        self.assertIn('if(tp1<=0 || ValidTP(buy,tp1,q)<=0 ||', s)
-        self.assertIn('if(openRunner && !EnableOpenRunnerEntries)', s)
-        self.assertIn('bool wasTwoTargets=GlobalVariableCheck', s)
-        # A missing numeric third target is NEVER promoted to the OPEN option.
-        self.assertIn('targets[2]=openRunner?0:(twoTargets?tp2:tp3)', s)
+        for token in (
+            'StopValid(buy,providerSL,q)',
+            'RiskGBP(buy,vols[i],fill,sl)',
+            'if(planned>budget+1e-7',
+            'if(!EnableOpenRunnerEntries)',
+            'RecordDecision(id,"ENTRY","MISSING_OR_INVALID_NATIVE_TP",age);',
+            'GlobalVariableSet(IDKey(id,"ATTEMPT"),(double)TimeGMT());',
+            'GlobalVariablesFlush();',
+            'if(!CloseGroup(id))',
+        ):
+            self.assertIn(token, s)
+
+    def test_explicit_tp3_open_still_requires_separate_approval(self):
+        s = self.source
+        self.assertIn('input bool EnableOpenRunnerEntries = false;', s)
+        self.assertIn('if(openRunner)', s)
+        self.assertIn('if(!EnableOpenRunnerEntries)', s)
+        self.assertIn('double tp=(openRunner && i==2)?0:ValidTP(buy,target,q);', s)
 
 
 if __name__ == "__main__":
