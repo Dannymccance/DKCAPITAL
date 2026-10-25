@@ -100,7 +100,7 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         self.assertIn('"${METAEDITOR_WARNINGS:-unset}" == 0', stage)
         self.assertIn("Nothing attached, restarted, or enabled", stage)
 
-    def test_backend_bootstrap_requires_real_flat_broker_ready_broker_telemetry(self):
+    def test_backend_bootstrap_requires_real_flat_broker_telemetry(self):
         s = self.text
         gate = s.split("flat_broker_ready() {", 1)[1].split("backend_probe()", 1)[0]
         self.assertIn('0<=age<120', gate)
@@ -120,7 +120,7 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         block = self.text.split("flat_broker_ready() {", 1)[1].split(
             "backend_probe() {", 1
         )[0]
-        code = block.split("<<'PY'\\n", 1)[1].split("\\nPY", 1)[0]
+        code = block.split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
         base = {
             "received_at": datetime.now(UTC).isoformat(),
             "mode": "DEMO", "currency": "GBP", "login": 5057220041,
