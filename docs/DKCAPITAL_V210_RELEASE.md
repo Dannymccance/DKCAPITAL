@@ -59,7 +59,7 @@ bash scripts/release_mt5_v210.sh stage-compiler
 
 Inside **isolated MetaEditor on VNC 5903**, open:
 
-`Z:\workspace\MetaTrader 5\MQL5\Experts\DKcapitalV210_TP1to6_Candidate.mq5`
+`Z:\workspace\MetaTrader 5\MQL5\Experts\DKcapitalV210_TP1to6_SignFix1.mq5`
 
 Press F7 and require **zero compiler errors and zero warnings**. Never
 compile on live Account 1. Then run:
@@ -115,7 +115,7 @@ METAEDITOR_ERRORS=0 METAEDITOR_WARNINGS=0 \
 
 The script copies the new EX5 **alongside** the original. It prints both
 hashes, and it **never attaches, enables, disarms or restarts MT5**. The
-candidate name on Account 1 is `DKcapitalV210_TP1to6_Candidate`.
+candidate name on Account 1 is `DKcapitalV210_TP1to6_SignFix1`.
 
 ## 5. Human-controlled 5901 EA changeover
 
@@ -169,3 +169,7 @@ approved flat/controlled changeover. Backed-up Telegram events/state must
 
 The release script intentionally **cannot** execute the VNC GUI compile,
 detach/attach chart EAs, certify native broker fills, or approve live trading.
+
+## MQL5 compiler warning fix, 25 October 2026
+
+The initial V2.10 candidate compiled with **0 errors, 1 warning**: `sign mismatch` at `Owned()`, line 197. The expression compared an unsigned broker `magic` suffix to signed integer `TP6_LEG`. The suffix and range limit are now cast to `ulong` without changing the set of owned broker magic numbers. The previously compiled `DKcapitalV210_TP1to6_Candidate.ex5` is **not approved**. The corrected release uses a new, distinct compiler filename `DKcapitalV210_TP1to6_SignFix1.mq5` (and corresponding EX5). Do not overwrite or install the old compiler candidate. After pulling the approved commit, run `stage-compiler`, compile **the new exact filename** on VNC 5903 and visually verify **0 errors and 0 warnings**; then `verify-compiler`. Account 1 remains unchanged throughout staging.
