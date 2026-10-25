@@ -3,10 +3,10 @@
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.09"
+#property version "2.10"
 #include <Trade/Trade.mqh>
 
-input string FeedUrl = "http://127.0.0.1:8765/v3/demo/feed";
+input string FeedUrl = "http://127.0.0.1:8765/v4/demo/feed";
 input string TelemetryUrl = "http://127.0.0.1:8765/v2/demo/telemetry";
 input string FeedToken = "";
 input string GoldSymbol = "XAUUSD";
@@ -46,7 +46,10 @@ const ulong MAGIC_MAX = 48049672950;
 const double INITIAL_GROUP_RISK_SHARE = 0.85;
 const double LAYER_GROUP_RISK_SHARE = 0.15;
 const int LAYER_LEG = 4;
-const int TP4_LEG = 5; // Preserve pre-existing layer magic 4 on broker trades.
+const int TP4_LEG = 5; // Original layer keeps suffix 4.
+const int TP5_LEG = 6;
+const int TP6_LEG = 7;
+const int MAX_NATIVE_TARGETS = 6;
 
 // Bounded, broker-sourced decisions. Never call a feed-only price rejection a
 // broker rejection; record the EA gate that actually prevented submission.
@@ -190,8 +193,8 @@ ulong GroupBase(const string id) { return MAGIC_BASE + (ulong)Hash(id)*10; }
 ulong LegMagic(const string id,int leg) { return GroupBase(id)+(ulong)leg; }
 bool Owned(ulong magic)
 {
-   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+TP4_LEG &&
-          magic%10>=1 && magic%10<=TP4_LEG;
+   return magic>=MAGIC_BASE+1 && magic<=MAGIC_MAX+TP6_LEG &&
+          magic%10>=1 && magic%10<=TP6_LEG;
 }
 string Key(const string name) { return "DK2_"+IntegerToString(ExpectedDemoLogin)+"_"+name; }
 string IDKey(const string id,const string suffix)
@@ -342,69 +345,36 @@ bool IsUKFriday()
    MqlDateTime local;TimeToStruct(utc+(dst?3600:0),local);
    return local.day_of_week==5;
 }
-bool Allocate(double total,double &a,double &b,double &c,const bool twoTargets)
+// Allocate the whole broker-valid total *equally* across actual numeric TPs.
+// Any unavoidable remainder is distributed in one step increments; the gap
+// between largest and smallest leg is never more than one broker volume step.
+bool AllocateEqual(const double total,const int targetCount,double &lots[])
 {
    double step=LotStep(),minlot=LotMin();
-   if(step<=0 || minlot<=0) return false;
-   int count=(int)MathFloor(total/step+1e-6);
-   int each=(int)MathCeil(minlot/step-1e-6);
-   if(each<1) each=1;
-   if(count<3*each) return false;
-   int units[3];units[0]=each;units[1]=each;units[2]=each;
-   // Three-target goal: TP1=25%, TP2=50%, TP3=25%.
-   // Two-target goal: TP1=25%, TP2=75%, split TP2 across two
-   // independently stopped native legs so TP1 fill still drives BE.
-   double w[3];w[0]=0.25;
-   w[1]=twoTargets?0.375:0.50;
-   w[2]=twoTargets?0.375:0.25;
-   for(int k=3*each;k<count;k++)
-   {
-      int best=2;
-      double gap=-1e10;
-      for(int j=2;j>=0;j--)
-      {
-         double missing=w[j]*count-units[j];
-         if(missing>gap+1e-7) {gap=missing;best=j;}
-      }
-      units[best]++;
-   }
-   a=NormalizeDouble(units[0]*step,8);
-   b=NormalizeDouble(units[1]*step,8);
-   c=NormalizeDouble(units[2]*step,8);
-   if(a<minlot-1e-7 || b<minlot-1e-7 || c<minlot-1e-7)
+   if(step<=0 || minlot<=0 || targetCount<1 || targetCount>MAX_NATIVE_TARGETS)
       return false;
-   // Broker volume-step limits can prevent 25/50/25 on tiny trades.
-   // Never misrepresent an equal 1/1/1 three-target exit as TP2-majority.
-   // Two-target trades CAN honour the priority with minimum 1/1/1,
-   // because legs 2 and 3 are assigned to TP2.
-   return twoTargets ? b+c>a+1e-7 : (b>a+1e-7 && b>c+1e-7);
-}
-bool AllocateFour(double total,double &a,double &b,double &c,double &d)
-{
-   double step=LotStep(),minlot=LotMin();
-   if(step<=0 || minlot<=0) return false;
-   int count=(int)MathFloor(total/step+1e-6);
-   int each=(int)MathCeil(minlot/step-1e-6);
-   if(each<1) each=1;
-   // Four native targets: 20%, 40%, 20%, 20%, TP2 strictly largest.
-   if(count<5*each) return false;
-   int units[4];for(int i=0;i<4;i++) units[i]=each;
-   double w[4];w[0]=0.20;w[1]=0.40;w[2]=0.20;w[3]=0.20;
-   for(int k=4*each;k<count;k++)
+   int totalUnits=(int)MathFloor(total/step+1e-7);
+   int minimumUnits=(int)MathCeil(minlot/step-1e-7);
+   if(minimumUnits<1) minimumUnits=1;
+   if(totalUnits<targetCount*minimumUnits) return false;
+   ArrayResize(lots,targetCount);
+   int base=totalUnits/targetCount;
+   int remainder=totalUnits%targetCount;
+   for(int i=0;i<targetCount;i++)
    {
-      int best=3;double gap=-1e10;
-      for(int j=3;j>=0;j--)
-      {
-         double missing=w[j]*count-units[j];
-         if(missing>gap+1e-7) {gap=missing;best=j;}
-      }
-      units[best]++;
+      int units=base+(i<remainder?1:0);
+      lots[i]=NormalizeDouble(units*step,8);
+      if(lots[i]<minlot-1e-7 ||
+         lots[i]>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX)+1e-7)
+         return false;
    }
-   a=NormalizeDouble(units[0]*step,8);
-   b=NormalizeDouble(units[1]*step,8);
-   c=NormalizeDouble(units[2]*step,8);
-   d=NormalizeDouble(units[3]*step,8);
-   return b>a+1e-7 && b>c+1e-7 && b>d+1e-7;
+   return true;
+}
+int TargetLeg(const int i)
+{
+   // Preserve existing GWS layer magic suffix 4 across EA updates.
+   // TP1,2,3 are 1,2,3; TP4,5,6 are 5,6,7.
+   return i<3?i+1:i+2;
 }
 bool HasBeenAttempted(const string id)
 {
@@ -470,7 +440,7 @@ bool CloseTicket(ulong ticket)
 bool CloseGroup(const string id)
 {
    bool ok=true;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
       ulong ticket=TicketForLeg(id,leg);
       if(ticket>0 && !CloseTicket(ticket)) ok=false;
@@ -549,7 +519,7 @@ bool StormTP1DrawdownReached(const string id,const string direction)
 }
 void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3,
-                const double tp4,const bool openRunner)
+                const double tp4,const double tp5,const double tp6,const bool openRunner)
 {
    bool buy=direction=="BUY";
    bool tp1Confirmed=TP1BrokerConfirmed(id);
@@ -563,9 +533,12 @@ void ManageLegs(const string id,const string direction,const double stop,
    bool stormUseTP1=stormAdaptive && StormTP1DrawdownReached(id,direction);
    MqlTick quote;
    if(!SymbolInfoTick(GoldSymbol,quote)) return;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
-      if(leg==TP4_LEG && !wasFourTargets) continue;
+      // Legacy 4-target groups and new 5/6-target groups share suffix 5.
+      // No synthetic positions are created by this loop.
+      if(leg==TP4_LEG && !wasFourTargets &&
+         !GlobalVariableCheck(IDKey(id,"TARGET_COUNT"))) continue;
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
       if((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)!=buy) continue;
@@ -600,7 +573,8 @@ void ManageLegs(const string id,const string direction,const double stop,
       double firstTarget=(stormAdaptive && !stormUseTP1)?tp2:tp1;
       double rawTP=leg==1?firstTarget:
                     (leg==2 || leg==LAYER_LEG || (leg==3 && wasTwoTargets)?tp2:
-                    (leg==TP4_LEG?tp4:tp3));
+                    (leg==TP4_LEG?tp4:(leg==TP5_LEG?tp5:
+                    (leg==TP6_LEG?tp6:tp3))));
       double validTP=ValidTP(buy,rawTP,quote);
       // Invalid or absent targets stay blank; never invent a TP.
       // Keep an existing valid native TP when a later feed omits it.
