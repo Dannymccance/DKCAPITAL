@@ -39,7 +39,7 @@ checks={
  "zero broker positions":x.get("broker_positions_total")==0,
  "zero pending orders":x.get("broker_orders_total")==0,
  "broker stops protected":x.get("broker_positions_protected") is True,
- "HTTP feed 200":x.get("feed_http")==200,
+ "broker feed 200 or old-gateway 404 during V4 bootstrap":x.get("feed_http") in (200,404),
 }
 for key,ok in checks.items(): print(("PASS" if ok else "BLOCK"),key)
 if not all(checks.values()): raise SystemExit("STOP: disarm EA on 5901, confirm flat and fresh")
@@ -63,7 +63,7 @@ r=Request("http://127.0.0.1:8765/v4/demo/feed",headers={"Authorization":"Bearer 
 with urlopen(r,timeout=8) as result:
  lines=result.read(300000).decode().splitlines()
  if result.status!=200 or not lines or lines[0]!="DKDEMO4":
-  raise SystemExit("BLOCK: invalid V3 gateway")
+  raise SystemExit("BLOCK: invalid V4 gateway")
  print("PASS authenticated DKDEMO4 feed; entries:",sum(1 for l in lines[1:] if l.startswith("S|") and "|ACTIVE|" in l))
 PY
 }
@@ -125,10 +125,14 @@ PY
   flat_disarmed
   docker compose --profile mt5-shadow up -d --no-deps --no-build signal-processor mt5-gateway
   backend_probe
-  echo "V3 gateway/parser running; both MT5 terminals and their EAs untouched"
+  echo "V4 gateway/parser running; both MT5 terminals and their EAs untouched"
   ;;
  stage-demo)
-  root_only;source_check;terminals;flat_disarmed;backend_probe
+  # Copying an approved EX5 to Experts does not attach or run it.
+  # Allow staging before a telemetry-producing EA is attached. The EA
+  # must be attached with EnableNewEntries=false and produce fresh,
+  # authenticated GBP DEMO broker telemetry before backend deployment.
+  root_only;source_check;terminals
   [[ "${METAEDITOR_ERRORS:-unset}" == 0 && "${METAEDITOR_WARNINGS:-unset}" == 0 ]] ||
     fail "Verify GUI shows 0 errors/0 warnings, then explicitly set METAEDITOR_ERRORS=0 METAEDITOR_WARNINGS=0"
   [[ -s "$EX5" && -s "$ARTIFACT" ]] || fail "compiled artifact missing"
@@ -138,8 +142,9 @@ PY
   install -o dkmt5 -g dkmt5 -m 0644 "$ARTIFACT" "$TARGET"
   cmp -s "$ARTIFACT" "$TARGET" || fail "demo binary hash mismatch"
   sha256sum "$ARTIFACT" "$TARGET"
-  echo "Candidate installed ALONGSIDE old EA. Nothing attached, restarted, or enabled."
-  echo "On 5901: refresh Navigator, attach candidate with EnableNewEntries=false after controlled old-EA detachment."
+  echo "Candidate STAGED on demo filesystem ONLY. Nothing attached, restarted, or enabled."
+  echo "On 5901: confirm GBP DEMO login and zero exposure in Trade tab; refresh Navigator and attach candidate with EnableNewEntries=false."
+  echo "Old gateway may respond 404 to /v4/demo/feed. Entry remains disabled; new EA must still POST fresh authenticated telemetry for the backend preflight."
   ;;
  *) echo "Usage: $0 {status|stage-compiler|verify-compiler|check-backend|deploy-backend|stage-demo}" >&2;exit 2;;
 esac

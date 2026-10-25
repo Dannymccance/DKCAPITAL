@@ -47,10 +47,36 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         self.assertIn('x.get("entry_enabled") is False', s)
         self.assertIn('x.get("broker_positions_total")==0', s)
         self.assertIn('x.get("broker_orders_total")==0', s)
-        self.assertIn('x.get("feed_http")==200', s)
+        self.assertIn('x.get("feed_http") in (200,404)', s)
         self.assertIn('0<=age<120', s)
         self.assertIn("source_check", s)
         self.assertIn('branch --show-current', s)
+
+    def test_staging_only_does_not_require_a_preexisting_attached_ea(self):
+        s = self.text
+        stage = s.split(" stage-demo)", 1)[1].split(" ;;", 1)[0]
+        self.assertIn("root_only;source_check;terminals", stage)
+        self.assertNotIn("flat_disarmed", stage)
+        self.assertNotIn("backend_probe", stage)
+        self.assertIn('install -o dkmt5 -g dkmt5 -m 0644 "$ARTIFACT" "$TARGET"', stage)
+        self.assertIn('cmp -s "$ARTIFACT" "$TARGET"', stage)
+        self.assertIn('[[ -d "$DEMO" && ! -e "$TARGET" ]]', stage)
+        self.assertIn('"${METAEDITOR_ERRORS:-unset}" == 0', stage)
+        self.assertIn('"${METAEDITOR_WARNINGS:-unset}" == 0', stage)
+        self.assertIn("Nothing attached, restarted, or enabled", stage)
+
+    def test_backend_bootstrap_requires_real_flat_disarmed_broker_telemetry(self):
+        s = self.text
+        gate = s.split("flat_disarmed() {", 1)[1].split("backend_probe()", 1)[0]
+        self.assertIn('0<=age<120', gate)
+        self.assertIn('x.get("entry_enabled") is False', gate)
+        self.assertIn('x.get("broker_positions_total")==0', gate)
+        self.assertIn('x.get("broker_orders_total")==0', gate)
+        self.assertIn('x.get("feed_http") in (200,404)', gate)
+        self.assertNotIn("or True", gate)
+        self.assertNotIn("DEMO_EA_ABSENT_CONFIRMED", gate)
+        self.assertIn('flat_disarmed', s.split(" deploy-backend)",1)[1])
+        self.assertIn('result.status!=200', s)
 
     def test_compiled_artifact_hash_and_human_check_required(self):
         s = self.text
