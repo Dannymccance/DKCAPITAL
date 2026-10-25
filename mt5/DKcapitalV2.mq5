@@ -1,4 +1,4 @@
-// DKcapital V2: DEMO-only, single GBP Account 1, native three-leg XAUUSD execution.
+// DKcapital V2.10: DEMO-only GBP Account 1, one protected XAUUSD leg per actual TP (1–6).
 // Not production approved. Compile in MetaEditor and broker-test BEFORE enabling entries.
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
@@ -786,8 +786,14 @@ void TryEntry(const string id,const string status,const string direction,
          trade.Buy(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg)):
          trade.Sell(vols[i],GoldSymbol,0,sl,tp,"DK2 "+IntegerToString((long)Hash(id))+"-"+IntegerToString(leg));
       ulong ticket=TicketForLeg(id,leg);
-      if(!sent || !BrokerDone() || ticket==0 || !PositionSelectByTicket(ticket) ||
-         PositionGetDouble(POSITION_SL)<=0 ||
+      bool ticketValid=ticket>0 && PositionSelectByTicket(ticket);
+      double nativeTP=ticketValid?PositionGetDouble(POSITION_TP):-1;
+      double tick=SymbolInfoDouble(GoldSymbol,SYMBOL_POINT);
+      bool tpVerified=ticketValid && (tp>0 ?
+          (nativeTP>0 && MathAbs(nativeTP-tp)<=MathMax(tick,1e-7)*1.01) :
+          (openRunner && i==2 && nativeTP<=0));
+      if(!sent || !BrokerDone() || !ticketValid ||
+         PositionGetDouble(POSITION_SL)<=0 || !tpVerified ||
          MathAbs(PositionGetDouble(POSITION_VOLUME)-vols[i])>LotStep()/2)
       {
          RecordDecision(id,"ENTRY","BROKER_ORDER_REJECTED_OR_PARTIAL",age,trade.ResultRetcode());
@@ -804,8 +810,10 @@ void TryEntry(const string id,const string status,const string direction,
    else
    {
       RecordDecision(id,"ENTRY","BROKER_FILLED",age);
+      double filledTotal=0;
+      for(int i=0;i<initialLegCount;i++) filledTotal+=vols[i];
       Print("DK2 filled signal=",id," targets=",targetCount,
-            " totalLots=",targetLots," planned risk limited by provider SL");
+            " actualLots=",filledTotal," provider SL risk capped");
    }
 }
 // Broker-history original leg volume is fixed even after partial closes.
