@@ -130,12 +130,12 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     declared = signal.get("tps") or {}
     num_numeric = len(declared)
     has_runner = bool(signal.get("tp3_open"))
-    expected = 1 if num_numeric == 1 else (4 if num_numeric >= 4 else 3)
+    expected = 3 if has_runner else min(num_numeric, 6)
     for leg in (1, 2, 3, 4, 5, 6, 7):
         # 4 has always been the optional layer; 5 denotes numeric TP4.
         if leg >= 5 and num_numeric < leg - 1 and leg not in state["legs"]:
             continue
-        if leg in (2, 3) and expected == 1 and leg not in state["legs"]:
+        if leg in (1, 2, 3) and leg > expected and leg not in state["legs"]:
             continue
         item = state["legs"].get(leg)
         if leg >= 4 and (item is None or item.get("entry") is None):
