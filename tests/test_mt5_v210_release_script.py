@@ -4,6 +4,7 @@ The Linux script itself is intentionally a human-gated operation: test that it
 parses and that candidate paths, protections and immutable-source guards exist.
 """
 from pathlib import Path
+import os
 import subprocess
 import unittest
 
@@ -30,6 +31,34 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         self.assertNotIn("systemctl stop", s)
         self.assertNotIn("systemctl start", s)
         self.assertNotIn("EnableNewEntries=true", s)
+
+    def test_each_terminal_must_be_active_individually(self):
+        self.assertIn("terminals() {", self.text)
+        fn = "terminals() {" + self.text.split("terminals() {", 1)[1].split(
+            "\nflat_disarmed() {", 1
+        )[0].rstrip()
+        shell = (
+            'fail() { exit 2; }\n'
+            'systemctl() { if [[ "$2" == "dkcapital-mt5-1" ]]; '
+            'then printf "%s\n" "$DEMO_STATE"; '
+            'else printf "%s\n" "$KYLE_STATE"; fi; }\n'
+            + fn + "\nterminals\n"
+        )
+        for demo, kyle, success in (
+            ("active", "active", True),
+            ("failed", "active", False),
+            ("active", "failed", False),
+            ("inactive", "inactive", False),
+        ):
+            with self.subTest(demo=demo, kyle=kyle):
+                env = {**os.environ, "DEMO_STATE": demo, "KYLE_STATE": kyle}
+                result = subprocess.run(
+                    ["bash", "-c", shell], env=env,
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                self.assertIn(f"dkcapital-mt5-1: {demo}", result.stdout)
+                self.assertIn(f"dkcapital-mt5-2: {kyle}", result.stdout)
 
     def test_backend_no_other_container_restarts_and_backups(self):
         s = self.text

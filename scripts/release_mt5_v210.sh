@@ -24,7 +24,18 @@ source_check() {
  git -C "$ROOT" diff --quiet HEAD -- mt5/DKcapitalV2.mq5 || fail "EA source uncommitted"
  git -C "$ROOT" diff --cached --quiet -- mt5/DKcapitalV2.mq5 || fail "EA source staged locally"
 }
-terminals() { systemctl is-active dkcapital-mt5-1 dkcapital-mt5-2; }
+# With multiple unit names, systemctl is-active can return success when
+# *any one* unit is active. Check the actual state of EACH MT5 unit.
+terminals() {
+ local service state failures=0
+ for service in dkcapital-mt5-1 dkcapital-mt5-2; do
+   state="$(systemctl is-active "$service" 2>/dev/null || true)"
+   printf '%s: %s\n' "$service" "$state"
+   if [[ "$state" != "active" ]]; then failures=1; fi
+ done
+ [[ "$failures" == 0 ]] ||
+   fail "one or more MT5 terminals are not active; inspect systemctl status and journalctl before continuing"
+}
 flat_disarmed() {
  docker compose --profile mt5-shadow exec -T mt5-gateway python - <<'PY'
 import json
