@@ -61,7 +61,7 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("double tp=(openRunner && i==2)?0:ValidTP(buy,target,q);", entry)
         self.assertIn('GlobalVariableSet(IDKey(id,"TARGET_COUNT"),targetCount);', entry)
         self.assertIn('GlobalVariablesFlush();', entry)
-        self.assertIn('if(openRunner && !EnableOpenRunnerEntries)', entry)
+        self.assertIn('if(!EnableOpenRunnerEntries)', entry)
         self.assertIn('"OPEN_RUNNER_REQUIRES_OPT_IN"', entry)
         self.assertIn('"MISSING_OR_INVALID_NATIVE_TP"', entry)
         self.assertIn("StopValid(buy,providerSL,q)", entry)
