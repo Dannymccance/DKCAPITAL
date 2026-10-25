@@ -4,6 +4,11 @@ The Linux script itself is intentionally a human-gated operation: test that it
 parses and that candidate paths, protections and immutable-source guards exist.
 """
 from pathlib import Path
+from contextlib import redirect_stdout
+from datetime import UTC, datetime
+from unittest.mock import patch
+import io
+import json
 import os
 import subprocess
 import unittest
@@ -35,7 +40,7 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
     def test_each_terminal_must_be_active_individually(self):
         self.assertIn("terminals() {", self.text)
         fn = "terminals() {" + self.text.split("terminals() {", 1)[1].split(
-            "\nflat_disarmed() {", 1
+            "\nflat_broker_ready() {", 1
         )[0].rstrip()
         shell = (
             'fail() { exit 2; }\n'
@@ -67,13 +72,14 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         self.assertNotIn("docker compose down", s)
         self.assertIn('shutil.copy2(p,dest/name)', s)
         self.assertIn('"telegram-events.jsonl","signal-state.json","mt5-account1.json"', s)
-        self.assertGreaterEqual(s.count("flat_disarmed"), 3)
+        self.assertGreaterEqual(s.count("flat_broker_ready"), 3)
         self.assertIn("backend_probe", s)
 
-    def test_release_requires_expected_broker_identity_and_disarm(self):
+    def test_release_requires_expected_broker_identity_and_flat_exposure(self):
         s = self.text
         self.assertIn('"GBP DEMO login 5057220041"', s)
-        self.assertIn('x.get("entry_enabled") is False', s)
+        self.assertIn('print("INFO demo entry setting (not a backend-deployment gate):",x.get("entry_enabled"))', s)
+        self.assertNotIn('"new entries disabled":', s)
         self.assertIn('x.get("broker_positions_total")==0', s)
         self.assertIn('x.get("broker_orders_total")==0', s)
         self.assertIn('x.get("feed_http") in (200,404)', s)
@@ -85,7 +91,7 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         s = self.text
         stage = s.split(" stage-demo)", 1)[1].split(" ;;", 1)[0]
         self.assertIn("root_only;source_check;terminals", stage)
-        self.assertNotIn("flat_disarmed", stage)
+        self.assertNotIn("flat_broker_ready", stage)
         self.assertNotIn("backend_probe", stage)
         self.assertIn('install -o dkmt5 -g dkmt5 -m 0644 "$ARTIFACT" "$TARGET"', stage)
         self.assertIn('cmp -s "$ARTIFACT" "$TARGET"', stage)
@@ -94,18 +100,51 @@ class ReleaseScriptSafetyTests(unittest.TestCase):
         self.assertIn('"${METAEDITOR_WARNINGS:-unset}" == 0', stage)
         self.assertIn("Nothing attached, restarted, or enabled", stage)
 
-    def test_backend_bootstrap_requires_real_flat_disarmed_broker_telemetry(self):
+    def test_backend_bootstrap_requires_real_flat_broker_ready_broker_telemetry(self):
         s = self.text
-        gate = s.split("flat_disarmed() {", 1)[1].split("backend_probe()", 1)[0]
+        gate = s.split("flat_broker_ready() {", 1)[1].split("backend_probe()", 1)[0]
         self.assertIn('0<=age<120', gate)
-        self.assertIn('x.get("entry_enabled") is False', gate)
+        self.assertNotIn('x.get("entry_enabled") is False', gate)
+        self.assertNotIn('x.get("entry_enabled") is True', gate)
+        self.assertIn('x.get("entry_enabled")', gate)
         self.assertIn('x.get("broker_positions_total")==0', gate)
         self.assertIn('x.get("broker_orders_total")==0', gate)
         self.assertIn('x.get("feed_http") in (200,404)', gate)
         self.assertNotIn("or True", gate)
         self.assertNotIn("DEMO_EA_ABSENT_CONFIRMED", gate)
-        self.assertIn('flat_disarmed', s.split(" deploy-backend)",1)[1])
+        self.assertIn('flat_broker_ready', s.split(" deploy-backend)",1)[1])
         self.assertIn('result.status!=200', s)
+
+    def test_backend_preflight_accepts_armed_or_disarmed_demo_if_flat(self):
+        # Exercise the exact embedded Python preflight, not just a string assertion.
+        block = self.text.split("flat_broker_ready() {", 1)[1].split(
+            "backend_probe() {", 1
+        )[0]
+        code = block.split("<<'PY'\\n", 1)[1].split("\\nPY", 1)[0]
+        base = {
+            "received_at": datetime.now(UTC).isoformat(),
+            "mode": "DEMO", "currency": "GBP", "login": 5057220041,
+            "broker_positions_total": 0, "broker_orders_total": 0,
+            "broker_positions_protected": True, "feed_http": 404,
+        }
+        for value in (True, False, None):
+            with self.subTest(entry_enabled=value):
+                payload = {**base, "entry_enabled": value}
+                result = io.StringIO()
+                with patch("pathlib.Path.read_text", return_value=json.dumps(payload)), redirect_stdout(result):
+                    exec(compile(code, "<flat_demo_preflight>", "exec"), {})
+                self.assertIn("INFO demo entry setting", result.getvalue())
+                self.assertNotIn("BLOCK", result.getvalue())
+
+        # Unrelated identity and exposure controls must still fail closed.
+        for overrides in ({"broker_positions_total": 1},
+                          {"broker_orders_total": 1},
+                          {"login": 111111}):
+            with self.subTest(overrides=overrides):
+                payload = {**base, **overrides, "entry_enabled": True}
+                with patch("pathlib.Path.read_text", return_value=json.dumps(payload)), redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        exec(compile(code, "<flat_demo_preflight>", "exec"), {})
 
     def test_compiled_artifact_hash_and_human_check_required(self):
         s = self.text
