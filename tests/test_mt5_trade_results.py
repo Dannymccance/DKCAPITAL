@@ -2,7 +2,7 @@ import unittest
 from datetime import UTC, datetime
 
 from dkcapital.mt5_signal_cards import mt5_group
-from dkcapital.mt5_trade_results import completed_results
+from dkcapital.mt5_trade_results import completed_results, result_embed
 
 
 NOW = datetime(2026, 10, 17, 19, 0, tzinfo=UTC)
@@ -95,6 +95,25 @@ class Mt5TradeResultsTests(unittest.TestCase):
 
     def test_stale_snapshot(self):
         test_no_result_on_stale_snapshot()
+
+    def test_source_is_original_telegram_channel_not_provider(self):
+        signal = {**SIGNALS[0], "source_chat_title": "GWS - CAPITAL", "chat_id": -100123456}
+        out = completed_results(snapshot([
+            deal(11, 1, "IN", .01), deal(12, 1, "OUT", .01, profit=3.0, reason="TP")
+        ]), [signal], now=NOW)[SID]
+        self.assertEqual(out["provider"], "GWS")
+        self.assertEqual(out["source"], "GWS - CAPITAL")
+        embed = result_embed(out)
+        fields = {field.name: field.value for field in embed.fields}
+        self.assertEqual(fields["PROVIDER"], "GWS")
+        self.assertEqual(fields["SOURCE"], "GWS - CAPITAL")
+
+    def test_source_is_not_guessed_when_historical_title_missing(self):
+        signal = {**SIGNALS[0], "chat_id": -100123456}
+        out = completed_results(snapshot([
+            deal(11, 1, "IN", .01), deal(12, 1, "OUT", .01, profit=3.0, reason="TP")
+        ]), [signal], now=NOW)[SID]
+        self.assertEqual(out["source"], "Telegram chat -100123456")
 
     def test_reason_not_invented(self):
         test_unverified_reason_never_claims_tp()

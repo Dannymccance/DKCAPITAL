@@ -126,6 +126,16 @@ def completed_results(snapshot: dict[str, Any], signals: list[dict[str, Any]],
 
         sorted_signals = sorted(by_provider[root], key=lambda s: str(s.get("opened_at") or ""))
         provider = str(sorted_signals[0].get("source_style") or "telegram").upper()
+        # Preserve the exact originating Telegram channel, distinct from provider.
+        # Older snapshots might only contain the stable numeric chat identity.
+        title = next(
+            (str(item.get("source_chat_title")).strip()
+             for item in sorted_signals if item.get("source_chat_title")),
+            "",
+        )
+        chat_id = sorted_signals[0].get("chat_id")
+        source = title or (f"Telegram chat {chat_id}" if chat_id is not None
+                           else "Source not recorded")
         side = str(sorted_signals[0].get("direction") or "?")
         leg_rows = []
         for i, signal in enumerate(sorted_signals, 1):
@@ -140,7 +150,7 @@ def completed_results(snapshot: dict[str, Any], signals: list[dict[str, Any]],
         first_entries = [_instant(d.get("time")) for d in group_deals if d["entry_type"] == "IN"]
         first_entries = [t for t in first_entries if t is not None]
         results[root] = {
-            "root": root, "provider": provider, "side": side, "legs": leg_rows,
+            "root": root, "provider": provider, "source": source, "side": side, "legs": leg_rows,
             "pnl": round(sum(leg_pnl.values()), 2), "exit_type": exit_type,
             "closed_at": last_exit.isoformat(),
             "opened_at": min(first_entries).isoformat() if first_entries else None,
@@ -160,6 +170,7 @@ def result_embed(result: dict[str, Any]):
     embed = discord.Embed(title=f"XAUUSD | {title}", description="**FINAL TRADE RESULT**",
                           color=colour)
     embed.add_field(name="PROVIDER", value=result["provider"], inline=True)
+    embed.add_field(name="SOURCE", value=str(result.get("source") or "Source not recorded")[:1024], inline=True)
     embed.add_field(name="SIDE", value=result["side"], inline=True)
     embed.add_field(name="FINAL", value="TRADE CLOSED", inline=True)
     sign = "£" if result["currency"] == "GBP" else result["currency"] + " "

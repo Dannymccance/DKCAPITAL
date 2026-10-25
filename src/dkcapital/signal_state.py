@@ -40,6 +40,7 @@ class Signal:
     reentries: int = 0
     layer_max: float | None = None
     source_style: str | None = None
+    source_chat_title: str | None = None
     remaining_fraction: float = 1.0
     partial_close_count: int = 0
     status: str = "ACTIVE"
@@ -175,6 +176,7 @@ class SignalState:
                         tp3_open=action.tp3_open,
                         layer_max=action.layer_max,
                         source_style=action.source_style,
+                        source_chat_title=str(event.get("chat_title") or "").strip()[:160] or None,
                         last_update_at=timestamp,
                         last_update_text=text,
                         history=[
