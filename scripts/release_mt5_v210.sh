@@ -36,7 +36,7 @@ terminals() {
  [[ "$failures" == 0 ]] ||
    fail "one or more MT5 terminals are not active; inspect systemctl status and journalctl before continuing"
 }
-flat_disarmed() {
+flat_broker_ready() {
  docker compose --profile mt5-shadow exec -T mt5-gateway python - <<'PY'
 import json
 from pathlib import Path
@@ -46,14 +46,14 @@ age=(datetime.now(UTC)-datetime.fromisoformat(x["received_at"].replace("Z","+00:
 checks={
  "fresh broker telemetry":0<=age<120,
  "GBP DEMO login 5057220041":x.get("mode")=="DEMO" and x.get("currency")=="GBP" and x.get("login")==5057220041,
- "new entries disabled":x.get("entry_enabled") is False,
  "zero broker positions":x.get("broker_positions_total")==0,
  "zero pending orders":x.get("broker_orders_total")==0,
  "broker stops protected":x.get("broker_positions_protected") is True,
  "broker feed 200 or old-gateway 404 during V4 bootstrap":x.get("feed_http") in (200,404),
 }
+print("INFO demo entry setting (not a backend-deployment gate):",x.get("entry_enabled"))
 for key,ok in checks.items(): print(("PASS" if ok else "BLOCK"),key)
-if not all(checks.values()): raise SystemExit("STOP: disarm EA on 5901, confirm flat and fresh")
+if not all(checks.values()): raise SystemExit("STOP: DEMO broker identity, exposure or fresh telemetry requirement failed")
 PY
 }
 backend_probe() {
@@ -119,7 +119,7 @@ case "$COMMAND" in
  deploy-backend)
   root_only;source_check
   cd "$ROOT"
-  terminals;flat_disarmed
+  terminals;flat_broker_ready
   docker compose --profile mt5-shadow exec -T mt5-gateway python - <<'PY'
 from pathlib import Path
 from datetime import datetime, UTC
@@ -133,7 +133,7 @@ for name in ("telegram-events.jsonl","signal-state.json","mt5-account1.json"):
 print("Backed up to",dest)
 PY
   docker compose --profile mt5-shadow build signal-processor mt5-gateway
-  flat_disarmed
+  flat_broker_ready
   docker compose --profile mt5-shadow up -d --no-deps --no-build signal-processor mt5-gateway
   backend_probe
   echo "V4 gateway/parser running; both MT5 terminals and their EAs untouched"
@@ -141,8 +141,9 @@ PY
  stage-demo)
   # Copying an approved EX5 to Experts does not attach or run it.
   # Allow staging before a telemetry-producing EA is attached. The EA
-  # must be attached with EnableNewEntries=false and produce fresh,
-  # authenticated GBP DEMO broker telemetry before backend deployment.
+  # must produce fresh, authenticated GBP DEMO broker telemetry and
+  # prove zero positions/orders before backend deployment. The EA entry
+  # toggle is intentionally NOT a backend deployment gate (demo only).
   root_only;source_check;terminals
   [[ "${METAEDITOR_ERRORS:-unset}" == 0 && "${METAEDITOR_WARNINGS:-unset}" == 0 ]] ||
     fail "Verify GUI shows 0 errors/0 warnings, then explicitly set METAEDITOR_ERRORS=0 METAEDITOR_WARNINGS=0"
@@ -154,8 +155,8 @@ PY
   cmp -s "$ARTIFACT" "$TARGET" || fail "demo binary hash mismatch"
   sha256sum "$ARTIFACT" "$TARGET"
   echo "Candidate STAGED on demo filesystem ONLY. Nothing attached, restarted, or enabled."
-  echo "On 5901: confirm GBP DEMO login and zero exposure in Trade tab; refresh Navigator and attach candidate with EnableNewEntries=false."
-  echo "Old gateway may respond 404 to /v4/demo/feed. Entry remains disabled; new EA must still POST fresh authenticated telemetry for the backend preflight."
+  echo "On 5901: confirm GBP DEMO login and zero exposure in Trade tab; refresh Navigator and attach candidate. Entry arming is a user-controlled demo setting."
+  echo "Old gateway may respond 404 to /v4/demo/feed. When V4 comes online, enabled entries could execute current valid signals; verify desired settings."
   ;;
  *) echo "Usage: $0 {status|stage-compiler|verify-compiler|check-backend|deploy-backend|stage-demo}" >&2;exit 2;;
 esac

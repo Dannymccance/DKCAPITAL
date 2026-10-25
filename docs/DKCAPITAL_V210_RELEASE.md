@@ -93,7 +93,7 @@ METAEDITOR_ERRORS=0 METAEDITOR_WARNINGS=0 \
 Do not use the older EX5 with the compiler warning. This command stages
 only `DKcapitalV210_TP1to6_SignFix1.ex5` alongside historic demo EAs.
 
-## 3. Attach safely on DEMO chart, with entries OFF
+## 3. Attach the V2.10 EA to the GBP DEMO chart
 
 In VNC 5901: confirm GBP DEMO login `5057220041`, XAUUSD,
 **zero open positions and zero pending orders** in the MT5 Trade tab,
@@ -107,21 +107,25 @@ confirming the dialog:
 - `TelemetryUrl=http://127.0.0.1:8765/v2/demo/telemetry`
 - `FeedToken`: existing private token from the local saved inputs/preset.
   Do not paste credentials into logs, chats, or GitHub.
-- `EnableNewEntries=false`, `EnableLayerEntries=false`,
-  `EnableOpenRunnerEntries=false`,
-  `EnableStormConditionalTP1=false`.
+- `EnableNewEntries` is controlled by the demo operator. It does **not**
+  block backend deployment when true; it will allow eligible new signals
+  after the V4 gateway comes online if MT5 Algo Trading permits execution.
+- Keep `EnableLayerEntries=false`, `EnableOpenRunnerEntries=false`,
+  `EnableStormConditionalTP1=false` until separately demo-validated.
 
 Check Experts tab confirms `version=2.10` and no
 `invalid configuration` errors. With the old gateway, the
 V4 instruction request can temporarily log HTTP **404**, because
-`/v4/demo/feed` is not deployed yet. That is **expected only during
-this disarmed bootstrap period**, and it must not generate entries.
+`/v4/demo/feed` is not deployed yet. That is **expected before the V4 gateway is deployed**. Once the V4
+endpoint is online, an already-armed demo EA may execute any eligible
+fresh signal; a quiet Telegram channel is not proof that no such signal
+exists.
 
-The attached, disarmed V2.10 EA reports fresh broker-side identity,
-positions, orders, account state and its `entry_enabled=false` over
+The attached V2.10 EA reports fresh broker-side identity,
+positions, orders, account state and its actual `entry_enabled` value over
 the **existing** `/v2/demo/telemetry` POST endpoint.
 
-## 4. Deploy backend after disarmed broker telemetry is fresh
+## 4. Deploy backend after broker-flat telemetry is fresh
 
 ```bash
 cd /opt/dkcapital
@@ -132,9 +136,11 @@ bash scripts/release_mt5_v210.sh check-backend
 Both pre- and post-Docker-build preflight gates still **require**:
 fresh authenticated telemetry (age under 120 seconds), GBP DEMO
 login `5057220041`, no broker positions, no pending orders,
-`entry_enabled=false`, and broker stops protected. The HTTP feed
+and broker stops protected. **`entry_enabled=true` and `false` are both
+permitted** for this demo-only backend deployment. The value is reported
+as informational telemetry and is never changed by the release script. The HTTP feed
 status must be **200 or the pre-upgrade 404** during bootstrap.
-A 404 **does not waive any trading or risk checks**. The
+A 404 **does not waive any remaining broker identity or exposure checks**. The
 post-deployment `check-backend` requires authenticated
 `DKDEMO4` from `/v4/demo/feed` with HTTP **200**.
 
@@ -174,7 +180,8 @@ exercise **1, 2, 3, 4, 5, and 6 numeric TPs**.
   layer suffix 4. Verify account broker history, Discord results
   and controlled recovery before considering any automated arming.
 
-Only after broker tests pass should Account 1 be approved for new entries.
+Broker-demo testing should precede unattended automated trading; the
+operator remains responsible for the demo arming decision.
 V2.10 is **GBP DEMO only** and MUST NOT be attached to Dan's future USD REAL
 Vantage account; that requires a distinct, broker-tested live EA.
 
