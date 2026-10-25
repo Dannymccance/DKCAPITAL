@@ -41,7 +41,7 @@ class FourTargetCompatibility(unittest.TestCase):
         broker = (ROOT/"src/dkcapital/mt5_broker_events.py").read_text()
         results = (ROOT/"src/dkcapital/mt5_trade_results.py").read_text()
         recovery = (ROOT/"scripts/mt5_terminal_autoheal.py").read_text()
-        self.assertIn('magic%10<=TP6_LEG', EA)
+        self.assertIn('magic%10<=(ulong)TP6_LEG', EA)
         self.assertIn('leg not in (1, 2, 3, 4, 5, 6, 7)', reporting)
         self.assertIn('magic % 10 not in (1, 2, 3, 4, 5, 6, 7)', recovery)
         self.assertIn('for leg in (1, 2, 3, 4, 5, 6, 7):', broker)
