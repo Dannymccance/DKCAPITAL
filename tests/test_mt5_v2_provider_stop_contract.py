@@ -110,7 +110,7 @@ class V2ProviderStopContract(unittest.TestCase):
 
     def test_layer_is_in_all_lifecycle_paths(self):
         code = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("magic%10<=TP6_LEG", code)
+        self.assertIn("magic%10<=(ulong)TP6_LEG", code)
         self.assertIn("for(int leg=1;leg<=TP6_LEG;leg++)", code)
         self.assertIn("for(int leg=TP6_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)", code)
         self.assertIn("if(i==0) protectiveSL=sl;", code)
