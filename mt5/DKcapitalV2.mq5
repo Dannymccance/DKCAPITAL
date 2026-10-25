@@ -819,7 +819,7 @@ double OriginalVolume(const string id)
       if(deal==0 || HistoryDealGetString(deal,DEAL_SYMBOL)!=GoldSymbol ||
          HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
       ulong magic=(ulong)HistoryDealGetInteger(deal,DEAL_MAGIC);
-      for(int leg=1;leg<=TP4_LEG;leg++)
+      for(int leg=1;leg<=TP6_LEG;leg++)
          if(leg!=LAYER_LEG && magic==LegMagic(id,leg))
          {
             total+=HistoryDealGetDouble(deal,DEAL_VOLUME);
@@ -901,13 +901,19 @@ void TryLayer(const string id,const long mid,const double percentage,
       layerLots>SymbolInfoDouble(GoldSymbol,SYMBOL_VOLUME_MAX))
    {RecordDecision(id,"LAYER","LAYER_BELOW_MINIMUM_LOT_OR_MISSING_ORIGINAL",age);return;}
 
-   // No layer after TP1 or any missing original leg. On a four
-   // target trade, the TP4 position is original leg 5, not the layer 4.
+   // A new signal uses exactly TARGET_COUNT native original TP legs;
+   // never treat reserved suffix 4 as an original. Legacy 2-target V2.09
+   // had three original positions; legacy 4-target had magic suffix 5.
+   int targetCount=3;
    bool fourTargets=GlobalVariableCheck(IDKey(id,"FOUR_TARGET_ENTRY"));
+   if(GlobalVariableCheck(IDKey(id,"TARGET_COUNT")))
+      targetCount=(int)GlobalVariableGet(IDKey(id,"TARGET_COUNT"));
+   else if(fourTargets) targetCount=4;
+   if(targetCount<1 || targetCount>MAX_NATIVE_TARGETS) return;
    double priceVolume=0,openVolume=0,protectiveSL=0;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int i=0;i<targetCount;i++)
    {
-      if(leg==LAYER_LEG || (leg==TP4_LEG && !fourTargets)) continue;
+      int leg=TargetLeg(i);
       ulong ticket=TicketForLeg(id,leg);
       if(ticket==0 || !PositionSelectByTicket(ticket))
       {RecordDecision(id,"LAYER","LAYER_REQUIRES_ALL_ORIGINAL_LEGS_OPEN",age);return;}
@@ -918,7 +924,7 @@ void TryLayer(const string id,const long mid,const double percentage,
       {RecordDecision(id,"LAYER","LAYER_INVALID_NATIVE_SL_OR_RISK",age);return;}
       priceVolume+=PositionGetDouble(POSITION_PRICE_OPEN)*lots;
       openVolume+=lots;
-      if(leg==1) protectiveSL=sl;
+      if(i==0) protectiveSL=sl;
       else if(buy) protectiveSL=MathMax(protectiveSL,sl);
       else protectiveSL=MathMin(protectiveSL,sl);
    }
@@ -1003,7 +1009,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    if(kind!="PARTIAL_CLOSE" || pct<=0 || pct>100) return;
    // Keep a durable target remaining lot balance across retries and restarts.
    double total=0;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -1020,7 +1026,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
    }
    double target=GlobalVariableGet(targetKey);
    double needed=FloorLots(total-target);
-   for(int leg=TP4_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)
+   for(int leg=TP6_LEG;leg>=1 && needed>=LotMin()-1e-8;leg--)
    {
       ulong t=TicketForLeg(id,leg);
       if(t==0 || !PositionSelectByTicket(t)) continue;
@@ -1035,7 +1041,7 @@ void HandleAction(const string id,const long mid,const string kind,const double 
       needed=FloorLots(needed-part);
    }
    double current=0;
-   for(int leg=1;leg<=TP4_LEG;leg++)
+   for(int leg=1;leg<=TP6_LEG;leg++)
    {
       ulong t=TicketForLeg(id,leg);
       if(t>0 && PositionSelectByTicket(t))
@@ -1235,28 +1241,30 @@ void ProcessFeed(const string content)
 {
    string lines[];
    int count=StringSplit(content,'\n',lines);
-   if(count<1 || StringFind(lines[0],"DKDEMO3")!=0)
+   if(count<1 || StringFind(lines[0],"DKDEMO4")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
    for(int i=1;i<count;i++)
    {
       string f[];StringTrimLeft(lines[i]);StringTrimRight(lines[i]);
       if(lines[i]=="") continue;
       int fields=StringSplit(lines[i],'|',f);
-      if((fields==12 || fields==13) && f[0]=="S")
+      if(fields==15 && f[0]=="S")
       {
          if(f[3]!="BUY" && f[3]!="SELL") continue;
          double low=StringToDouble(f[4]),high=StringToDouble(f[5]);
          if(low<=0 || high<=0) continue;
          bool openRunner=f[10]=="OPEN";
-         if(fields==13 && openRunner) continue;
-         double fourth=fields==13?StringToDouble(f[11]):0;
+         double fourth=StringToDouble(f[11]);
+         double fifth=StringToDouble(f[12]);
+         double sixth=StringToDouble(f[13]);
+         if(openRunner && (fourth>0 || fifth>0 || sixth>0)) continue;
          long openedAt=(long)StringToInteger(f[fields-1]);
          TryEntry(f[1],f[2],f[3],low,high,StringToDouble(f[6]),
             openedAt,StringToDouble(f[8]),StringToDouble(f[9]),
-            StringToDouble(f[10]),fourth,openRunner);
+            StringToDouble(f[10]),fourth,fifth,sixth,openRunner);
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
             StringToDouble(f[8]),StringToDouble(f[9]),
-            StringToDouble(f[10]),fourth,openRunner);
+            StringToDouble(f[10]),fourth,fifth,sixth,openRunner);
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
@@ -1267,7 +1275,7 @@ void ProcessFeed(const string content)
          {
             string prior[];
             int n=StringSplit(lines[j],'|',prior);
-            if((n!=12 && n!=13) || prior[0]!="S" || prior[1]!=f[1])
+            if(n!=15 || prior[0]!="S" || prior[1]!=f[1])
                continue;
             TryLayer(f[1],(long)StringToInteger(f[2]),StringToDouble(f[3]),
                      (int)StringToInteger(f[4]),StringToDouble(f[5]),
@@ -1319,7 +1327,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.09 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.10 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
