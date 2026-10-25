@@ -73,7 +73,7 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
         tickets.add(ticket)
         magic = _integer(p["magic"])
         leg = magic % 10
-        if not 5100000000 <= magic <= 48100000000 or leg not in (1, 2, 3, 4, 5):
+        if not 5100000000 <= magic <= 48100000000 or leg not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError("unowned position")
         out_pos.append({
             "ticket": ticket, "magic": magic, "group": magic // 10,
@@ -129,8 +129,8 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
                 raise ValueError("duplicate pending order ticket")
             seen_orders.add(ticket)
             magic = _integer(order["magic"])
-            if not (5100000001 <= magic <= 48049672955 and
-                    magic % 10 in (1, 2, 3, 4, 5)):
+            if not (5100000001 <= magic <= 48049672957 and
+                    magic % 10 in (1, 2, 3, 4, 5, 6, 7)):
                 raise ValueError("unowned pending order")
             if order.get("symbol") != "XAUUSD":
                 raise ValueError("unexpected pending order symbol")
@@ -161,7 +161,7 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
             raise ValueError("duplicate deal")
         seen_deals.add(deal_ticket)
         magic = _integer(d["magic"])
-        if not 5100000000 <= magic <= 48100000000 or magic % 10 not in (1, 2, 3, 4, 5):
+        if not 5100000000 <= magic <= 48100000000 or magic % 10 not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError("unowned deal")
         out_deals.append({
             "ticket": deal_ticket,
