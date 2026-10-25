@@ -92,6 +92,9 @@ class SixTargetContracts(unittest.TestCase):
             'RecordDecision(id,"ENTRY","BROKER_RISK_VALUATION_FAILED",age);',
             'GlobalVariableSet(IDKey(id,"ATTEMPT"),(double)TimeGMT());',
             'if(!CloseGroup(id))',
+            'double nativeTP=ticketValid?PositionGetDouble(POSITION_TP):-1;',
+            'bool tpVerified=ticketValid && (tp>0 ?',
+            'PositionGetDouble(POSITION_SL)<=0 || !tpVerified ||',
         ):
             self.assertIn(token, EA)
 
