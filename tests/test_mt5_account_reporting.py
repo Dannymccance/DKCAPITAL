@@ -199,15 +199,20 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(normalized["positions"][0]["leg"], 5)
         self.assertEqual(normalized["deals"][0]["magic"], MAGIC + 5)
 
-    def test_rejects_unowned_sixth_leg(self):
-        data = example()
-        data["positions"][0]["magic"] = MAGIC + 6
-        with self.assertRaises(ValueError):
-            normalize_telemetry(data, LOGIN)
-        data = example()
-        data["deals"][0]["magic"] = MAGIC + 6
-        with self.assertRaises(ValueError):
-            normalize_telemetry(data, LOGIN)
+    def test_accepts_tp5_and_tp6_leg_magic_suffixes(self):
+        for suffix in (5, 6, 7):
+            data = example()
+            data["positions"][0]["magic"] = MAGIC + suffix
+            data["deals"][0]["magic"] = MAGIC + suffix
+            normal = normalize_telemetry(data, LOGIN)
+            self.assertEqual(normal["positions"][0]["leg"], suffix)
+
+    def test_rejects_unowned_eighth_leg(self):
+        for index in ("positions", "deals"):
+            data = example()
+            data[index][0]["magic"] = MAGIC + 8
+            with self.assertRaises(ValueError):
+                normalize_telemetry(data, LOGIN)
 
     def test_missing_stop_marked_unknown(self):
         data = example()
