@@ -12,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Isle_of_Man")
-EXPECTED_PIP_SIZE = 0.10  # XAUUSD: USD 0.10 = 1 pip; USD 0.01 = 1 point
+EXPECTED_PIP_SIZE = 0.01  # provisional; confirm actual broker/provider convention
 
 
 def _number(value: Any, *, minimum: float = -1e14) -> float:
