@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from dkcapital.mt5_account_reporting import normalize_telemetry
 from dkcapital.mt5_gateway import GatewayConfig, Mt5GatewayHandler
-from scripts.generate_mt5_v211_profile import generate
+from scripts.generate_mt5_v211_profile import generate, token_from_private_env
 
 
 class ProfileBuildTests(unittest.TestCase):
@@ -66,6 +66,50 @@ class ProfileBuildTests(unittest.TestCase):
         self.assertIn('input string FeedToken = "";', source)
         self.assertIn("ACCOUNT_TRADE_MODE_REAL", source)
         self.assertIn("HighRiskSignalPct<=0 || HighRiskSignalPct>MaxSignalRiskPct", source)
+
+
+    def test_account3_private_token_defaults_are_local_only(self):
+        synthetic_token = "abcd" * 16
+        source = generate(3, 36193223, "REAL", "USD",
+                          "VantageMarkets-Live 4", 150.0,
+                          feed_token=synthetic_token)
+        self.assertIn('input string FeedToken = "' + synthetic_token + '";', source)
+        self.assertIn("input bool EnableNewEntries = false;", source)
+        self.assertIn("COMPILED_ACCOUNT_ID = 3", source)
+        self.assertIn('AccountInfoString(ACCOUNT_SERVER)=="VantageMarkets-Live 4"', source)
+        for invalid in ("", "not-a-token", "z" * 64, "abc" * 22):
+            with self.subTest(invalid=invalid[:12]):
+                with self.assertRaises(ValueError):
+                    generate(3, 36193223, "REAL", "USD", "VantageMarkets-Live 4",
+                             150.0, feed_token=invalid)
+        with self.assertRaises(ValueError):
+            generate(2, 12345, "DEMO", "GBP", "Broker-Demo", 100,
+                     feed_token=synthetic_token)
+
+    def test_token_is_loaded_only_from_verified_private_account3_env(self):
+        synthetic_token = "abcd" * 16
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / ".env"
+            path.write_text(
+                "MT5_ACCOUNT3_LOGIN=36193223\\n"
+                "MT5_ACCOUNT3_MODE=REAL\\n"
+                "MT5_ACCOUNT3_CURRENCY=USD\\n"
+                "MT5_ACCOUNT3_SERVER=VantageMarkets-Live 4\\n"
+                "MT5_ACCOUNT3_TOKEN=" + synthetic_token + "\\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                token_from_private_env(path, login=36193223, mode="REAL",
+                                       currency="USD", server="VantageMarkets-Live 4"),
+                synthetic_token)
+            with self.assertRaisesRegex(ValueError, "identity mismatch"):
+                token_from_private_env(path, login=36193223, mode="REAL",
+                                       currency="USD", server="Wrong-Live")
+            with path.open("a") as stream:
+                stream.write("MT5_ACCOUNT3_TOKEN=duplicated\\n")
+            with self.assertRaisesRegex(ValueError, "Duplicate"):
+                token_from_private_env(path, login=36193223, mode="REAL",
+                                       currency="USD", server="VantageMarkets-Live 4")
 
 
 class ProfileGatewayTests(unittest.TestCase):
