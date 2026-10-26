@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from dkcapital.mt5_account_reporting import EXPECTED_PIP_SIZE
-
 LOCAL = ZoneInfo("Europe/Isle_of_Man")
 HISTORY_VERSION = 1
 EA_DEAL_LIMIT = 1000
@@ -34,7 +32,7 @@ def _week_start(instant: datetime):
 
 
 def weekly_average(deals: list[dict[str, Any]], *, now: datetime,
-                   pip_size: float = EXPECTED_PIP_SIZE) -> dict[str, Any] | None:
+                   pip_size: float = 0.01) -> dict[str, Any] | None:
     """Mean net realised pips over *all* elapsed local calendar weeks.
 
     A signal contributes a volume-weighted realised price move per week
@@ -112,7 +110,7 @@ def weekly_average(deals: list[dict[str, Any]], *, now: datetime,
 
 
 def record_weekly_average(path: Path, snapshot: dict[str, Any], *,
-                          pip_size: float = EXPECTED_PIP_SIZE,
+                          pip_size: float = 0.01,
                           now: datetime | None = None) -> dict[str, Any] | None:
     """Archive authenticated broker deals, deduping by ticket across restarts.
 

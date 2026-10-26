@@ -12,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Isle_of_Man")
-EXPECTED_PIP_SIZE = 0.10  # XAUUSD: USD 0.10 = 1 pip; USD 0.01 = 1 point
+EXPECTED_PIP_SIZE = 0.01  # provisional; confirm actual broker/provider convention
 
 
 def _number(value: Any, *, minimum: float = -1e14) -> float:
@@ -281,6 +281,19 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         sum(lots for lots, _, _ in exits)
         for exits in group_exits.values() if sum(lots for lots, _, _ in exits) > 0
     )
+    # Monetary P&L weights each closed price movement by its actual lots.
+    # Keep the legacy summed signal-pips metric separately: it intentionally
+    # weights each signal equally and may have a different sign.
+    closed_moves = [
+        (lots, pips)
+        for exits in group_exits.values()
+        for lots, pips, _ in exits
+    ]
+    closed_lots = sum(lots for lots, _ in closed_moves)
+    week_lot_weighted_pips = (
+        sum(lots * pips for lots, pips in closed_moves) / closed_lots
+        if closed_lots else 0.0
+    )
     positions = []
     groups: dict[int, float] = defaultdict(float)
     risk_unknown = False
@@ -304,6 +317,7 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         "today_realized_gbp": round(today_cash, 2),
         "week_realized_gbp": round(weekly_cash, 2),
         "week_realized_pips": round(weekly_pips, 1),
+        "week_lot_weighted_pips": round(week_lot_weighted_pips, 1),
         "week_closed_legs": weekly_closes, "week_closed_signals": len(group_exits), "pip_size": pip_size,
         "positions": positions,
         "feed_http": snapshot.get("feed_http", 0),

@@ -15,7 +15,7 @@ from discord.ext import commands, tasks
 
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
-from dkcapital.mt5_account_reporting import EXPECTED_PIP_SIZE, summarize
+from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_pip_history import record_weekly_average
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
@@ -1093,7 +1093,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
         description=(
             f"**{status}** | Login `{summary['login']}`\n"
             f"Last received: {summary['received_at']}\n"
-            f"XAUUSD pip convention: USD {pip_size:.2f} = 1 pip (USD 0.01 = 1 point)"
+            f"XAUUSD pip convention: USD {pip_size:.2f} per pip (provisional)"
         ),
         color=discord.Color.orange() if stale else discord.Color.blue(),
     )
@@ -1130,8 +1130,11 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
         value=(
             f"Today: {dot(summary['today_realized_gbp'])} **£{summary['today_realized_gbp']:+,.2f}**\n"
             f"This week: {dot(summary['week_realized_gbp'])} **£{summary['week_realized_gbp']:+,.2f}**\n"
-            f"This week: {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
-            "(volume-weighted price movement per signal; excludes fees)\n"
+            f"This week (signal pips): {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
+            "(each signal counted once)\n"
+            f"Lot-weighted average move: {dot(summary['week_lot_weighted_pips'])} "
+            f"**{summary['week_lot_weighted_pips']:+,.1f} pips** "
+            "(closed volume, before commission/swap)\n"
             + (
                 (f"Average weekly: **{weekly_pip_history['average_pips']:+,.1f} pips** "
                  f"(since {weekly_pip_history['first_trade']}, "
@@ -1206,7 +1209,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_events_state_path = Path("/app/data/mt5-broker-events-state.json")
     mt5_channel_id = int(mt5_channel_raw) if mt5_channel_raw else 0
     mt5_alert_id = int(mt5_alert_raw) if mt5_alert_raw else 0
-    mt5_pip_size = EXPECTED_PIP_SIZE  # Reporting-only; ignore legacy .env 0.01 point convention.
+    mt5_pip_size = float(os.getenv("MT5_XAU_PIP_SIZE", "0.01"))
     mt5_snapshot = Path(os.getenv("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json"))
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
     mt5_pip_history_path = Path(os.getenv("MT5_ACCOUNT1_PIP_HISTORY_PATH", "/app/data/mt5-account1-pip-history.json"))
