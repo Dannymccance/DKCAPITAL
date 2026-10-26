@@ -16,7 +16,7 @@ TEMPLATE = ROOT / "mt5/DKcapitalV2.mq5"
 
 
 def generate(account_id: int, login: int, mode: str, currency: str,
-             server: str, lot_denominator: float) -> str:
+             server: str, lot_denominator: float, feed_token: str | None = None) -> str:
     if account_id not in (2, 3):
         raise ValueError("Only independent profile 2 or 3 can use this generator")
     if type(login) is not int or login <= 0 or login == 5057220041:
@@ -30,6 +30,10 @@ def generate(account_id: int, login: int, mode: str, currency: str,
     if (not math.isfinite(lot_denominator) or not 50 <= lot_denominator <= 10000):
         raise ValueError("Explicit approved account-currency lot denominator required")
 
+    if feed_token is not None:
+        if account_id != 3 or re.fullmatch(r"[0-9a-fA-F]{64}", feed_token) is None:
+            raise ValueError("Private embedded token is supported for Account 3 and 64 hex characters only")
+
     source = TEMPLATE.read_text(encoding="utf-8")
 
     def replace(old: str, new: str, minimum: int = 1) -> None:
@@ -38,6 +42,9 @@ def generate(account_id: int, login: int, mode: str, currency: str,
         if hits < minimum:
             raise RuntimeError(f"Changed EA template: absent marker {old!r}")
         source = source.replace(old, new)
+
+    if feed_token is not None:
+        replace('input string FeedToken = "";', f'input string FeedToken = "{feed_token}";')
 
     replace("// DKcapital V2.11: DEMO-only GBP Account 1",
             f"// DKcapital V2.11: profile {account_id}, verified {mode} {currency} account")
@@ -109,6 +116,37 @@ def generate(account_id: int, login: int, mode: str, currency: str,
     return source
 
 
+
+def token_from_private_env(path: Path, *, login: int, mode: str,
+                           currency: str, server: str) -> str:
+    """Load a private token locally; never print it or include it in Git commits."""
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+        raise ValueError("Private .env file missing, symlinked, or oversized")
+    expected = {
+        "MT5_ACCOUNT3_LOGIN": str(login),
+        "MT5_ACCOUNT3_MODE": mode,
+        "MT5_ACCOUNT3_CURRENCY": currency,
+        "MT5_ACCOUNT3_SERVER": server,
+    }
+    seen: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key in (*expected, "MT5_ACCOUNT3_TOKEN"):
+            if key in seen:
+                raise ValueError(f"Duplicate {key} in private environment")
+            seen[key] = value.strip()
+    for key, value in expected.items():
+        if seen.get(key) != value:
+            raise ValueError(f"Account 3 private environment identity mismatch: {key}")
+    token = seen.get("MT5_ACCOUNT3_TOKEN", "")
+    if re.fullmatch(r"[0-9a-fA-F]{64}", token) is None:
+        raise ValueError("MT5_ACCOUNT3_TOKEN must be a 64-character hexadecimal value")
+    return token
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account-id", type=int, choices=(2, 3), required=True)
@@ -119,12 +157,26 @@ def main() -> None:
     parser.add_argument("--lot-denominator", type=float, required=True,
                         help="Manually approved account-currency units per 0.01 lots")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--feed-token-env-file", type=Path,
+                        help="For Account 3 only: privately prefill the EA token from local VPS .env")
     args = parser.parse_args()
+    token = None
+    if args.feed_token_env_file is not None:
+        if args.account_id != 3:
+            parser.error("Private token preset is Account 3-only")
+        try:
+            token = token_from_private_env(args.feed_token_env_file, login=args.login,
+                                           mode=args.mode, currency=args.currency,
+                                           server=args.server)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     candidate = generate(args.account_id, args.login, args.mode,
-                         args.currency, args.server, args.lot_denominator)
+                         args.currency, args.server, args.lot_denominator,
+                         feed_token=token)
     if args.output_dir.is_symlink() or not args.output_dir.is_dir():
         parser.error("Use an existing real isolated compiler staging directory")
-    filename = f"DKcapitalV211_Account{args.account_id}_{args.mode}_{args.currency}.mq5"
+    suffix = "_Private" if token is not None else ""
+    filename = f"DKcapitalV211_Account{args.account_id}_{args.mode}_{args.currency}{suffix}.mq5"
     path = args.output_dir / filename
     if path.exists() or path.is_symlink():
         parser.error("Candidate exists: no overwrites of reviewed sources")
@@ -132,6 +184,8 @@ def main() -> None:
         stream.write(candidate)
     path.chmod(0o600)
     print(f"STAGED {path} (NOT compiled, attached, approved or armed)")
+    if token is not None:
+        print("Private token preset in local source only; do NOT commit/share the MQ5 or EX5")
 
 
 if __name__ == "__main__":
