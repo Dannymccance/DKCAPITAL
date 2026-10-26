@@ -89,6 +89,14 @@ def generate(account_id: int, login: int, mode: str, currency: str,
             "   return MathMin(balance,MathMax(0.0,equity-credit));")
     replace(r'\"mode\":\"DEMO\",\"currency\":\"GBP\"',
             rf'\"mode\":\"{mode}\",\"currency\":\"{currency}\"')
+    # Independent profile telemetry is rejected unless it reports the exact broker
+    # server, not just the login/mode/currency. Send the live terminal value only
+    # after ProfileIdentity() has proved it matches the compiled server.
+    replace(
+        r'json+="\\\"login\\\":"+L(ExpectedAccountLogin)+',
+        r'json+="\\\"server\\\":\\\""+AccountInfoString(ACCOUNT_SERVER)+"\\\",";'
+        + "\\n   " + r'json+="\\\"login\\\":"+L(ExpectedAccountLogin)+'
+    )
     replace('DK2 BLOCK requires approved GBP DEMO hedging login',
             f'DK2 BLOCK requires verified {mode} {currency} hedging profile {account_id}')
     replace("DK2 DEMO Account 1 ready", f"DK2 {mode} Account {account_id} ready")
