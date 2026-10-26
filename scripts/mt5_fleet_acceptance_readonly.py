@@ -5,6 +5,7 @@ Never places orders, changes EAs, restarts services or prints bearer tokens.
 A 200 feed is connectivity proof, not live execution or recovery certification.
 """
 from __future__ import annotations
+import argparse
 import json
 import re
 import subprocess
@@ -115,9 +116,10 @@ def validate_snapshot(data: dict, n: int, env: dict, *, now: datetime,
     return issues
 
 
-def assess(env: dict) -> dict:
+def assess(env: dict, *, expect_all_armed: bool = False) -> dict:
     now = datetime.now(UTC)
-    result = {"checked_at": now.isoformat(), "accounts": {}, "overall": "PASS"}
+    result = {"checked_at": now.isoformat(), "accounts": {}, "overall": "PASS",
+              "entry_state_expectation": "ALL_ARMED" if expect_all_armed else "KYLE_DISARMED"}
     for n in (1, 2, 3):
         token = env["MT5_GATEWAY_TOKEN"] if n == 1 else env[f"MT5_ACCOUNT{n}_TOKEN"]
         feed = "/v5/demo/feed" if n == 1 else f"/v5/accounts/{n}/feed"
@@ -134,7 +136,10 @@ def assess(env: dict) -> dict:
         else:
             try:
                 data = json.loads(body)
-                issues += validate_snapshot(data, n, env, now=now)
+                issues += validate_snapshot(data, n, env, now=now,
+                                            expect_account2_entries=expect_all_armed)
+                if expect_all_armed and n in (1, 3) and data.get("entry_enabled") is not True:
+                    issues.append(f"Account {n} EA not armed under explicit all-armed parity mode")
             except (ValueError, TypeError):
                 issues.append("invalid broker snapshot JSON")
                 data = {}
@@ -160,6 +165,7 @@ def assess(env: dict) -> dict:
         if issues:
             result["overall"] = "FAIL"
     result["limitations"] = (
+        "Explicit all-armed expectation DOES NOT arm or approve trading. "
         "Connectivity, identity and broker-snapshot checks only; no live fills, "
         "SL amendments, TP execution, terminal restart or post-restart "
         "reconciliation tested."
@@ -168,8 +174,12 @@ def assess(env: dict) -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expect-all-armed", action="store_true",
+                        help="Read-only: check all 3 EAs report entries enabled; does not turn them on")
+    args = parser.parse_args()
     try:
-        report = assess(private_values())
+        report = assess(private_values(), expect_all_armed=args.expect_all_armed)
     except (OSError, ValueError, KeyError, URLError, subprocess.SubprocessError) as exc:
         print(f"BLOCKED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
