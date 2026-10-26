@@ -35,6 +35,7 @@ class Signal:
     sl_mode: str = "PRICE"
     be_deferred: bool = False
     tp3_open: bool = False
+    high_risk: bool = False
     tp_hits: list[int] = field(default_factory=list)
     layers: int = 1
     reentries: int = 0
@@ -174,6 +175,7 @@ class SignalState:
                         current_sl=action.sl,
                         sl_mode="PRICE" if action.sl is not None else "UNSET",
                         tp3_open=action.tp3_open,
+                        high_risk=action.high_risk,
                         layer_max=action.layer_max,
                         source_style=action.source_style,
                         source_chat_title=str(event.get("chat_title") or "").strip()[:160] or None,
@@ -442,6 +444,7 @@ class SignalState:
         signal.sl_mode = "PRICE" if action.sl is not None else "UNSET"
         signal.layer_max = action.layer_max
         signal.tp3_open = action.tp3_open
+        signal.high_risk = signal.high_risk or action.high_risk
         signal.be_deferred = False
         if action.source_style is not None:
             signal.source_style = action.source_style
