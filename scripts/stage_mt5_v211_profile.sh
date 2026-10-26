@@ -14,9 +14,15 @@ esac
 COMPILER="/opt/dkcapital-mt5-compiler/workspace/MetaTrader 5/MQL5/Experts"
 DEST="$ROOT/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
 shopt -s nullglob
-SOURCES=( "$COMPILER/DKcapitalV211_Account${ACCOUNT}_"*.mq5 )
-[[ ${#SOURCES[@]} -eq 1 ]] || { echo 'BLOCK: expected exactly one compiler source'; exit 2; }
-SOURCE="${SOURCES[0]}"
+if [[ "${2:-}" == "--local-token" && "$ACCOUNT" == 3 && "$#" == 2 ]]; then
+  SOURCE="$COMPILER/DKcapitalV211_Account3_REAL_USD_LocalToken.mq5"
+  [[ -f "$SOURCE" ]] || { echo 'BLOCK: Account3 local token source missing'; exit 2; }
+else
+  [[ "$#" == 1 ]] || { echo 'Usage: stage_mt5_v211_profile.sh 2|3 [--local-token (3 only)]' >&2; exit 2; }
+  SOURCES=( "$COMPILER/DKcapitalV211_Account${ACCOUNT}_"*.mq5 )
+  [[ ${#SOURCES[@]} -eq 1 ]] || { echo 'BLOCK: expected exactly one compiler source'; exit 2; }
+  SOURCE="${SOURCES[0]}"
+fi
 BINARY="${SOURCE%.mq5}.ex5"
 TARGET="$DEST/$(basename "$BINARY")"
 [[ -f "$SOURCE" && -s "$BINARY" && -d "$DEST" ]] ||
@@ -30,6 +36,10 @@ grep -Fq "COMPILED_ACCOUNT_ID = $ACCOUNT;" "$SOURCE" ||
   { echo 'BLOCK: wrong account identity'; exit 2; }
 grep -Fq "DKACCOUNT${ACCOUNT}V5" "$SOURCE" ||
   { echo 'BLOCK: wrong feed contract'; exit 2; }
+if [[ "${2:-}" == "--local-token" ]]; then
+  grep -Eq '"input string FeedToken = \\"[[:xdigit:]]{64}\\";"' "$SOURCE" ||
+    { echo 'BLOCK: invalid private Account3 feed token preset'; exit 2; }
+fi
 grep -Fq "EnableNewEntries = false;" "$SOURCE" ||
   { echo 'BLOCK: entry default not disarmed'; exit 2; }
 grep -Fq "HighRiskSignalPct = 2.0;" "$SOURCE" ||
