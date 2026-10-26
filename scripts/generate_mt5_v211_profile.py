@@ -58,9 +58,9 @@ def generate(account_id: int, login: int, mode: str, currency: str,
     replace('StringFind(lines[0],"DKDEMO5")',
             f'StringFind(lines[0],"DKACCOUNT{account_id}V5")')
     replace('StringFind(FeedUrl,"http://127.0.0.1:8765/")!=0',
-            f'StringFind(FeedUrl,"http://127.0.0.1:8765/v5/accounts/{account_id}/feed")!=0')
+            f'FeedUrl!="http://127.0.0.1:8765/v5/accounts/{account_id}/feed"')
     replace('StringFind(TelemetryUrl,"http://127.0.0.1:8765/")!=0',
-            f'StringFind(TelemetryUrl,"http://127.0.0.1:8765/v5/accounts/{account_id}/telemetry")!=0')
+            f'TelemetryUrl!="http://127.0.0.1:8765/v5/accounts/{account_id}/telemetry"')
     # GBP-labelled functions and fields must not be represented as GBP on a USD account.
     for old, new in (
         ("RiskGBP", "RiskAccountCurrency"),
