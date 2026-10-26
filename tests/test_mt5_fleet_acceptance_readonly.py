@@ -60,6 +60,51 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(report["accounts"]["2"]["entry_enabled"], False)
         self.assertEqual(report["accounts"]["3"]["other_account_token_http"], 401)
 
+    def test_explicit_three_account_armed_parity_is_read_only(self):
+        env = self.config()
+        def respond(path, token):
+            n = 1 if path.startswith("/v5/demo") or path.endswith("/account1") else int(path.split("/")[3])
+            own = env["MT5_GATEWAY_TOKEN" if n == 1 else f"MT5_ACCOUNT{n}_TOKEN"]
+            if token != own:
+                return 401, b'{"error":"unauthorized"}'
+            if path.endswith("/feed"):
+                header = "DKDEMO5" if n == 1 else f"DKACCOUNT{n}V5"
+                return 200, (header + "\\n").encode()
+            snapshot = self.snapshot(n)
+            snapshot["entry_enabled"] = True
+            return 200, json.dumps(snapshot).encode()
+        with patch("scripts.mt5_fleet_acceptance_readonly.read_url", side_effect=respond), \
+             patch("scripts.mt5_fleet_acceptance_readonly.is_active", return_value=True):
+            report = assess(env, expect_all_armed=True)
+            commissioning = assess(env)
+        self.assertEqual(report["overall"], "PASS", report)
+        self.assertEqual(report["entry_state_expectation"], "ALL_ARMED")
+        self.assertEqual(commissioning["overall"], "FAIL")
+        self.assertEqual(commissioning["accounts"]["2"]["issues"], [
+            "Kyle EA entry state does not match acceptance expectation"
+        ])
+        self.assertIn("DOES NOT arm", report["limitations"])
+
+    def test_armed_parity_fails_if_any_other_account_disarmed(self):
+        env = self.config()
+        def respond(path, token):
+            n = 1 if path.startswith("/v5/demo") or path.endswith("/account1") else int(path.split("/")[3])
+            own = env["MT5_GATEWAY_TOKEN" if n == 1 else f"MT5_ACCOUNT{n}_TOKEN"]
+            if token != own:
+                return 401, b'{"error":"unauthorized"}'
+            if path.endswith("/feed"):
+                header = "DKDEMO5" if n == 1 else f"DKACCOUNT{n}V5"
+                return 200, (header + "\\n").encode()
+            snapshot = self.snapshot(n)
+            snapshot["entry_enabled"] = n != 3
+            return 200, json.dumps(snapshot).encode()
+        with patch("scripts.mt5_fleet_acceptance_readonly.read_url", side_effect=respond), \
+             patch("scripts.mt5_fleet_acceptance_readonly.is_active", return_value=True):
+            report = assess(env, expect_all_armed=True)
+        self.assertEqual(report["overall"], "FAIL")
+        self.assertIn("Account 3 EA not armed under explicit all-armed parity mode",
+                      report["accounts"]["3"]["issues"])
+
     def test_risk_stops_account_identity_and_freshness_fail(self):
         env = self.config()
         snapshot = self.snapshot(2)
