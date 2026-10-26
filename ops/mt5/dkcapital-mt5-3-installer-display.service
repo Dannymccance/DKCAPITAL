@@ -1,0 +1,17 @@
+[Unit]
+Description=Temporary isolated Xvfb for Dan's MT5 installation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dkmt5c
+Group=dkmt5c
+WorkingDirectory=/var/lib/dkcapital-mt5-3
+Environment=HOME=/var/lib/dkcapital-mt5-3
+Environment=XAUTHORITY=/var/lib/dkcapital-mt5-3/.Xauthority
+ExecStart=/usr/local/bin/mt5-account3-installer-display
+Restart=no
+NoNewPrivileges=true
+
+# Deliberately no [Install] section: must never auto-start.
