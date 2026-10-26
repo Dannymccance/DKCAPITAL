@@ -75,6 +75,27 @@ class LifetimeWeeklyPipTests(unittest.TestCase):
             archived = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(len(archived["deals"]), 6)
 
+    def test_recalculates_older_archived_deals_with_corrected_pip_size(self):
+        """Raw broker deals are immutable; correct old 0.01-based averages on read."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "history.json"
+            legacy = record_weekly_average(
+                path, snapshot(self.entries), now=self.now, pip_size=0.01
+            )
+            self.assertEqual(legacy["average_pips"], 122.2)
+            corrected = record_weekly_average(
+                path, snapshot(self.entries), now=self.now
+            )
+            self.assertEqual(corrected["average_pips"], 12.2)
+            self.assertEqual(corrected["total_pips"], 36.7)
+            self.assertEqual(corrected["archived_deals"], 6)
+
+    def test_live_dashboard_config_cannot_override_broker_pip_definition(self):
+        bot_code = (Path(__file__).resolve().parents[1] /
+                    "src/dkcapital/discord_bot.py").read_text(encoding="utf-8")
+        self.assertIn("mt5_pip_size = EXPECTED_PIP_SIZE", bot_code)
+        self.assertNotIn('os.getenv("MT5_XAU_PIP_SIZE"', bot_code)
+
     def test_conflicting_ticket_and_other_login_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "pips.json"
