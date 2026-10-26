@@ -42,6 +42,9 @@ class Signal:
     layer_max: float | None = None
     source_style: str | None = None
     source_chat_title: str | None = None
+    # When this Telegram post first became a parsed entry, not when it was sent.
+    # Discord uses this for its no-history-spam cutover. EA uses opened_at.
+    publish_ready_at: str | None = None
     remaining_fraction: float = 1.0
     partial_close_count: int = 0
     status: str = "ACTIVE"
@@ -59,6 +62,7 @@ class Signal:
 class SignalState:
     def __init__(self) -> None:
         self.messages: dict[tuple[int, int], dict[str, Any]] = {}
+        self.first_valid_signal_at: dict[tuple[int, int], str] = {}
         self.deleted_messages: dict[tuple[int, int], dict[str, Any]] = {}
         self.signals: dict[str, Signal] = {}
         self.message_targets: dict[tuple[int, int], list[str]] = {}
@@ -74,12 +78,29 @@ class SignalState:
             message_id = event.get("message_id")
             if message_id is not None:
                 key = (int(chat_id), int(message_id))
+                if key not in self.first_valid_signal_at:
+                    actions = parse_actions(
+                        str(event.get("text") or ""),
+                        int(event["reply_to_message_id"])
+                        if event.get("reply_to_message_id") is not None else None,
+                    )
+                    if any(action.kind == "new_signal" for action in actions):
+                        # A post like "XAU USD SELL NOW" becomes actionable
+                        # when an edit adds its first entry zone. Its Telegram
+                        # date stays unchanged for MT5 entry-age checks.
+                        stamp = _timestamp(event)
+                        if event_type != "historical_message" and event.get("edit_date"):
+                            stamp = str(event["edit_date"])
+                        elif event_type == "message_edited" and event.get("observed_at"):
+                            stamp = str(event["observed_at"])
+                        self.first_valid_signal_at[key] = stamp
                 self.messages[key] = event
                 self.deleted_messages.pop(key, None)
         elif event_type == "message_deleted":
             for message_id in event.get("message_ids", []):
                 key = (int(chat_id), int(message_id))
                 removed = self.messages.pop(key, None)
+                self.first_valid_signal_at.pop(key, None)
                 if removed is not None:
                     self.deleted_messages[key] = removed
 
@@ -162,6 +183,9 @@ class SignalState:
                         root_message_id=message_id,
                         opened_at=timestamp,
                         symbol=action.symbol,
+                        publish_ready_at=self.first_valid_signal_at.get(
+                            (chat_id, message_id), timestamp
+                        ),
                         direction=action.direction,
                         entry_low=action.entry_low,
                         entry_high=action.entry_high,

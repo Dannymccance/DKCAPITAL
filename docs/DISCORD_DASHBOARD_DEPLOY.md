@@ -53,12 +53,26 @@ select `main`, and run it. The workflow:
 2. Verifies non-empty SSH secrets and the pinned SSH host key.
 3. Refuses to proceed if the VPS Git working tree is dirty or not on `main`.
 4. Fast-forwards the existing checkout.
-5. Builds and restarts **only** the `discord-bot` Docker Compose service.
-6. Checks that the average-weekly-pips reporting module imports correctly,
-   the dashboard channel and persistent volume exist, and the bot is running.
+5. Builds and restarts **only** the `signal-processor` and `discord-bot`
+   Docker Compose services. Both must be updated for edited Telegram signals
+   to appear on Discord.
+6. Checks that the processor exports edited-signal publication timing,
+   the Discord bot imports the new publisher and historical pip module,
+   and both reporting services are running with their shared volume.
 
-It deliberately does **not** restart the Telegram listener, the signal
-processor, MT5 gateway, MT5 service/EA, VNC or any other service.
+It deliberately does **not** restart the Telegram listener, MT5 gateway,
+MT5 service/EA, VNC or any other service. The processor rebuilds its
+signal snapshot from the existing event log using the original Telegram
+timestamps, preserving MT5 entry-age and execution checks.
+
+When a Telegram post starts as `XAU USD SELL NOW` and is later edited
+to contain a valid entry zone, the parser retains `opened_at` from the
+original post for MT5 and separately records `publish_ready_at` when
+the first parsable signal was observed. Discord's replay cutoff uses
+`publish_ready_at` for *new* cards and prioritizes them before routine
+edits to old cards. Historical posts that already contained a complete
+signal before the cutoff are not replayed. Deliberately deleted Discord
+cards retain a suppression marker and are not reposted by later edits.
 
 Check the final GitHub Actions job result, then check the existing
 Discord MT5 Demo Account 1 dashboard. Its performance section should

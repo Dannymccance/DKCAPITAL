@@ -40,6 +40,30 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temp.replace(path)
 
 
+def _new_signal_card_eligible(signal: dict[str, Any], cutover: str) -> bool:
+    """Use first successful parse time, not original Telegram post time.
+
+    Telegram's original date remains unchanged for broker entry-age checks.
+    Historical posts first parsed before Discord's cutover stay suppressed.
+    """
+    candidate = _local_datetime(
+        signal.get("publish_ready_at") or signal.get("opened_at"), "UTC"
+    )
+    boundary = _local_datetime(cutover, "UTC")
+    return candidate is not None and boundary is not None and candidate > boundary
+
+
+def _ordered_signals_for_discord(
+    signals: list[dict[str, Any]], messages: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Send missing cards before edits when the per-cycle edit budget is tight."""
+    return sorted(signals, key=lambda signal: (
+        str(signal.get("signal_id") or "") in messages,
+        str(signal.get("publish_ready_at") or signal.get("opened_at") or ""),
+        str(signal.get("signal_id") or ""),
+    ))
+
+
 def _paper_market_quote(state: dict[str, Any]) -> dict[str, Any] | None:
     simulation = state.get("simulation") if isinstance(state.get("simulation"), dict) else {}
     if simulation.get("enabled") and not simulation.get("last_market_processed_at"):
@@ -1544,14 +1568,19 @@ def build_bot(settings: Settings) -> commands.Bot:
         cutover = str(registry["replay_cutover_at"])
         changed = False
         updates = 0
+        # A card manually removed from Discord must not be recreated by a later
+        # edit of the same Telegram signal.
+        suppressed = registry.setdefault("suppressed", {})
         max_updates_per_cycle = 3  # Keep well below Discord message-edit rate limits.
-        for signal in sorted(signals, key=lambda x: str(x.get("opened_at") or "")):
+        # Send newly parsed signals before routine edits to existing cards.
+        # Otherwise three busy older cards can consume every update slot.
+        for signal in _ordered_signals_for_discord(signals, messages):
             signal_id = str(signal.get("signal_id") or "")
             if not signal_id:
                 continue
             prior = messages.get(signal_id)
             if not prior and (
-                not signal.get("opened_at") or str(signal["opened_at"]) <= cutover
+                signal_id in suppressed or not _new_signal_card_eligible(signal, cutover)
             ):
                 continue
             if isinstance(prior, int):
@@ -1579,7 +1608,9 @@ def build_bot(settings: Settings) -> commands.Bot:
                         msg = await channel.fetch_message(int(prior["message_id"]))
                         await msg.edit(embed=mt5_signal_embed(signal, broker_state))
                     except discord.NotFound:
-                        # Never recreate a deleted card for a historical signal.
+                        # Keep a durable tombstone so later provider edits
+                        # cannot resurrect a manually deleted Discord card.
+                        suppressed[signal_id] = datetime.now(UTC).isoformat()
                         messages.pop(signal_id, None)
                         _write_json(settings.discord_internal_signals_state_path, registry)
                         continue
