@@ -175,7 +175,8 @@ def main() -> None:
                          feed_token=token)
     if args.output_dir.is_symlink() or not args.output_dir.is_dir():
         parser.error("Use an existing real isolated compiler staging directory")
-    filename = f"DKcapitalV211_Account{args.account_id}_{args.mode}_{args.currency}.mq5"
+    suffix = "_Private" if token is not None else ""
+    filename = f"DKcapitalV211_Account{args.account_id}_{args.mode}_{args.currency}{suffix}.mq5"
     path = args.output_dir / filename
     if path.exists() or path.is_symlink():
         parser.error("Candidate exists: no overwrites of reviewed sources")
