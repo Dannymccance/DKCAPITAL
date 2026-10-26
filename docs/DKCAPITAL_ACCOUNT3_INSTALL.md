@@ -14,7 +14,7 @@ After reviewed PR is merged with passing CI, run as root on VPS:
     bash scripts/prepare_mt5_account3.sh audit
     bash scripts/prepare_mt5_account3.sh prepare
 
-The script deliberately does not start or enable a single service. It fails if another account is not active, Account 3 service/display/VNC is already running, the shared existing launcher lacks Account 3 support, there is an unexpected home owner, or any proposed installed unit conflicts with an existing file. Do not bypass failures or overwrite a different installed unit. No apt, Wine or Ubuntu upgrades are made.
+The script installs a **separate root-owned** `/usr/local/bin/dkcapital-mt5-run-account3` from the reviewed source and points only Account 3's systemd service at it. It does not change `/usr/local/bin/dkcapital-mt5-run`, which runs Accounts 1 and 2. The script deliberately does not start or enable a single service. It fails if another account is not active, Account 3 service/display/VNC is already running, the reviewed Account 3 launcher source lacks Account 3 support, there is an unexpected home owner, or any proposed installed unit conflicts with an existing file. Do not bypass failures or overwrite a different installed unit. No apt, Wine or Ubuntu upgrades are made.
 
 Set the Account 3 **independent private VNC password** interactively without printing it in chat:
 

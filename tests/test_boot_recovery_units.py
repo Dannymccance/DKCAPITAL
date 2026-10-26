@@ -39,7 +39,7 @@ class BootRecoveryUnitTests(unittest.TestCase):
         unit = (ROOT / "ops/mt5/dkcapital-mt5-3.service").read_text()
         self.assertIn("User=dkmt5c", unit)
         self.assertIn("WorkingDirectory=/var/lib/dkcapital-mt5-3", unit)
-        self.assertIn("ExecStart=/usr/local/bin/dkcapital-mt5-run 3", unit)
+        self.assertIn("ExecStart=/usr/local/bin/dkcapital-mt5-run-account3 3", unit)
         installer = (OPS / "install-recovery.sh").read_text()
         self.assertNotIn("dkcapital-mt5-3.service", installer)
         self.assertNotIn("dkcapital-vnc3.service", installer)

@@ -23,6 +23,11 @@ class Account3HostCommissioning(unittest.TestCase):
                           "docker compose", "apt upgrade", "do-release-upgrade",
                           "cp -a", "rm -rf", "curl ", "wget "):
             self.assertNotIn(forbidden, sh)
+        self.assertIn("check_target ops/mt5/dkcapital-mt5-run /usr/local/bin/dkcapital-mt5-run-account3", sh)
+        self.assertIn("install -o root -g root -m 0755 ops/mt5/dkcapital-mt5-run /usr/local/bin/dkcapital-mt5-run-account3", sh)
+        self.assertNotIn("install -o root -g root -m 0755 ops/mt5/dkcapital-mt5-run /usr/local/bin/dkcapital-mt5-run\n", sh)
+        self.assertIn("ExecStart=/usr/local/bin/dkcapital-mt5-run-account3 3",
+                      (ROOT / "ops/mt5/dkcapital-mt5-3.service").read_text())
         for required in ("[[ ! -S /tmp/.X11-unix/X152 ]]",
                          "useradd --system --user-group --create-home",
                          "systemctl daemon-reload", "cmp -s",

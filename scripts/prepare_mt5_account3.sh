@@ -16,8 +16,12 @@ done
 [[ "$(systemctl is-active dkcapital-mt5-3.service 2>/dev/null || true)" != active ]] || fail "Account 3 already active"
 [[ "$(systemctl is-active dkcapital-vnc3.service 2>/dev/null || true)" != active ]] || fail "Account 3 VNC active"
 [[ ! -S /tmp/.X11-unix/X152 ]] || fail "Display :152 occupied"
-[[ -x /usr/local/bin/dkcapital-mt5-run ]] || fail "MT5 launcher missing"
-grep -q 'dkmt5c' /usr/local/bin/dkcapital-mt5-run || fail "Installed launcher has no account3 support"
+# Accounts 1/2 intentionally keep their existing running launcher, even if old.
+[[ -x /usr/local/bin/dkcapital-mt5-run ]] || fail "Existing account1/2 launcher missing"
+# Account 3 instead gets a separately installed reviewed version with account3 support.
+grep -Fq '"3": ("dkmt5c", Path("/var/lib/dkcapital-mt5-3"), 152, None)' ops/mt5/dkcapital-mt5-run ||
+  fail "Reviewed source does not implement isolated account3"
+python3 -m py_compile ops/mt5/dkcapital-mt5-run
 for cmd in Xvfb x11vnc xauth runuser systemctl python3 openssl; do
  command -v "$cmd" >/dev/null || fail "Missing prerequisite: $cmd"
 done
@@ -41,6 +45,7 @@ check_target ops/mt5/dkcapital-mt5-3.service /etc/systemd/system/dkcapital-mt5-3
 check_target ops/recovery/dkcapital-vnc3.service /etc/systemd/system/dkcapital-vnc3.service
 check_target ops/mt5/dkcapital-mt5-3-installer-display.service /etc/systemd/system/dkcapital-mt5-3-installer-display.service
 check_target ops/mt5/mt5-account3-installer-display /usr/local/bin/mt5-account3-installer-display
+check_target ops/mt5/dkcapital-mt5-run /usr/local/bin/dkcapital-mt5-run-account3
 echo "AUDIT PASSED: no other account modified"
 [[ "$mode" == prepare ]] || exit 0
 [[ "$(git branch --show-current)" == main ]] || fail "Only merged main can be prepared"
@@ -50,6 +55,8 @@ if ! id dkmt5c >/dev/null 2>&1; then
 fi
 install -d -o dkmt5c -g dkmt5c -m 0700 "$home" "$home/.vnc" "$home/install"
 install -o root -g root -m 0755 ops/mt5/mt5-account3-installer-display /usr/local/bin/mt5-account3-installer-display
+# Do not overwrite the launcher used by the two running MT5 terminals.
+install -o root -g root -m 0755 ops/mt5/dkcapital-mt5-run /usr/local/bin/dkcapital-mt5-run-account3
 install -o root -g root -m 0644 ops/mt5/dkcapital-mt5-3.service /etc/systemd/system/dkcapital-mt5-3.service
 install -o root -g root -m 0644 ops/recovery/dkcapital-vnc3.service /etc/systemd/system/dkcapital-vnc3.service
 install -o root -g root -m 0644 ops/mt5/dkcapital-mt5-3-installer-display.service /etc/systemd/system/dkcapital-mt5-3-installer-display.service
