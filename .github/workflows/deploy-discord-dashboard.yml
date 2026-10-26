@@ -48,7 +48,7 @@ jobs:
             fi
           done
 
-      - name: Rebuild and restart Discord bot ONLY
+      - name: Rebuild and restart signal processor and Discord bot ONLY
         env:
           VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
           VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
@@ -82,13 +82,16 @@ jobs:
           git merge --ff-only origin/main
           docker compose --profile discord config -q
 
-          # Rebuild only the bot. No Telegram listener, MT5 gateway or EA restart.
-          docker compose --profile discord build discord-bot
-          docker compose --profile discord up -d --no-deps discord-bot
+          # The processor must expose publish_ready_at in signal-state.json.
+          # No Telegram listener, MT5 gateway, terminal or EA restart.
+          docker compose --profile discord build signal-processor discord-bot
+          docker compose --profile discord up -d --no-deps signal-processor discord-bot
 
-          # Confirm the running bot contains the merged reporting implementation.
+          # Confirm both services have the edited-message publication fix.
+          docker compose --profile discord exec -T signal-processor \
+            python -c 'from dkcapital.signal_state import Signal; assert "publish_ready_at" in Signal.__dataclass_fields__; print("Edited-signal state: OK")'
           docker compose --profile discord exec -T discord-bot \
-            python -c 'from dkcapital.mt5_pip_history import record_weekly_average, weekly_average; print("MT5 weekly pip module import: OK")'
+            python -c 'from dkcapital.discord_bot import _new_signal_card_eligible; from dkcapital.mt5_pip_history import weekly_average; print("Discord signal and pip reporting: OK")'
 
           docker compose --profile discord exec -T discord-bot python - <<'PY'
           import os
@@ -101,9 +104,11 @@ jobs:
           print("Dashboard channel configured; persistent volume present")
           PY
 
-          container="$(docker compose --profile discord ps -q discord-bot)"
-          test -n "$container"
-          test "$(docker inspect -f '{{.State.Running}}' "$container")" = "true"
-          echo "Discord bot running with weekly pip reporting code"
+          for service in signal-processor discord-bot; do
+            container="$(docker compose --profile discord ps -q "$service")"
+            test -n "$container"
+            test "$(docker inspect -f '{{.State.Running}}' "$container")" = "true"
+          done
+          echo "Signal processor and Discord bot running with edited-signal reporting"
           echo "MT5 EA, gateway, Telegram listener and their containers were not restarted"
           REMOTE
