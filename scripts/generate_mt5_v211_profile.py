@@ -93,9 +93,9 @@ def generate(account_id: int, login: int, mode: str, currency: str,
     # server, not just the login/mode/currency. Send the live terminal value only
     # after ProfileIdentity() has proved it matches the compiled server.
     replace(
-        r'json+="\\\"login\\\":"+L(ExpectedAccountLogin)+',
-        r'json+="\\\"server\\\":\\\""+AccountInfoString(ACCOUNT_SERVER)+"\\\",";'
-        + "\\n   " + r'json+="\\\"login\\\":"+L(ExpectedAccountLogin)+'
+        r'json+="\"login\":"+L(ExpectedAccountLogin)+',
+        r'json+="\"server\":\""+AccountInfoString(ACCOUNT_SERVER)+"\",";'
+        + "\n   " + r'json+="\"login\":"+L(ExpectedAccountLogin)+'
     )
     replace('DK2 BLOCK requires approved GBP DEMO hedging login',
             f'DK2 BLOCK requires verified {mode} {currency} hedging profile {account_id}')
