@@ -135,7 +135,8 @@ class UpdateSupervisorTests(unittest.TestCase):
         self.assertEqual(len({v[0] for v in module.ACCOUNTS.values()}), 3)
         self.assertEqual(len({v[1] for v in module.ACCOUNTS.values()}), 3)
         self.assertEqual(len({v[2] for v in module.ACCOUNTS.values()}), 3)
-        self.assertNotIn("/skipupdate", module.launch_command("3", Path("/opt/mt5/terminal64.exe"), None))
+        self.assertIn("/skipupdate", module.launch_command("3", Path("/opt/mt5/terminal64.exe"), None))
+        self.assertEqual(module.ACCOUNT3_APPROVAL_FILE, Path("/etc/dkcapital/mt5-account3-approved.sha256"))
 
 
 
