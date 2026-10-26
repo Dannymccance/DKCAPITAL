@@ -117,8 +117,14 @@ class ProfileGatewayTests(unittest.TestCase):
         self.assertEqual(writes[-1][1]["error"], "unauthorized")
 
     def test_normalized_profile_identity_and_sl_widening_alert(self):
-        from tests.test_mt5_account_reporting import _payload
-        payload = _payload()
+        payload = {
+            "version": 2, "mode": "DEMO", "currency": "GBP",
+            "login": 5057220041, "generated_at": datetime.now(UTC).isoformat(),
+            "balance": 1000.0, "equity": 1025.0,
+            "margin": 100.0, "free_margin": 925.0,
+            "bid": 4010.0, "ask": 4010.2,
+            "positions": [], "deals": [],
+        }
         payload["login"] = 725000003
         payload["mode"] = "REAL"
         payload["currency"] = "USD"
