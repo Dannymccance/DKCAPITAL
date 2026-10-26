@@ -91,11 +91,11 @@ class ProfileBuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / ".env"
             path.write_text(
-                "MT5_ACCOUNT3_LOGIN=36193223\\n"
-                "MT5_ACCOUNT3_MODE=REAL\\n"
-                "MT5_ACCOUNT3_CURRENCY=USD\\n"
-                "MT5_ACCOUNT3_SERVER=VantageMarkets-Live 4\\n"
-                "MT5_ACCOUNT3_TOKEN=" + synthetic_token + "\\n",
+                "MT5_ACCOUNT3_LOGIN=36193223\n"
+                "MT5_ACCOUNT3_MODE=REAL\n"
+                "MT5_ACCOUNT3_CURRENCY=USD\n"
+                "MT5_ACCOUNT3_SERVER=VantageMarkets-Live 4\n"
+                "MT5_ACCOUNT3_TOKEN=" + synthetic_token + "\n",
                 encoding="utf-8",
             )
             self.assertEqual(
@@ -106,7 +106,7 @@ class ProfileBuildTests(unittest.TestCase):
                 token_from_private_env(path, login=36193223, mode="REAL",
                                        currency="USD", server="Wrong-Live")
             with path.open("a") as stream:
-                stream.write("MT5_ACCOUNT3_TOKEN=duplicated\\n")
+                stream.write("MT5_ACCOUNT3_TOKEN=duplicated\n")
             with self.assertRaisesRegex(ValueError, "Duplicate"):
                 token_from_private_env(path, login=36193223, mode="REAL",
                                        currency="USD", server="VantageMarkets-Live 4")
