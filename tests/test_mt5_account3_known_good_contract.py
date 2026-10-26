@@ -32,8 +32,8 @@ class DanKnownGoodTests(unittest.TestCase):
         s = LAUNCHER.read_text()
         self.assertIn('ACCOUNT3_APPROVAL_FILE = Path("/etc/dkcapital/mt5-account3-approved.sha256")', s)
         self.assertEqual(s.count('approved_binary(executable, approval_file)'), 3)
-        self.assertIn('if account in ("1", "3"):', s)
-        self.assertIn('if sys.argv[1] in ("1", "3"):', s)
+        self.assertIn('if account in ("1", "2", "3"):', s)
+        self.assertIn('if sys.argv[1] in ("1", "2", "3"):', s)
         self.assertIn('RestartPreventExitStatus=78',
                       (ROOT / "ops/mt5/dkcapital-mt5-3.service").read_text())
 

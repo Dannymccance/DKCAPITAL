@@ -3,7 +3,7 @@
 
 This replaces the one-shot /usr/local/bin/dkcapital-mt5-run shell launcher.
 The caller is the existing per-account systemd unit; it must run as dkmt5 or
-dkmt5b or dkmt5c, never root. This does not modify EA files or trading flags.
+dkmt5b or dkmt5c, never root. All accounts require independent approved hashes. This does not modify EA files or trading flags.
 """
 from __future__ import annotations
 
@@ -27,9 +27,10 @@ UPDATE_SETTLE_SECONDS = 20
 UPDATE_RETRY_LIMIT = 3
 POLL_SECONDS = 2
 # Exit status 78 is excluded from systemd automatic restarts by the
-# account-1 drop-in. A changed/unapproved binary requires human review.
+# account-specific drop-in. A changed/unapproved binary requires human review.
 APPROVAL_FAILURE_EXIT = 78
 APPROVAL_FILE = Path("/etc/dkcapital/mt5-account1-approved.sha256")
+ACCOUNT2_APPROVAL_FILE = Path("/etc/dkcapital/mt5-account2-approved.sha256")
 ACCOUNT3_APPROVAL_FILE = Path("/etc/dkcapital/mt5-account3-approved.sha256")
 
 
@@ -57,7 +58,7 @@ def launch_command(account: str, executable: Path, profile: str | None) -> list[
         cmd.append(f"/profile:{profile}")
     # Undocumented best-effort flag seen in Wine MT5 deployments. This is NOT
     # a MetaQuotes-supported way to disable LiveUpdate; hash guard is authoritative.
-    if account in ("1", "3"):
+    if account in ("1", "2", "3"):
         cmd.append("/skipupdate")
     return cmd
 
@@ -143,7 +144,11 @@ def main() -> int:
         print("Usage: dkcapital-mt5-run {1|2|3}", file=sys.stderr, flush=True)
         return 2
     expected_user, home, display_number, profile = ACCOUNTS[sys.argv[1]]
-    approval_file = APPROVAL_FILE if sys.argv[1] == "1" else ACCOUNT3_APPROVAL_FILE
+    approval_file = {
+        "1": APPROVAL_FILE,
+        "2": ACCOUNT2_APPROVAL_FILE,
+        "3": ACCOUNT3_APPROVAL_FILE,
+    }[sys.argv[1]]
     import pwd
     account = pwd.getpwnam(expected_user)
     if os.geteuid() != account.pw_uid:
@@ -157,7 +162,7 @@ def main() -> int:
     if not executable.is_file():
         print(f"Missing MT5 terminal: {executable}", file=sys.stderr, flush=True)
         return 2
-    if sys.argv[1] in ("1", "3"):
+    if sys.argv[1] in ("1", "2", "3"):
         okay, detail = approved_binary(executable, approval_file)
         if not okay:
             print(f"MT5 ACCOUNT {sys.argv[1]} APPROVAL FAILURE: {detail}", file=sys.stderr, flush=True)
@@ -190,7 +195,7 @@ def main() -> int:
         handoffs = 0
         adopted = False
         while True:
-            if sys.argv[1] in ("1", "3"):
+            if sys.argv[1] in ("1", "2", "3"):
                 okay, detail = approved_binary(executable, approval_file)
                 if not okay:
                     print(f"MT5 ACCOUNT {sys.argv[1]} APPROVAL FAILURE: {detail}", file=sys.stderr, flush=True)
@@ -211,7 +216,7 @@ def main() -> int:
                 cmd = launch_command(sys.argv[1], executable, profile)
                 rc = subprocess.call(cmd, env=env)
                 print(f"MT5 EXIT CODE: {rc}", flush=True)
-            if sys.argv[1] in ("1", "3"):
+            if sys.argv[1] in ("1", "2", "3"):
                 okay, detail = approved_binary(executable, approval_file)
                 if not okay:
                     print(f"MT5 ACCOUNT {sys.argv[1]} APPROVAL FAILURE: {detail}", file=sys.stderr, flush=True)
@@ -219,12 +224,12 @@ def main() -> int:
             time.sleep(1)
             if not new_update_handoff(install / "logs", bookmark):
                 print("MT5 stopped without new LiveUpdate handoff; returning control to systemd", flush=True)
-                if sys.argv[1] in ("1", "3") and rc == 222:
+                if sys.argv[1] in ("1", "2", "3") and rc == 222:
                     print(f"MT5 ACCOUNT {sys.argv[1]}: startup failure 222; manual investigation required",
                           file=sys.stderr, flush=True)
                     return APPROVAL_FAILURE_EXIT
                 return rc if rc != 0 else 75
-            if sys.argv[1] in ("1", "3"):
+            if sys.argv[1] in ("1", "2", "3"):
                 print(f"MT5 ACCOUNT {sys.argv[1]}: LiveUpdate attempted; stopping for supervised validation",
                       file=sys.stderr, flush=True)
                 return APPROVAL_FAILURE_EXIT

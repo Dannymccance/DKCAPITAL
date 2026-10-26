@@ -91,13 +91,13 @@ class UpdateSupervisorTests(unittest.TestCase):
              patch.object(module, "wine_processes", side_effect=lambda uid, exe: {module.process_kind(windows_command, exe)}):
             self.assertEqual(module.await_update(target, 1002), "adopted")
 
-    def test_account1_uses_best_effort_skipupdate_only(self):
+    def test_every_account_uses_best_effort_skipupdate_and_individual_hash_pins(self):
         exe = Path("/opt/mt5/terminal64.exe")
         account1 = module.launch_command("1", exe, "5057220041")
         account2 = module.launch_command("2", exe, None)
         self.assertIn("/skipupdate", account1)
         self.assertIn("/profile:5057220041", account1)
-        self.assertNotIn("/skipupdate", account2)
+        self.assertIn("/skipupdate", account2)
         self.assertNotIn("/profile:5057220041", account2)
 
     def test_account1_approved_binary_enforces_pinned_hash(self):
@@ -136,6 +136,7 @@ class UpdateSupervisorTests(unittest.TestCase):
         self.assertEqual(len({v[1] for v in module.ACCOUNTS.values()}), 3)
         self.assertEqual(len({v[2] for v in module.ACCOUNTS.values()}), 3)
         self.assertIn("/skipupdate", module.launch_command("3", Path("/opt/mt5/terminal64.exe"), None))
+        self.assertEqual(module.ACCOUNT2_APPROVAL_FILE, Path("/etc/dkcapital/mt5-account2-approved.sha256"))
         self.assertEqual(module.ACCOUNT3_APPROVAL_FILE, Path("/etc/dkcapital/mt5-account3-approved.sha256"))
 
 
