@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from host_autoheal import discover_data_dir
 
 
