@@ -31,8 +31,8 @@ def generate(account_id: int, login: int, mode: str, currency: str,
         raise ValueError("Explicit approved account-currency lot denominator required")
 
     if feed_token is not None:
-        if account_id != 3 or re.fullmatch(r"[0-9a-fA-F]{64}", feed_token) is None:
-            raise ValueError("Private embedded token is supported for Account 3 and 64 hex characters only")
+        if re.fullmatch(r"[0-9a-fA-F]{64}", feed_token) is None:
+            raise ValueError("Private embedded token requires a 64-character hexadecimal value")
 
     source = TEMPLATE.read_text(encoding="utf-8")
 
@@ -118,15 +118,18 @@ def generate(account_id: int, login: int, mode: str, currency: str,
 
 
 def token_from_private_env(path: Path, *, login: int, mode: str,
-                           currency: str, server: str) -> str:
+                           currency: str, server: str, account_id: int = 3) -> str:
     """Load a private token locally; never print it or include it in Git commits."""
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
         raise ValueError("Private .env file missing, symlinked, or oversized")
+    if account_id not in (2, 3):
+        raise ValueError("Private token profile must be Account 2 or 3")
+    prefix = f"MT5_ACCOUNT{account_id}_"
     expected = {
-        "MT5_ACCOUNT3_LOGIN": str(login),
-        "MT5_ACCOUNT3_MODE": mode,
-        "MT5_ACCOUNT3_CURRENCY": currency,
-        "MT5_ACCOUNT3_SERVER": server,
+        prefix + "LOGIN": str(login),
+        prefix + "MODE": mode,
+        prefix + "CURRENCY": currency,
+        prefix + "SERVER": server,
     }
     seen: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -134,16 +137,16 @@ def token_from_private_env(path: Path, *, login: int, mode: str,
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if key in (*expected, "MT5_ACCOUNT3_TOKEN"):
+        if key in (*expected, prefix + "TOKEN"):
             if key in seen:
                 raise ValueError(f"Duplicate {key} in private environment")
             seen[key] = value.strip()
     for key, value in expected.items():
         if seen.get(key) != value:
-            raise ValueError(f"Account 3 private environment identity mismatch: {key}")
-    token = seen.get("MT5_ACCOUNT3_TOKEN", "")
+            raise ValueError(f"Account {account_id} private environment identity mismatch: {key}")
+    token = seen.get(prefix + "TOKEN", "")
     if re.fullmatch(r"[0-9a-fA-F]{64}", token) is None:
-        raise ValueError("MT5_ACCOUNT3_TOKEN must be a 64-character hexadecimal value")
+        raise ValueError(f"{prefix}TOKEN must be a 64-character hexadecimal value")
     return token
 
 
@@ -158,16 +161,14 @@ def main() -> None:
                         help="Manually approved account-currency units per 0.01 lots")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--feed-token-env-file", type=Path,
-                        help="For Account 3 only: privately prefill the EA token from local VPS .env")
+                        help="For Account 2 or 3: privately prefill the EA token from local VPS .env")
     args = parser.parse_args()
     token = None
     if args.feed_token_env_file is not None:
-        if args.account_id != 3:
-            parser.error("Private token preset is Account 3-only")
         try:
             token = token_from_private_env(args.feed_token_env_file, login=args.login,
                                            mode=args.mode, currency=args.currency,
-                                           server=args.server)
+                                           server=args.server, account_id=args.account_id)
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
     candidate = generate(args.account_id, args.login, args.mode,
