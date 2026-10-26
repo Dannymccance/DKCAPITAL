@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.generate_mt5_v211_profile import generate, token_from_private_env
+from scripts.generate_mt5_v211_profile import generate, token_from_private_env, write_compiler_source
 
 DEFAULT_ENV = Path("/opt/dkcapital/.env")
 DEFAULT_OUT = Path("/opt/dkcapital-mt5-compiler/workspace/MetaTrader 5/MQL5/Experts")
@@ -59,9 +59,7 @@ def prepare(env_file: Path, output_dir: Path, lot_denominator: float, symbol: st
     path = output_dir / name
     if path.exists() or path.is_symlink():
         raise ValueError("Refusing to overwrite an existing source")
-    with path.open("x", encoding="utf-8") as stream:
-        stream.write(source)
-    path.chmod(0o600)
+    write_compiler_source(path, source, output_dir)
     return path
 
 
