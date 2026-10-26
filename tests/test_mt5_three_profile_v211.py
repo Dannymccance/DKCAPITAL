@@ -77,7 +77,7 @@ class ProfileBuildTests(unittest.TestCase):
         self.assertIn('"${2:-}" == "--private"', content)
         self.assertIn("DKcapitalV211_Account${ACCOUNT}_", content)
         self.assertIn("file_mode=0600", content)
-        self.assertIn('"$#\" == 2', content)
+        self.assertIn('"$#" == 2', content)
 
     def test_account3_private_token_defaults_are_local_only(self):
         synthetic_token = "abcd" * 16
