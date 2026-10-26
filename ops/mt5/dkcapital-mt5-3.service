@@ -11,7 +11,7 @@ User=dkmt5c
 Group=dkmt5c
 WorkingDirectory=/var/lib/dkcapital-mt5-3
 Environment=HOME=/var/lib/dkcapital-mt5-3
-ExecStart=/usr/local/bin/dkcapital-mt5-run 3
+ExecStart=/usr/local/bin/dkcapital-mt5-run-account3 3
 Restart=always
 RestartSec=120
 RestartPreventExitStatus=78
