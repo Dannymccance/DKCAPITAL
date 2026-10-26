@@ -1130,8 +1130,11 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
         value=(
             f"Today: {dot(summary['today_realized_gbp'])} **£{summary['today_realized_gbp']:+,.2f}**\n"
             f"This week: {dot(summary['week_realized_gbp'])} **£{summary['week_realized_gbp']:+,.2f}**\n"
-            f"This week: {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
-            "(one price move per signal)\n"
+            f"This week (signal pips): {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
+            "(each signal counted once)\n"
+            f"Lot-weighted average move: {dot(summary['week_lot_weighted_pips'])} "
+            f"**{summary['week_lot_weighted_pips']:+,.1f} pips** "
+            "(closed volume, before commission/swap)\n"
             + (
                 (f"Average weekly: **{weekly_pip_history['average_pips']:+,.1f} pips** "
                  f"(since {weekly_pip_history['first_trade']}, "
