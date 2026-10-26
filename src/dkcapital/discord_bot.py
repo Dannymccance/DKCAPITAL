@@ -1561,7 +1561,13 @@ def build_bot(settings: Settings) -> commands.Bot:
         # edit of the same Telegram signal.
         suppressed = registry.setdefault("suppressed", {})
         max_updates_per_cycle = 3  # Keep well below Discord message-edit rate limits.
-        for signal in sorted(signals, key=lambda x: str(x.get("opened_at") or "")):
+        # Send newly parsed signals before routine edits to existing cards.
+        # Otherwise three busy older cards can consume every update slot.
+        for signal in sorted(signals, key=lambda x: (
+            str(x.get("signal_id") or "") in messages,
+            str(x.get("publish_ready_at") or x.get("opened_at") or ""),
+            str(x.get("signal_id") or ""),
+        )):
             signal_id = str(signal.get("signal_id") or "")
             if not signal_id:
                 continue
