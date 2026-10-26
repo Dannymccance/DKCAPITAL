@@ -21,7 +21,7 @@ class WeeklyRecordTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             weekly_record({"generated_at": (closing - timedelta(hours=2)).isoformat()},
                           now=closing + timedelta(minutes=5),
-                          pip_size=0.10, starting_balance=None)
+                          pip_size=0.01, starting_balance=None)
 
 
 if __name__ == "__main__":
