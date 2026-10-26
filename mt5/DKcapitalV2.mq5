@@ -1,12 +1,12 @@
-// DKcapital V2.10: DEMO-only GBP Account 1, one protected XAUUSD leg per actual TP (1–6).
+// DKcapital V2.11: DEMO-only GBP Account 1, one protected XAUUSD leg per actual TP (1–6).
 // Not production approved. Compile in MetaEditor and broker-test BEFORE enabling entries.
 // Historic messages never trigger an order after MaximumSignalAgeSeconds.
 // Explicit provider close actions are independent of provider-reported TP/SL results.
 #property strict
-#property version "2.10"
+#property version "2.11"
 #include <Trade/Trade.mqh>
 
-input string FeedUrl = "http://127.0.0.1:8765/v4/demo/feed";
+input string FeedUrl = "http://127.0.0.1:8765/v5/demo/feed";
 input string TelemetryUrl = "http://127.0.0.1:8765/v2/demo/telemetry";
 input string FeedToken = "";
 input string GoldSymbol = "XAUUSD";
@@ -19,7 +19,8 @@ input bool EnableStormConditionalTP1 = false; // GWS STORM: TP1 only after 20 pi
 input double StormPipSizeUSD = 0.10; // Explicit USD/pip conversion for GWS STORM.
 input double StormDrawdownPips = 20.0;
 input double MaxGroupRiskGBP = 75.0;
-input double MaxSignalRiskPct = 4.0; // Maximum planned stop risk at the PROVIDER SL, across all TP legs and layer.
+input double MaxSignalRiskPct = 4.0; // Normal provider signal maximum planned stop risk.
+input double HighRiskSignalPct = 2.0; // Explicit HIGH RISK provider signal: initial legs plus layer.
 input double MaxPortfolioRiskGBP = 150.0;
 input double RiskReferenceBalanceGBP = 1000.0; // Caps above are calibrated at this GBP balance.
 input double RiskPaddingGBPPerLeg = 1.0;
@@ -274,12 +275,11 @@ double RiskBalanceGBP()
    if(balance<=0 || equity<=0 || !MathIsValidNumber(balance) || !MathIsValidNumber(equity)) return 0;
    return MathMin(balance,equity);
 }
-double SignalRiskLimitGBP()
+double SignalRiskLimitGBP(const bool highRisk=false)
 {
-   // Target lots remain determined by ACCOUNT_BALANCE; only the broker
-   // stop-risk budget uses the lower balance/equity on a drawdown.
-   // Includes original TP1/TP2/TP3/TP4 legs and any attributable layer.
-   return RiskBalanceGBP()*MaxSignalRiskPct/100.0;
+   // Risk is capped at the lower of balance/equity and broker-valued SL.
+   double pct=highRisk?MathMin(MaxSignalRiskPct,HighRiskSignalPct):MaxSignalRiskPct;
+   return RiskBalanceGBP()*pct/100.0;
 }
 double GroupRiskLimitGBP()
 {
@@ -521,7 +521,8 @@ bool StormTP1DrawdownReached(const string id,const string direction)
 }
 void ManageLegs(const string id,const string direction,const double stop,
                 const string slMode,const double tp1,const double tp2,const double tp3,
-                const double tp4,const double tp5,const double tp6,const bool openRunner)
+                const double tp4,const double tp5,const double tp6,const bool openRunner,
+                const bool highRisk)
 {
    bool buy=direction=="BUY";
    bool tp1Confirmed=TP1BrokerConfirmed(id);
@@ -548,9 +549,7 @@ void ManageLegs(const string id,const string direction,const double stop,
       double currentTP=PositionGetDouble(POSITION_TP);
       double wantedSL=currentSL;
       double fill=PositionGetDouble(POSITION_PRICE_OPEN);
-      // Provider SL amendments are authoritative before BE, including
-      // wider stops that exceed the initial entry risk budget. Entry risk
-      // caps are intentionally checked only when opening a new position.
+      // Provider stop changes must stay within the broker-valued risk budget.
       bool slAlreadyAtOrBeyondBE=(currentSL>0 &&
                                    (buy ? currentSL>=fill : currentSL<=fill));
       bool preserveBE=(slMode=="BREAKEVEN" ||
@@ -568,7 +567,7 @@ void ManageLegs(const string id,const string direction,const double stop,
       }
       else if(slMode=="PRICE" && stop>0 && StopValid(buy,stop,quote))
       {
-         // Explicit provider changes may increase risk on an existing trade.
+         // Widening is checked below against the broker risk budget.
          wantedSL=NormalizePrice(stop);
       }
       // The separately tracked 10% layer exits at TP2.
@@ -582,6 +581,29 @@ void ManageLegs(const string id,const string direction,const double stop,
       // Keep an existing valid native TP when a later feed omits it.
       double wantedTP=validTP>0?validTP:currentTP;
       bool slChanged=MathAbs(wantedSL-currentSL)>=1e-8;
+      // Widen only if the resulting signal/portfolio exposure remains safe.
+      // Breakeven and tighter SL amendments are still permitted.
+      if(slChanged && !BetterStop(buy,wantedSL,currentSL))
+      {
+         double volume=PositionGetDouble(POSITION_VOLUME);
+         double beforeRisk=RiskGBP(buy,volume,fill,currentSL);
+         double afterRisk=RiskGBP(buy,volume,fill,wantedSL);
+         double portfolio=0,groupRisk=0;
+         int groups=0;
+         if(beforeRisk<0 || afterRisk<0 ||
+            !Exposure(portfolio,groupRisk,GroupBase(id),groups) ||
+            groupRisk+(afterRisk-beforeRisk)>SignalRiskLimitGBP(highRisk)+1e-7 ||
+            groupRisk+(afterRisk-beforeRisk)>GroupRiskLimitGBP()+1e-7 ||
+            portfolio+(afterRisk-beforeRisk)>PortfolioRiskLimitGBP()+1e-7)
+         {
+            RecordDecision(id,"STOP","PROVIDER_SL_WIDENING_EXCEEDS_RISK");
+            Print("DK2 ALERT provider stop widening held signal=",id,
+                  " oldSL=",currentSL," requestedSL=",wantedSL,
+                  " highRisk=",highRisk);
+            wantedSL=currentSL;
+            slChanged=false;
+         }
+      }
       if(!slChanged && MathAbs(wantedTP-currentTP)<1e-8)
          continue;
       trade.SetExpertMagicNumber(LegMagic(id,leg));
@@ -595,7 +617,8 @@ void ManageLegs(const string id,const string direction,const double stop,
 }
 void TryEntry(const string id,const string status,const string direction,
               double low,double high,double providerSL,const long opened,
-              double tp1,double tp2,double tp3,double tp4,double tp5,double tp6,const bool openRunner)
+              double tp1,double tp2,double tp3,double tp4,double tp5,double tp6,
+              const bool openRunner,const bool highRisk)
 {
    if(status!="ACTIVE") return;
    long age=(long)TimeGMT()-opened;
@@ -695,7 +718,7 @@ void TryEntry(const string id,const string status,const string direction,
    // The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.
    // Do not reserve an unused percentage of the 4% signal cap for a
    // layer: it may use only whatever group stop-risk headroom actually remains.
-   double signalLimit=SignalRiskLimitGBP();
+   double signalLimit=SignalRiskLimitGBP(highRisk);
    double signalRemaining=signalLimit-groupRisk;
    double budget=MathMin(groupLimit*INITIAL_GROUP_RISK_SHARE-groupRisk,
                          MathMin(portfolioLimit-portfolio,signalRemaining));
@@ -879,7 +902,7 @@ bool LayerPreviouslyAttempted(const string id,const string groupId)
 void TryLayer(const string id,const long mid,const double percentage,
               const int maximum,const double boundary,const long sentAt,
               const string groupId,const string status,const string direction,
-              const double tp2)
+              const double tp2,const bool highRisk)
 {
    if(status!="ACTIVE" || mid<=0 || maximum!=1 ||
       MathAbs(percentage-10.0)>1e-8 || groupId=="" ||
@@ -952,8 +975,8 @@ void TryLayer(const string id,const long mid,const double percentage,
    int groups=0;
    if(!Exposure(portfolio,groupRisk,GroupBase(id),groups))
    {RecordDecision(id,"LAYER","LAYER_BROKER_EXPOSURE_UNSAFE",age);return;}
-   if(groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7)
-   {RecordDecision(id,"LAYER","LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK",age);return;}
+   if(groupRisk+plannedRisk>SignalRiskLimitGBP(highRisk)+1e-7)
+   {RecordDecision(id,"LAYER","LAYER_EXCEEDS_SIGNAL_RISK_CAP",age);return;}
    if(groupRisk+plannedRisk>GroupRiskLimitGBP()+1e-7 ||
       portfolio+plannedRisk>PortfolioRiskLimitGBP()+1e-7)
    {RecordDecision(id,"LAYER","LAYER_GROUP_OR_PORTFOLIO_RISK_LIMIT",age);return;}
@@ -1251,16 +1274,18 @@ void ProcessFeed(const string content)
 {
    string lines[];
    int count=StringSplit(content,'\n',lines);
-   if(count<1 || StringFind(lines[0],"DKDEMO4")!=0)
+   if(count<1 || StringFind(lines[0],"DKDEMO5")!=0)
    {Print("DK2 ALERT invalid v2 instruction feed");return;}
    for(int i=1;i<count;i++)
    {
       string f[];StringTrimLeft(lines[i]);StringTrimRight(lines[i]);
       if(lines[i]=="") continue;
       int fields=StringSplit(lines[i],'|',f);
-      if(fields==15 && f[0]=="S")
+      if(fields==16 && f[0]=="S")
       {
          if(f[3]!="BUY" && f[3]!="SELL") continue;
+         if(f[14]!="HIGH" && f[14]!="STANDARD") continue;
+         bool highRisk=f[14]=="HIGH";
          double low=StringToDouble(f[4]),high=StringToDouble(f[5]);
          if(low<=0 || high<=0) continue;
          bool openRunner=f[10]=="OPEN";
@@ -1271,10 +1296,10 @@ void ProcessFeed(const string content)
          long openedAt=(long)StringToInteger(f[fields-1]);
          TryEntry(f[1],f[2],f[3],low,high,StringToDouble(f[6]),
             openedAt,StringToDouble(f[8]),StringToDouble(f[9]),
-            StringToDouble(f[10]),fourth,fifth,sixth,openRunner);
+            StringToDouble(f[10]),fourth,fifth,sixth,openRunner,highRisk);
          ManageLegs(f[1],f[3],StringToDouble(f[6]),f[7],
             StringToDouble(f[8]),StringToDouble(f[9]),
-            StringToDouble(f[10]),fourth,fifth,sixth,openRunner);
+            StringToDouble(f[10]),fourth,fifth,sixth,openRunner,highRisk);
       }
       else if(fields==5 && f[0]=="A")
          HandleAction(f[1],StringToInteger(f[2]),f[3],StringToDouble(f[4]));
@@ -1285,12 +1310,12 @@ void ProcessFeed(const string content)
          {
             string prior[];
             int n=StringSplit(lines[j],'|',prior);
-            if(n!=15 || prior[0]!="S" || prior[1]!=f[1])
+            if(n!=16 || prior[0]!="S" || prior[1]!=f[1])
                continue;
             TryLayer(f[1],(long)StringToInteger(f[2]),StringToDouble(f[3]),
                      (int)StringToInteger(f[4]),StringToDouble(f[5]),
                      (long)StringToInteger(f[6]),f[7],prior[2],prior[3],
-                     StringToDouble(prior[9]));
+                     StringToDouble(prior[9]),prior[14]=="HIGH");
             break;
          }
       }
@@ -1326,6 +1351,7 @@ int OnInit()
       StringLen(FeedToken)<24 || PollSeconds<2 || TelemetryEverySeconds<10 ||
       MaxGroupRiskGBP<=0 || MaxPortfolioRiskGBP<MaxGroupRiskGBP ||
       MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||
+      HighRiskSignalPct<=0 || HighRiskSignalPct>MaxSignalRiskPct ||
       DailyLossWarningPct<=0 || DailyLossWarningPct>100 ||
       RiskReferenceBalanceGBP<=0 || StormPipSizeUSD<=0 ||
       StormDrawdownPips<=0 || StormInitialFreshnessSeconds<=0 ||
@@ -1337,7 +1363,7 @@ int OnInit()
    trade.SetDeviationInPoints(DeviationPoints);
    EventSetTimer(PollSeconds);
    Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,
-         " login=",ExpectedDemoLogin," version=2.10 groupCapGBP=",GroupRiskLimitGBP(),
+         " login=",ExpectedDemoLogin," version=2.11 groupCapGBP=",GroupRiskLimitGBP(),
          " portfolioCapGBP=",PortfolioRiskLimitGBP());
    return INIT_SUCCEEDED;
 }
