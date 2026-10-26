@@ -75,9 +75,9 @@ class ProfileBuildTests(unittest.TestCase):
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         content = stage.read_text(encoding="utf-8")
         self.assertIn('"${2:-}" == "--private"', content)
-        self.assertIn("DKcapitalV211_Account3_REAL_USD_Private.mq5", content)
+        self.assertIn("DKcapitalV211_Account${ACCOUNT}_", content)
         self.assertIn("file_mode=0600", content)
-        self.assertIn('"$ACCOUNT" == 3', content)
+        self.assertIn('"$#\" == 2', content)
 
     def test_account3_private_token_defaults_are_local_only(self):
         synthetic_token = "abcd" * 16
@@ -93,9 +93,10 @@ class ProfileBuildTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     generate(3, 36193223, "REAL", "USD", "VantageMarkets-Live 4",
                              150.0, feed_token=invalid)
-        with self.assertRaises(ValueError):
-            generate(2, 12345, "DEMO", "GBP", "Broker-Demo", 100,
-                     feed_token=synthetic_token)
+        account2 = generate(2, 12345, "DEMO", "GBP", "Broker-Demo", 100,
+                            feed_token=synthetic_token)
+        self.assertIn("COMPILED_ACCOUNT_ID = 2", account2)
+        self.assertIn('input string FeedToken = "' + synthetic_token + '";', account2)
 
     def test_token_is_loaded_only_from_verified_private_account3_env(self):
         synthetic_token = "abcd" * 16
@@ -121,6 +122,40 @@ class ProfileBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Duplicate"):
                 token_from_private_env(path, login=36193223, mode="REAL",
                                        currency="USD", server="VantageMarkets-Live 4")
+
+
+    def test_kyle_private_env_is_separate_from_dan_and_from_demo(self):
+        synthetic_token = "bcde" * 16
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / ".env"
+            path.write_text(
+                "MT5_ACCOUNT2_LOGIN=120022\n"
+                "MT5_ACCOUNT2_MODE=REAL\n"
+                "MT5_ACCOUNT2_CURRENCY=USD\n"
+                "MT5_ACCOUNT2_SERVER=Broker-Live\n"
+                "MT5_ACCOUNT2_TOKEN=" + synthetic_token + "\n"
+                "MT5_ACCOUNT3_LOGIN=36193223\n"
+                "MT5_ACCOUNT3_MODE=REAL\n"
+                "MT5_ACCOUNT3_CURRENCY=USD\n"
+                "MT5_ACCOUNT3_SERVER=VantageMarkets-Live 4\n"
+                "MT5_ACCOUNT3_TOKEN=" + ("abcd" * 16) + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                token_from_private_env(
+                    path, account_id=2, login=120022, mode="REAL",
+                    currency="USD", server="Broker-Live"),
+                synthetic_token
+            )
+            with self.assertRaisesRegex(ValueError, "identity mismatch"):
+                token_from_private_env(
+                    path, account_id=2, login=36193223, mode="REAL",
+                    currency="USD", server="Broker-Live")
+            with self.assertRaisesRegex(ValueError, "TOKEN"):
+                path.write_text(path.read_text().replace(synthetic_token, "bad"))
+                token_from_private_env(
+                    path, account_id=2, login=120022, mode="REAL",
+                    currency="USD", server="Broker-Live")
 
 
 class ProfileGatewayTests(unittest.TestCase):
