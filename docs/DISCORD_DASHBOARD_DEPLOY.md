@@ -4,6 +4,16 @@ The dashboard's **Average weekly** field (PR #88) calculates mean realised
 XAUUSD pips per Isle of Man calendar week using retained, broker-confirmed
 MT5 deals. It does not display the user's pip target or affect trading.
 
+## Verified broker pip definition
+
+The MT5 dashboard and lifetime weekly average count **one pip per $0.10**
+XAUUSD price movement (and one point per $0.01). This corrects the former
+10x overstatement from using $0.01 as the pip divisor. Historical raw broker
+deals are recomputed when the bot restarts; preserve the existing
+`mt5-account1-pip-history.json` file. The previous `MT5_XAU_PIP_SIZE=0.01`
+setting, if present in `.env`, no longer overrides the broker dashboard's
+pip reporting. The EA and any paper simulation configuration are unchanged.
+
 ## Prerequisites (one-time GitHub setup)
 
 This is a controlled GitHub Actions deployment to `/opt/dkcapital` on the
