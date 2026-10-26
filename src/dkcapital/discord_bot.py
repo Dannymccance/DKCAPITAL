@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
+from dkcapital.mt5_live_alerts import account3_issues
 from dkcapital.mt5_pip_history import record_weekly_average
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
@@ -1226,6 +1227,17 @@ def build_bot(settings: Settings) -> commands.Bot:
 
     mt5_channel_raw = os.getenv("MT5_DASHBOARD_CHANNEL_ID", "").strip()
     mt5_alert_raw = os.getenv("MT5_ALERT_CHANNEL_ID", "").strip()
+    account3_alert_raw = os.getenv("MT5_ACCOUNT3_ALERT_CHANNEL_ID", "1564401829796778124").strip()
+    account3_alert_id = int(account3_alert_raw) if account3_alert_raw.isdigit() else 0
+    account3_expected_login_raw = os.getenv("MT5_ACCOUNT3_LOGIN", "").strip()
+    account3_expected_login = int(account3_expected_login_raw) if account3_expected_login_raw.isdigit() else 0
+    account3_expected_mode = os.getenv("MT5_ACCOUNT3_MODE", "").strip()
+    account3_expected_currency = os.getenv("MT5_ACCOUNT3_CURRENCY", "").strip()
+    account3_expected_server = os.getenv("MT5_ACCOUNT3_SERVER", "").strip()
+    account3_expected_entries_raw = os.getenv("MT5_ACCOUNT3_EXPECT_ENTRIES", "").strip().lower()
+    account3_expected_entries = (account3_expected_entries_raw in {"1", "true", "yes"}
+                                 if account3_expected_entries_raw in {"0", "1", "true", "false", "yes", "no"}
+                                 else None)
     mt5_results_channel_id = int(os.getenv("MT5_RESULTS_CHANNEL_ID", "1561095999139877046"))
     mt5_results_state_path = Path("/app/data/mt5-results-published.json")
     mt5_changes_channel_id = int(os.getenv("MT5_CHANGES_CHANNEL_ID", "1561099532467445961"))
@@ -1238,6 +1250,9 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
     mt5_pip_history_path = Path(os.getenv("MT5_ACCOUNT1_PIP_HISTORY_PATH", "/app/data/mt5-account1-pip-history.json"))
     mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
+    account3_alert_state_path = Path("/app/data/mt5-account3-alert-state.json")
+    account3_snapshot_path = Path("/app/data/mt5-account3.json")
+    account3_host_status_path = Path("/app/data/mt5-profile-host-status.json")
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
     weekly_channel_id = int(os.getenv("DISCORD_WEEKLY_RECORD_CHANNEL_ID", "0"))
     weekly_state_path = Path(os.getenv("WEEKLY_RECORD_STATE_PATH", "/app/data/weekly-record-state.json"))
@@ -1348,6 +1363,59 @@ def build_bot(settings: Settings) -> commands.Bot:
                     })
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     logger.exception("Unable to deliver MT5 Account 1 alert")
+
+    async def update_mt5_account3_alerts() -> None:
+        """Dedicated REAL Account 3 fault/recovery notifications, without order actions."""
+        if not account3_alert_id or not account3_expected_login:
+            return
+        now = datetime.now(UTC)
+        snapshot = _load_json(account3_snapshot_path)
+        host = _load_json(account3_host_status_path)
+        problems = account3_issues(
+            snapshot, now,
+            login=account3_expected_login,
+            mode=account3_expected_mode,
+            currency=account3_expected_currency,
+            server=account3_expected_server,
+            expect_entries=account3_expected_entries,
+            host=host,
+        )
+        previous = _load_json(account3_alert_state_path)
+        active = set(previous.get("active") or [])
+        pending = sorted(problems - active)
+        recovered = sorted(active - problems)
+        if not pending and not recovered:
+            return
+        try:
+            channel = bot.get_channel(account3_alert_id) or await bot.fetch_channel(account3_alert_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception("Unable to access Account 3 alert channel")
+            return
+        delivered = set(active)
+        for issue in pending:
+            try:
+                await channel.send(
+                    f"🚨 DKcapital Account 3 REAL alert: `{issue}` — investigate Dan's "
+                    "MT5 terminal, broker-native stops and private feed. "
+                    "An alert does not automatically stop trading."
+                )
+                delivered.add(issue)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception("Unable to send Account 3 live alert")
+        for issue in recovered:
+            try:
+                await channel.send(
+                    f"✅ DKcapital Account 3 REAL recovery: `{issue}` cleared. "
+                    "This confirms only that monitoring conditions recovered; "
+                    "it does not certify order execution or automatic restart."
+                )
+                delivered.discard(issue)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception("Unable to send Account 3 live recovery")
+        if delivered != active:
+            _write_json(account3_alert_state_path, {
+                "active": sorted(delivered), "checked_at": now.isoformat()
+            })
 
     async def publish_mt5_results() -> None:
         """Publish once per fully broker-closed trade, never Telegram-only closures."""
@@ -1737,6 +1805,14 @@ def build_bot(settings: Settings) -> commands.Bot:
         await bot.wait_until_ready()
 
     @tasks.loop(minutes=1)
+    async def mt5_account3_alert_loop() -> None:
+        await update_mt5_account3_alerts()
+
+    @mt5_account3_alert_loop.before_loop
+    async def before_mt5_account3_alert_loop() -> None:
+        await bot.wait_until_ready()
+
+    @tasks.loop(minutes=1)
     async def mt5_account1_loop() -> None:
         await update_mt5_account1()
 
@@ -1768,6 +1844,8 @@ def build_bot(settings: Settings) -> commands.Bot:
 
         if (mt5_channel_id or mt5_alert_id) and not mt5_account1_loop.is_running():
             mt5_account1_loop.start()
+        if account3_alert_id and account3_expected_login and not mt5_account3_alert_loop.is_running():
+            mt5_account3_alert_loop.start()
         # Legacy signal and paper dashboards are intentionally retired.
         # MT5 Account 1 and its broker-confirmed signal cards remain active.
         if not internal_signal_loop.is_running():
