@@ -63,7 +63,7 @@ def check():
         raise ValueError("Account3 identity/feed/broker stops are not verified")
     return {"account3": "broker-verified", "feed_http": 200,
             "telemetry_age_seconds": round(age),
-            "boot_enabled": {u: call("systemctl", "is-enabled", u) == "enabled" for u in UNITS}}
+            "boot_enabled": {u: subprocess.run(["systemctl", "is-enabled", u], capture_output=True, text=True, timeout=6).stdout.strip() == "enabled" for u in UNITS}}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
