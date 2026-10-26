@@ -93,6 +93,10 @@ def validate_snapshot(data: dict, n: int, env: dict, *, now: datetime,
         issues.append("invalid telemetry timestamp")
     if data.get("feed_http") != 200:
         issues.append("EA reports feed HTTP != 200")
+    if data.get("signal_risk_cap_pct") != 4.0:
+        issues.append("standard risk policy is not 4%")
+    if data.get("daily_loss_guard_mode") != "ALERT_ONLY" or data.get("daily_loss_warning_pct") != 2.0:
+        issues.append("daily loss policy is not 2% alert-only")
     if n == 2 and data.get("entry_enabled") is not expect_account2_entries:
         issues.append("Kyle EA entry state does not match acceptance expectation")
     for key in ("broker_positions_total", "broker_orders_total"):
