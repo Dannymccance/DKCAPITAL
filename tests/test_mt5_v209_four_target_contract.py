@@ -30,7 +30,7 @@ class FourTargetCompatibility(unittest.TestCase):
         self.assertIn('if(totalUnits<targetCount*minimumUnits) return false;', EA)
 
     def test_legacy_gateway_v3_and_v2_headers_remain(self):
-        self.assertIn('lines = ["DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2"))]', GATEWAY)
+        self.assertIn('lines = [profile_header or ("DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")))]', GATEWAY)
         self.assertIn('supported = 6 if (v4 or v5) else (4 if v3 else 3)', GATEWAY)
         self.assertIn('if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":', GATEWAY)
         self.assertIn('if v4 or v5:', GATEWAY)
