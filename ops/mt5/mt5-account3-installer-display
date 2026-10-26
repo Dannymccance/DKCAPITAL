@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Only graphical installer display :152 for Account 3; no terminal process.
+set -euo pipefail
+umask 077
+home=/var/lib/dkcapital-mt5-3
+[[ "$(id -un)" == dkmt5c && "$HOME" == "$home" ]] || exit 2
+[[ ! -S /tmp/.X11-unix/X152 ]] || exit 2
+auth="$home/.Xauthority"
+touch "$auth"
+chmod 0600 "$auth"
+xauth -f "$auth" add :152 . "$(openssl rand -hex 16)"
+exec /usr/bin/Xvfb :152 -screen 0 1280x800x24 -auth "$auth" -nolisten tcp
