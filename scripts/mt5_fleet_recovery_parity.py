@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from host_autoheal import discover_data_dir
+
 
 def _show(unit: str) -> dict[str, Any]:
     try:
@@ -100,9 +102,11 @@ def parity_report(data_dir: Path, now: datetime) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=Path("/opt/dkcapital/data"))
+    parser.add_argument("--compose-dir", type=Path, default=Path("/opt/dkcapital"))
+    parser.add_argument("--data-dir", type=Path, default=None)
     options = parser.parse_args()
-    print(json.dumps(parity_report(options.data_dir, datetime.now(UTC)), indent=2))
+    data_dir = options.data_dir or discover_data_dir(options.compose_dir)
+    print(json.dumps(parity_report(data_dir, datetime.now(UTC)), indent=2))
     return 0
 
 
