@@ -71,6 +71,21 @@ with the matching gold symbol and confirm entryEnabled=false and feed token
 populated. MT5 Tools > Options > Expert Advisors must allow WebRequest to
 http://127.0.0.1:8765.
 
+## Automated fleet read-only acceptance (after Account2 is commissioned)
+
+After verifying all three private profiles in /opt/dkcapital/.env and receiving
+broker-authenticated snapshots, execute:
+
+    python3 scripts/mt5_fleet_acceptance_readonly.py
+
+This probes local authenticated feed and snapshot endpoints for all three
+profiles; verifies exact protocol, login, REAL/DEMO mode, currency, server,
+telemetry age, native SL proof, 4% planned standard risk, 2% alert-only
+daily-loss warning and cross-token 401 rejection. It intentionally expects
+Kyle's entry_enabled=false until explicitly commissioned. It does not
+restart services or submit orders. A green result does NOT prove broker
+fills or live freeze recovery.
+
 ## Final acceptance — no new live orders during verification
 
 1. Kyle feed HTTP 200 and contract DKACCOUNT2V5 with Account2 token.
