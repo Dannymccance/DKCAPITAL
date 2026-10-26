@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import unittest
 
-from dkcapital.discord_bot import _new_signal_card_eligible
+from dkcapital.discord_bot import (
+    _new_signal_card_eligible, _ordered_signals_for_discord,
+)
 from dkcapital.signal_parser import parse_actions
 from dkcapital.signal_state import SignalState
 
@@ -125,6 +127,23 @@ class EditedSignalPublishingTests(unittest.TestCase):
         self.assertTrue(_new_signal_card_eligible(
             state.snapshot()["signals"][0], CUTOVER
         ))
+
+    def test_new_cards_are_prioritized_ahead_of_old_updates(self):
+        signals = [
+            {"signal_id": "old:1", "opened_at": ORIGINAL},
+            {"signal_id": "old:2", "opened_at": ORIGINAL},
+            {"signal_id": "old:3", "opened_at": ORIGINAL},
+            {"signal_id": f"{CHAT}:{MESSAGE}", "opened_at": ORIGINAL,
+             "publish_ready_at": EDITED},
+        ]
+        existing = {
+            "old:1": {"message_id": 1},
+            "old:2": {"message_id": 2},
+            "old:3": {"message_id": 3},
+        }
+        ordered = _ordered_signals_for_discord(signals, existing)
+        self.assertEqual(ordered[0]["signal_id"], f"{CHAT}:{MESSAGE}")
+        self.assertEqual(set(s["signal_id"] for s in ordered[1:]), set(existing))
 
     def test_legacy_state_falls_back_to_opened_at_and_normalizes_offsets(self):
         legacy = {"opened_at": ORIGINAL}
