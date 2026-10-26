@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from generate_mt5_v211_profile import generate, token_from_private_env
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.generate_mt5_v211_profile import generate, token_from_private_env
 
 DEFAULT_ENV = Path("/opt/dkcapital/.env")
 DEFAULT_OUT = Path("/opt/dkcapital-mt5-compiler/workspace/MetaTrader 5/MQL5/Experts")
