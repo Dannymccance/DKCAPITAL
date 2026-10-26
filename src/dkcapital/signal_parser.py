@@ -106,6 +106,23 @@ def _direction(text: str) -> str | None:
     return None
 
 
+
+def _explicit_high_risk(text: str) -> bool:
+    """Only an affirmative provider risk label, never ordinary commentary."""
+    normalized = _norm(text)
+    labels = (
+        r"\bHIGH[ -]+RISK\b",
+        r"\bRISK(?:\s+LEVEL)?\s*[:=]\s*HIGH\b",
+    )
+    for label in labels:
+        for match in re.finditer(label, normalized):
+            prefix = normalized[max(0, match.start() - 28):match.start()]
+            if re.search(r"\b(?:NOT|NO|NEVER|ISN'T|IS NOT)\s+(?:AN?\s+)?$", prefix):
+                continue
+            return True
+    return False
+
+
 def _extract_tps(text: str) -> dict[int, float]:
     """Extract targets in message order and preserve repeated sequential labels."""
     result: dict[int, float] = {}
@@ -257,6 +274,7 @@ class ParsedAction:
     move_sl_to_be: bool = False
     defer_breakeven: bool = False
     tp3_open: bool = False
+    high_risk: bool = False
     layer_max: float | None = None
     partial_percent: float | None = None
     source_style: str | None = None
@@ -277,6 +295,7 @@ class ParsedAction:
             "move_sl_to_be": self.move_sl_to_be,
             "defer_breakeven": self.defer_breakeven,
             "tp3_open": self.tp3_open,
+            "high_risk": self.high_risk,
             "layer_max": self.layer_max,
             "partial_percent": self.partial_percent,
             "source_style": self.source_style,
@@ -311,6 +330,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 entry_low=min(first, second),
                 entry_high=max(first, second),
                 tps=_extract_tps(normalized),
+                high_risk=_explicit_high_risk(normalized),
                 tp3_open=_tp3_open(normalized),
                 sl=_explicit_sl(normalized),
                 layer_max=_layer_max(normalized),
@@ -335,6 +355,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 entry_low=gold_zone[0],
                 entry_high=gold_zone[1],
                 tps=_extract_tps(normalized),
+                high_risk=_explicit_high_risk(normalized),
                 tp3_open=_tp3_open(normalized),
                 sl=_explicit_sl(normalized),
                 source_style="gws",
@@ -393,6 +414,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                     entry_low=structured_entry,
                     entry_high=structured_entry,
                     tps=_extract_tps(normalized),
+                    high_risk=_explicit_high_risk(normalized),
                     tp3_open=_tp3_open(normalized),
                     sl=structured_sl,
                     source_style="elite",
