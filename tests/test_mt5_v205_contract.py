@@ -28,8 +28,8 @@ class V205SourceContract(unittest.TestCase):
     def test_balance_based_lots_with_four_percent_provider_stop_risk(self):
         source = self.code
         self.assertIn("input double MaxSignalRiskPct = 4.0;", source)
-        self.assertIn("double SignalRiskLimitGBP()", source)
-        self.assertIn("RiskBalanceGBP()*MaxSignalRiskPct/100.0", source)
+        self.assertIn("double SignalRiskLimitGBP(const bool highRisk=false)", source)
+        self.assertIn("return RiskBalanceGBP()*pct/100.0;", source)
         self.assertIn("return MathMin(balance,equity);", source)
         entry = source.split("void TryEntry(", 1)[1].split(
             "// Broker-history original leg volume", 1)[0]
@@ -45,8 +45,8 @@ class V205SourceContract(unittest.TestCase):
         self.assertIn("double signalRemaining=signalLimit-groupRisk;", entry)
         self.assertIn("if(planned>budget+1e-7 || !marginOK ||", entry)
         self.assertIn("FloorLots(total-LotStep())", entry)
-        self.assertIn("groupRisk+plannedRisk>SignalRiskLimitGBP()+1e-7", layer)
-        self.assertIn("LAYER_EXCEEDS_SIGNAL_4_PERCENT_RISK", layer)
+        self.assertIn("groupRisk+plannedRisk>SignalRiskLimitGBP(highRisk)+1e-7", layer)
+        self.assertIn("LAYER_EXCEEDS_SIGNAL_RISK_CAP", layer)
         self.assertIn("RiskGBP(buy,minimumLots[i],fill,sl)", entry)
         self.assertIn("MINIMUM_LEG_SIZE_EXCEEDS_SIGNAL_RISK", entry)
         self.assertIn("EnableLayerEntries = false", source)

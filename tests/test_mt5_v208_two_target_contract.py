@@ -16,7 +16,7 @@ class TwoTargetCompatibility(unittest.TestCase):
 
     def test_two_targets_now_use_two_equal_native_legs(self):
         s = self.source
-        self.assertIn('#property version "2.10"', s)
+        self.assertIn('#property version "2.11"', s)
         self.assertIn('int initialLegCount=targetCount;', s)
         self.assertIn('bool AllocateEqual(const double total,const int targetCount,double &lots[])', s)
         self.assertIn('ArrayResize(lots,targetCount);', s)

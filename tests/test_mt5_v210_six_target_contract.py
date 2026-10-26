@@ -1,4 +1,4 @@
-"""V2.10 source contracts: 1-6 separate native targets and equal volume.
+"""V2.11 source contracts: 1-6 separate native targets and equal volume.
 
 These checks are static. Actual .mq5 -> .ex5 compilation and broker DEMO
 execution tests are still mandatory before replacing V2.07 on Account 1.
@@ -40,7 +40,7 @@ class SixTargetContracts(unittest.TestCase):
 
     def test_source_equal_allocator_and_target_count_limits(self):
         for token in (
-            '#property version "2.10"',
+            '#property version "2.11"',
             'bool AllocateEqual(const double total,const int targetCount,double &lots[])',
             'int totalUnits=(int)MathFloor(total/step+1e-7);',
             'if(totalUnits<targetCount*minimumUnits) return false;',
@@ -69,15 +69,15 @@ class SixTargetContracts(unittest.TestCase):
             self.assertIn(token, EA)
 
     def test_six_target_wire_contract_and_old_versions(self):
-        self.assertIn('input string FeedUrl = "http://127.0.0.1:8765/v4/demo/feed";', EA)
-        self.assertIn('StringFind(lines[0],"DKDEMO4")', EA)
-        self.assertIn('if(fields==15 && f[0]=="S")', EA)
+        self.assertIn('input string FeedUrl = "http://127.0.0.1:8765/v5/demo/feed";', EA)
+        self.assertIn('StringFind(lines[0],"DKDEMO5")', EA)
+        self.assertIn('if(fields==16 && f[0]=="S")', EA)
         self.assertIn('double fifth=StringToDouble(f[12]);', EA)
         self.assertIn('double sixth=StringToDouble(f[13]);', EA)
-        self.assertIn('lines = ["DKDEMO4" if v4 else', GATEWAY)
-        self.assertIn('self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed")', GATEWAY)
-        self.assertIn('supported = 6 if v4 else (4 if v3 else 3)', GATEWAY)
-        self.assertIn('if count > supported and status == "ACTIVE":', GATEWAY)
+        self.assertIn('lines = ["DKDEMO5" if v5 else', GATEWAY)
+        self.assertIn('self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed", "/v5/demo/feed")', GATEWAY)
+        self.assertIn('supported = 6 if (v4 or v5) else (4 if v3 else 3)', GATEWAY)
+        self.assertIn('if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":', GATEWAY)
         self.assertIn('nums != list(range(1, len(nums) + 1))', GATEWAY)
 
     def test_lot_size_respects_provider_stop_and_group_budget(self):

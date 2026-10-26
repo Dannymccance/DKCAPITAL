@@ -141,6 +141,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     continue
                 if status not in ("ACTIVE", "COMPLETED", "CLOSED", "STOPPED", "BREAKEVEN", "CANCELLED", "FAILED"):
                     continue
+                if item.get("high_risk") and status == "ACTIVE":
+                    status = "CANCELLED"  # Legacy EA must not enter at normal risk.
                 low = float(item["entry_low"])
                 high = float(item["entry_high"])
                 sl = float(item["current_sl"]) if item.get("current_sl") is not None else 0.0
@@ -163,7 +165,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             result.append("|".join(fields))
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
-    def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False) -> None:
+    def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False, v5: bool = False) -> None:
         """Read-only V2 instruction feed: signals plus attributable explicit exits.
 
         Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
@@ -174,7 +176,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "demo_feed_disabled"})
             return
         state = _json(self.config.signal_state_path)
-        lines = ["DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")]
+        lines = ["DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2"))]
         for signal in state.get("signals", []):
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
                 continue
@@ -213,9 +215,9 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 continue
             # Older EAs have only 3 or 4 target slots. Mark unsupported
             # ACTIVE rows CANCELLED, rather than cause an incomplete fill.
-            supported = 6 if v4 else (4 if v3 else 3)
-            if count > supported and status == "ACTIVE":
-                status = "CANCELLED"
+            supported = 6 if (v4 or v5) else (4 if v3 else 3)
+            if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":
+                status = "CANCELLED"  # Prevent legacy 4% high-risk entries.
             stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
             if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
                 stop_mode = "DEFER_BE"
@@ -225,10 +227,12 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 str(prices[0]), str(prices[1]), str(prices[2]),
                 stop_mode, str(prices[3]), str(prices[4]), tp3,
             ]
-            if v4:
+            if v4 or v5:
                 fields.extend(str(value) for value in prices[6:9])
             elif v3 and count >= 4:
                 fields.append(str(prices[6]))
+            if v5:
+                fields.append("HIGH" if signal.get("high_risk") else "STANDARD")
             fields.append(str(int(opened.timestamp())))
             lines.append("|".join(fields))
             for action in signal.get("history", []):
@@ -342,11 +346,12 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed"):
+        if self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed", "/v5/demo/feed"):
             if not self._authorized():
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
                 return
-            self._demo_v2_feed(v3=self.path == "/v3/demo/feed", v4=self.path == "/v4/demo/feed")
+            self._demo_v2_feed(v3=self.path == "/v3/demo/feed", v4=self.path == "/v4/demo/feed",
+                               v5=self.path == "/v5/demo/feed")
             return
 
         if self.path == "/v2/demo/account1":

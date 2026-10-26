@@ -13,7 +13,7 @@ GATEWAY = (ROOT/"src/dkcapital/mt5_gateway.py").read_text(encoding="utf-8")
 class FourTargetCompatibility(unittest.TestCase):
     def test_four_target_trade_remains_four_real_native_tp_legs(self):
         for token in (
-            '#property version "2.10"',
+            '#property version "2.11"',
             'const int TP4_LEG = 5;',
             'const int LAYER_LEG = 4;',
             'return i<3?i+1:i+2;',
@@ -30,10 +30,10 @@ class FourTargetCompatibility(unittest.TestCase):
         self.assertIn('if(totalUnits<targetCount*minimumUnits) return false;', EA)
 
     def test_legacy_gateway_v3_and_v2_headers_remain(self):
-        self.assertIn('lines = ["DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")]', GATEWAY)
-        self.assertIn('supported = 6 if v4 else (4 if v3 else 3)', GATEWAY)
-        self.assertIn('if count > supported and status == "ACTIVE":', GATEWAY)
-        self.assertIn('if v4:', GATEWAY)
+        self.assertIn('lines = ["DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2"))]', GATEWAY)
+        self.assertIn('supported = 6 if (v4 or v5) else (4 if v3 else 3)', GATEWAY)
+        self.assertIn('if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":', GATEWAY)
+        self.assertIn('if v4 or v5:', GATEWAY)
         self.assertIn('elif v3 and count >= 4:', GATEWAY)
 
     def test_broker_magic_5_6_7_reporting_and_stop_evidence(self):

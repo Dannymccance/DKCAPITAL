@@ -20,7 +20,7 @@ class V2ProviderStopContract(unittest.TestCase):
         self.assertNotIn("fallbackBuffer", entry)
         self.assertNotIn("HouseMinStopDistanceUSD", code)
 
-    def test_existing_positions_follow_explicit_provider_sl_even_when_wider(self):
+    def test_existing_positions_follow_provider_sl_only_within_risk_caps(self):
         code = SOURCE.read_text(encoding="utf-8")
         manage = code.split("void ManageLegs(", 1)[1].split("void TryEntry(", 1)[0]
         self.assertIn(
@@ -28,10 +28,11 @@ class V2ProviderStopContract(unittest.TestCase):
             manage,
         )
         self.assertIn("wantedSL=NormalizePrice(stop);", manage)
-        # Entry sizing limits must not reject an explicit SL widening on
-        # a position that the broker has already opened.
-        self.assertNotIn("GroupRiskLimitGBP()", manage)
-        self.assertNotIn("PortfolioRiskLimitGBP()", manage)
+        # A provider can tighten the SL; widening that exceeds planned risk is blocked.
+        self.assertIn("GroupRiskLimitGBP()", manage)
+        self.assertIn("PortfolioRiskLimitGBP()", manage)
+        self.assertIn("SignalRiskLimitGBP(highRisk)", manage)
+        self.assertIn("PROVIDER_SL_WIDENING_EXCEEDS_RISK", manage)
         self.assertNotIn("BetterStop(buy,stop,wantedSL)", manage)
         self.assertIn('Print("DK2 native SL updated ticket=",ticket', manage)
 
