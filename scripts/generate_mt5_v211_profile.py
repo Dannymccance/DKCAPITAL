@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import re
 from pathlib import Path
 
@@ -150,6 +151,28 @@ def token_from_private_env(path: Path, *, login: int, mode: str,
     return token
 
 
+def write_compiler_source(path: Path, source: str, output_dir: Path) -> None:
+    """Create a 0600 secret-bearing source owned by the compiler workspace user.
+
+    When invoked as root over a bind mount, an ordinary Path.open("x") makes
+    the file root-owned and unreadable by isolated MetaEditor (UID 11050).
+    Open with mode 0600 *from the start* and use fd-based ownership changes
+    to avoid exposing the private embedded feed token or following symlinks.
+    """
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise ValueError("Use an existing isolated compiler staging directory")
+    owner = output_dir.stat()
+    if os.geteuid() == 0 and owner.st_uid == 0:
+        raise ValueError("Compiler Experts directory is root-owned; expected compiler user ownership")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(source)
+        os.fchmod(stream.fileno(), 0o600)
+        if os.geteuid() == 0:
+            os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account-id", type=int, choices=(2, 3), required=True)
@@ -181,9 +204,7 @@ def main() -> None:
     path = args.output_dir / filename
     if path.exists() or path.is_symlink():
         parser.error("Candidate exists: no overwrites of reviewed sources")
-    with path.open("x", encoding="utf-8") as stream:
-        stream.write(candidate)
-    path.chmod(0o600)
+    write_compiler_source(path, candidate, args.output_dir)
     print(f"STAGED {path} (NOT compiled, attached, approved or armed)")
     if token is not None:
         print("Private token preset in local source only; do NOT commit/share the MQ5 or EX5")
