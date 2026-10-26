@@ -32,10 +32,10 @@ class ProfileBuildTests(unittest.TestCase):
             # The runtime POST must actually carry the broker server; identity
             # checks alone do not satisfy the gateway's required payload.
             self.assertIn(
-                r'json+="\\\"server\\\":\\\""+AccountInfoString(ACCOUNT_SERVER)+"\\\",";',
+                r'json+="\"server\":\""+AccountInfoString(ACCOUNT_SERVER)+"\",";',
                 candidate,
             )
-            self.assertIn(rf'\\\"mode\\\":\\\"{mode}\\\",\\\"currency\\\":\\\"{ccy}\\\"', candidate)
+            self.assertIn(rf'\"mode\":\"{mode}\",\"currency\":\"{ccy}\"', candidate)
             self.assertIn(f'ACCOUNT_TRADE_MODE_{mode}', candidate)
             self.assertIn(f'AccountInfoString(ACCOUNT_CURRENCY)=="{ccy}"', candidate)
             self.assertIn("input bool EnableNewEntries = false;", candidate)
