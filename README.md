@@ -85,6 +85,24 @@ Messages are routed only after the Telegram listener and Discord bot have
 been updated on the VPS. No historical replay is performed on a freshly
 initialized mirror state, but existing mirror offsets remain intact.
 
+## Broker XAUUSD pip convention (MT5 dashboard)
+
+The broker-backed **MT5 Demo Account 1** dashboard uses **$0.10 of XAUUSD
+price movement per pip**; **$0.01 per point** (10 points per pip).
+A $1.00 gold move therefore equals **10 pips**, not 100 pips.
+This rule covers current-week realised pips, the archived weekly average,
+open-leg displayed pips and the weekly record. Broker GBP cash P&L, lot sizes,
+fees, risk/entry checks and the MT5 EA are unaffected. Net signed price
+movements can have a different sign to cash profit because trade sizes differ
+and commissions/swaps apply.
+
+The MT5 bot uses the fixed reporting definition, ignoring any legacy
+`MT5_XAU_PIP_SIZE=0.01` setting that may remain in the VPS `.env`.
+Archived broker deals contain raw trade prices, so existing archive records
+are recalculated automatically with the corrected pip scale. The older
+retired **paper** dashboard's `PAPER_XAU_PIP_SIZE` remains a separate
+simulation configuration and is not part of this MT5 fix.
+
 ## Average weekly MT5 pips
 
 The **MT5 Demo Account 1 Discord dashboard** displays an `Average weekly`
