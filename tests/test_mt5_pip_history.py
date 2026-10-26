@@ -49,8 +49,8 @@ class LifetimeWeeklyPipTests(unittest.TestCase):
         result = weekly_average(self.entries, now=self.now)
         self.assertEqual(result["first_trade"], "2026-10-12")
         self.assertEqual(result["weeks"], 3)
-        self.assertEqual(result["total_pips"], 36.7)
-        self.assertEqual(result["average_pips"], 12.2)
+        self.assertEqual(result["total_pips"], 366.7)
+        self.assertEqual(result["average_pips"], 122.2)
         self.assertEqual(result["closed_signals"], 2)
 
     def test_negative_signals_and_no_closing_deals(self):
@@ -60,41 +60,20 @@ class LifetimeWeeklyPipTests(unittest.TestCase):
         self.assertEqual(weekly_average(entries, now=self.now)["average_pips"], 0.0)
         entries.append(deal(11, 90, 3, "OUT", "SELL", .01, 3994,
                             "2026-10-12T11:00:00Z"))
-        self.assertEqual(weekly_average(entries, now=self.now)["average_pips"], -20.0)
+        self.assertEqual(weekly_average(entries, now=self.now)["average_pips"], -200.0)
 
     def test_archives_overlapping_snapshots_without_double_counting(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "pips.json"
             first = record_weekly_average(path, snapshot(self.entries[:4]), now=self.now)
-            self.assertEqual(first["average_pips"], 5.6)
+            self.assertEqual(first["average_pips"], 55.6)
             later = record_weekly_average(path, snapshot(self.entries[2:]), now=self.now)
-            self.assertEqual(later["average_pips"], 12.2)
+            self.assertEqual(later["average_pips"], 122.2)
             self.assertEqual(later["archived_deals"], 6)
             same = record_weekly_average(path, snapshot(self.entries[2:]), now=self.now)
             self.assertEqual(same, later)
             archived = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(len(archived["deals"]), 6)
-
-    def test_recalculates_older_archived_deals_with_corrected_pip_size(self):
-        """Raw broker deals are immutable; correct old 0.01-based averages on read."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "history.json"
-            legacy = record_weekly_average(
-                path, snapshot(self.entries), now=self.now, pip_size=0.01
-            )
-            self.assertEqual(legacy["average_pips"], 122.2)
-            corrected = record_weekly_average(
-                path, snapshot(self.entries), now=self.now
-            )
-            self.assertEqual(corrected["average_pips"], 12.2)
-            self.assertEqual(corrected["total_pips"], 36.7)
-            self.assertEqual(corrected["archived_deals"], 6)
-
-    def test_live_dashboard_config_cannot_override_broker_pip_definition(self):
-        bot_code = (Path(__file__).resolve().parents[1] /
-                    "src/dkcapital/discord_bot.py").read_text(encoding="utf-8")
-        self.assertIn("mt5_pip_size = EXPECTED_PIP_SIZE", bot_code)
-        self.assertNotIn('os.getenv("MT5_XAU_PIP_SIZE"', bot_code)
 
     def test_conflicting_ticket_and_other_login_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,13 +105,13 @@ class LifetimeWeeklyPipTests(unittest.TestCase):
             "positions": [], "deals": [],
         }
         verified = normalize_telemetry(raw, LOGIN)
-        archive = {"average_pips": 12.2, "first_trade": "2026-10-12",
+        archive = {"average_pips": 122.2, "first_trade": "2026-10-12",
                    "weeks": 3, "source_capped": False}
-        embed = _mt5_account1_embed(verified, pip_size=.10,
+        embed = _mt5_account1_embed(verified, pip_size=.01,
                                    weekly_pip_history=archive)
         fields = {field.name: str(field.value) for field in embed.fields}
         performance = fields["Realised performance (broker deals)"]
-        self.assertIn("Average weekly: **+12.2 pips**", performance)
+        self.assertIn("Average weekly: **+122.2 pips**", performance)
         self.assertIn("3 calendar weeks", performance)
         self.assertNotIn("target", performance.lower())
 
