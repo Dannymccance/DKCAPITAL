@@ -14,9 +14,15 @@ esac
 COMPILER="/opt/dkcapital-mt5-compiler/workspace/MetaTrader 5/MQL5/Experts"
 DEST="$ROOT/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
 shopt -s nullglob
-SOURCES=( "$COMPILER/DKcapitalV211_Account${ACCOUNT}_"*.mq5 )
-[[ ${#SOURCES[@]} -eq 1 ]] || { echo 'BLOCK: expected exactly one compiler source'; exit 2; }
-SOURCE="${SOURCES[0]}"
+if [[ "${2:-}" == "--private" && "$ACCOUNT" == 3 && "$#" == 2 ]]; then
+  SOURCE="$COMPILER/DKcapitalV211_Account3_REAL_USD_Private.mq5"
+  [[ -f "$SOURCE" ]] || { echo 'BLOCK: private Account3 source missing'; exit 2; }
+else
+  [[ "$#" == 1 ]] || { echo 'Usage: stage_mt5_v211_profile.sh 2|3 [--private]' >&2; exit 2; }
+  SOURCES=( "$COMPILER/DKcapitalV211_Account${ACCOUNT}_"*.mq5 )
+  [[ ${#SOURCES[@]} -eq 1 ]] || { echo 'BLOCK: expected exactly one compiler source'; exit 2; }
+  SOURCE="${SOURCES[0]}"
+fi
 BINARY="${SOURCE%.mq5}.ex5"
 TARGET="$DEST/$(basename "$BINARY")"
 [[ -f "$SOURCE" && -s "$BINARY" && -d "$DEST" ]] ||
@@ -35,7 +41,9 @@ grep -Fq "EnableNewEntries = false;" "$SOURCE" ||
 grep -Fq "HighRiskSignalPct = 2.0;" "$SOURCE" ||
   { echo 'BLOCK: high-risk policy missing'; exit 2; }
 # No broker commands, no service restarts and no EA chart attachment.
-install -o "$USERNAME" -g "$USERNAME" -m 0644 "$BINARY" "$TARGET"
+file_mode=0644
+if [[ "${2:-}" == "--private" ]]; then file_mode=0600; fi
+install -o "$USERNAME" -g "$USERNAME" -m "$file_mode" "$BINARY" "$TARGET"
 cmp -s "$BINARY" "$TARGET" || { echo 'BLOCK: staged binary mismatch'; exit 2; }
 sha256sum "$SOURCE" "$BINARY" "$TARGET"
 printf 'STAGED only in Account %s Experts. No EA attachment or trading enabled.\n' "$ACCOUNT"
