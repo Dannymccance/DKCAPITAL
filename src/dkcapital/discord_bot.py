@@ -53,6 +53,17 @@ def _new_signal_card_eligible(signal: dict[str, Any], cutover: str) -> bool:
     return candidate is not None and boundary is not None and candidate > boundary
 
 
+def _ordered_signals_for_discord(
+    signals: list[dict[str, Any]], messages: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Send missing cards before edits when the per-cycle edit budget is tight."""
+    return sorted(signals, key=lambda signal: (
+        str(signal.get("signal_id") or "") in messages,
+        str(signal.get("publish_ready_at") or signal.get("opened_at") or ""),
+        str(signal.get("signal_id") or ""),
+    ))
+
+
 def _paper_market_quote(state: dict[str, Any]) -> dict[str, Any] | None:
     simulation = state.get("simulation") if isinstance(state.get("simulation"), dict) else {}
     if simulation.get("enabled") and not simulation.get("last_market_processed_at"):
@@ -1563,11 +1574,7 @@ def build_bot(settings: Settings) -> commands.Bot:
         max_updates_per_cycle = 3  # Keep well below Discord message-edit rate limits.
         # Send newly parsed signals before routine edits to existing cards.
         # Otherwise three busy older cards can consume every update slot.
-        for signal in sorted(signals, key=lambda x: (
-            str(x.get("signal_id") or "") in messages,
-            str(x.get("publish_ready_at") or x.get("opened_at") or ""),
-            str(x.get("signal_id") or ""),
-        )):
+        for signal in _ordered_signals_for_discord(signals, messages):
             signal_id = str(signal.get("signal_id") or "")
             if not signal_id:
                 continue
