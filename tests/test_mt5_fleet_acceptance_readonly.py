@@ -69,7 +69,7 @@ class AcceptanceTests(unittest.TestCase):
                 return 401, b'{"error":"unauthorized"}'
             if path.endswith("/feed"):
                 header = "DKDEMO5" if n == 1 else f"DKACCOUNT{n}V5"
-                return 200, (header + "\\n").encode()
+                return 200, (header + "\n").encode()
             snapshot = self.snapshot(n)
             snapshot["entry_enabled"] = True
             return 200, json.dumps(snapshot).encode()
@@ -94,7 +94,7 @@ class AcceptanceTests(unittest.TestCase):
                 return 401, b'{"error":"unauthorized"}'
             if path.endswith("/feed"):
                 header = "DKDEMO5" if n == 1 else f"DKACCOUNT{n}V5"
-                return 200, (header + "\\n").encode()
+                return 200, (header + "\n").encode()
             snapshot = self.snapshot(n)
             snapshot["entry_enabled"] = n != 3
             return 200, json.dumps(snapshot).encode()
