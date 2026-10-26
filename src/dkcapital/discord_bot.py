@@ -1141,7 +1141,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
                 if weekly_pip_history is not None else
                 "Average weekly: **unavailable** (no verified archive)\n"
               )
-            f"Signals with MT5 exits this week: {summary['week_closed_signals']}\n"
+            + f"Signals with MT5 exits this week: {summary['week_closed_signals']}\n"
             f"Closing deals this week: {summary['week_closed_legs']}"
         ), inline=False,
     )
