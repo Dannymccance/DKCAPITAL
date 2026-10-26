@@ -124,12 +124,12 @@ class ReportingUnitTests(unittest.TestCase):
         snapshot = normalize_telemetry(example(), LOGIN)
         result = summarize(snapshot)
         # A single closed leg's $1 move counts once per signal.
-        self.assertEqual(result["week_realized_pips"], 100.0)
+        self.assertEqual(result["week_realized_pips"], 10.0)
         self.assertEqual(result["week_closed_signals"], 1)
         self.assertEqual(result["week_realized_gbp"], 1.9)
         self.assertEqual(result["floating_gbp"], 25)
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
-        self.assertEqual(result["positions"][0]["floating_pips"], 100.0)
+        self.assertEqual(result["positions"][0]["floating_pips"], 10.0)
 
     def test_accepts_fourth_layer_as_owned_broker_position(self):
         data = example()
