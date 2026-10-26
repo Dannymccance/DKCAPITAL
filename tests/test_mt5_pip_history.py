@@ -112,6 +112,10 @@ class LifetimeWeeklyPipTests(unittest.TestCase):
         fields = {field.name: str(field.value) for field in embed.fields}
         performance = fields["Realised performance (broker deals)"]
         self.assertIn("Average weekly: **+122.2 pips**", performance)
+        self.assertIn("This week (signal pips):", performance)
+        self.assertIn("Lot-weighted average move:", performance)
+        self.assertIn("USD 0.01 per pip", embed.description)
+
         self.assertIn("3 calendar weeks", performance)
         self.assertNotIn("target", performance.lower())
 
