@@ -38,14 +38,21 @@ def _datetime(value: Any) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
-    """Reject non-demo, wrong-account, non-GBP and malformed broker reports."""
+def normalize_telemetry(payload: Any, expected_login: int, *,
+                        expected_mode: str = "DEMO",
+                        expected_currency: str = "GBP",
+                        expected_server: str | None = None) -> dict[str, Any]:
+    """Validate broker-originated telemetry against an exact MT5 account."""
     if not isinstance(payload, dict) or payload.get("version") != 2:
         raise ValueError("invalid telemetry version")
-    if str(payload.get("mode")) != "DEMO":
-        raise ValueError("demo account required")
-    if str(payload.get("currency")) != "GBP":
-        raise ValueError("GBP account required")
+    if expected_mode not in ("DEMO", "REAL") or expected_currency not in ("GBP", "USD"):
+        raise ValueError("invalid expected profile")
+    if str(payload.get("mode")) != expected_mode:
+        raise ValueError("unexpected broker mode")
+    if str(payload.get("currency")) != expected_currency:
+        raise ValueError("unexpected broker currency")
+    if expected_server is not None and payload.get("server") != expected_server:
+        raise ValueError("unexpected broker server")
     login = _integer(payload.get("login"), minimum=1)
     if login != expected_login:
         raise ValueError("unexpected account")
@@ -84,6 +91,10 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
             "tp": _number(p["tp"], minimum=0),
             "profit": _number(p["profit"]), "swap": _number(p["swap"]),
             "risk_gbp": _number(p["risk_gbp"], minimum=0) if p.get("risk_gbp") is not None else None,
+            "risk_account_currency": (
+                _number(p["risk_account_currency"], minimum=0)
+                if p.get("risk_account_currency") is not None else None
+            ),
         })
     # Newer EAs report account-wide exposure. Legacy telemetry is accepted
     # for reporting, but is insufficient to authorize automated MT5 recovery.
@@ -192,7 +203,7 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
         stage = str(item.get("stage") or "").upper()
         code = str(item.get("code") or "").upper()
         if (not __import__("re").fullmatch(r"[-0-9:]{1,64}", signal_id)
-                or stage not in {"ENTRY", "LAYER", "PROTECTION"}
+                or stage not in {"ENTRY", "LAYER", "PROTECTION", "STOP"}
                 or not __import__("re").fullmatch(r"[A-Z0-9_]{1,64}", code)):
             raise ValueError("invalid MT5 decision identifier")
         stamp = _datetime(item.get("at"))
@@ -207,8 +218,9 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
             "broker_retcode": _integer(item.get("broker_retcode", 0)),
         })
     return {
-        "version": 2, "mode": "DEMO", "login": login,
-        "currency": "GBP", "generated_at": generated.isoformat(),
+        "version": 2, "mode": expected_mode, "login": login,
+        "currency": expected_currency, "server": payload.get("server"),
+        "generated_at": generated.isoformat(),
         **numeric, **broker_exposure, "positions": out_pos, "deals": out_deals,
         "feed_http": _integer(payload.get("feed_http", 0)),
         "entry_enabled": payload.get("entry_enabled") is True,
@@ -224,6 +236,10 @@ def normalize_telemetry(payload: Any, expected_login: int) -> dict[str, Any]:
                                 if "signal_risk_cap_pct" in payload else None),
         "signal_risk_cap_gbp": (_number(payload["signal_risk_cap_gbp"], minimum=0)
                                 if "signal_risk_cap_gbp" in payload else None),
+        "signal_risk_cap_account_currency": (
+            _number(payload["signal_risk_cap_account_currency"], minimum=0)
+            if "signal_risk_cap_account_currency" in payload else None
+        ),
         "decisions": decision_rows,
         "received_at": datetime.now(UTC).isoformat(),
     }
