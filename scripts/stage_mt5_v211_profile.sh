@@ -14,9 +14,10 @@ esac
 COMPILER="/opt/dkcapital-mt5-compiler/workspace/MetaTrader 5/MQL5/Experts"
 DEST="$ROOT/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Experts"
 shopt -s nullglob
-if [[ "${2:-}" == "--private" && "$ACCOUNT" == 3 && "$#" == 2 ]]; then
-  SOURCE="$COMPILER/DKcapitalV211_Account3_REAL_USD_Private.mq5"
-  [[ -f "$SOURCE" ]] || { echo 'BLOCK: private Account3 source missing'; exit 2; }
+if [[ "${2:-}" == "--private" && "$#" == 2 ]]; then
+  SOURCES=( "$COMPILER/DKcapitalV211_Account${ACCOUNT}_"*_Private.mq5 )
+  [[ ${#SOURCES[@]} -eq 1 ]] || { echo 'BLOCK: expected exactly one private source for selected account'; exit 2; }
+  SOURCE="${SOURCES[0]}"
 else
   [[ "$#" == 1 ]] || { echo 'Usage: stage_mt5_v211_profile.sh 2|3 [--private]' >&2; exit 2; }
   SOURCES=( "$COMPILER/DKcapitalV211_Account${ACCOUNT}_"*.mq5 )
