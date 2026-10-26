@@ -43,6 +43,30 @@ class GatewayConfig:
         self.demo_feed_enabled = os.getenv("MT5_DEMO_FEED_ENABLED", "false").strip().lower() in {"true", "1", "yes"}
         self.account1_login = _env_int("MT5_ACCOUNT1_LOGIN", 0)
         self.account1_telemetry_path = _env_path("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json")
+        self.profiles: dict[int, dict[str, Any]] = {}
+        for account_id in (2, 3):
+            prefix = f"MT5_ACCOUNT{account_id}_"
+            raw = {key: os.getenv(prefix + key, "").strip()
+                   for key in ("LOGIN", "MODE", "CURRENCY", "SERVER", "TOKEN")}
+            if not any(raw.values()):
+                continue  # Not commissioned, always fail closed.
+            if not all(raw.values()):
+                raise RuntimeError(f"Incomplete MT5 Account {account_id} identity")
+            try:
+                login = int(raw["LOGIN"])
+            except ValueError as exc:
+                raise RuntimeError(f"Invalid MT5 Account {account_id} login") from exc
+            if (login <= 0 or raw["MODE"] not in {"DEMO", "REAL"}
+                    or raw["CURRENCY"] not in {"GBP", "USD"}
+                    or not re.fullmatch(r"[A-Za-z0-9._ -]{3,100}", raw["SERVER"])
+                    or len(raw["TOKEN"]) < 24):
+                raise RuntimeError(f"Unsafe MT5 Account {account_id} configuration")
+            self.profiles[account_id] = {
+                "login": login, "mode": raw["MODE"],
+                "currency": raw["CURRENCY"], "server": raw["SERVER"],
+                "token": raw["TOKEN"],
+                "telemetry_path": Path(f"/app/data/mt5-account{account_id}.json"),
+            }
         self.signal_state_path = _env_path(
             "SIGNAL_STATE_PATH",
             "/app/data/signal-state.json",
@@ -55,6 +79,15 @@ class GatewayConfig:
             )
         if not 1 <= self.port <= 65535:
             raise RuntimeError("MT5_GATEWAY_PORT must be between 1 and 65535")
+        all_logins = [self.account1_login] if self.account1_login > 0 else []
+        all_tokens = [self.token]
+        for profile in self.profiles.values():
+            all_logins.append(profile["login"])
+            all_tokens.append(profile["token"])
+        if len(all_logins) != len(set(all_logins)):
+            raise RuntimeError("Duplicate MT5 account login across profiles")
+        if len(all_tokens) != len(set(all_tokens)):
+            raise RuntimeError("MT5 profiles must have independent bearer tokens")
 
 
 class Mt5GatewayHandler(BaseHTTPRequestHandler):
@@ -85,12 +118,12 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
 
-    def _authorized(self) -> bool:
+    def _authorized(self, token: str | None = None) -> bool:
         supplied = self.headers.get("Authorization", "")
         prefix = "Bearer "
         if not supplied.startswith(prefix):
             return False
-        return hmac.compare_digest(supplied[len(prefix) :], self.config.token)
+        return hmac.compare_digest(supplied[len(prefix) :], token or self.config.token)
 
     def _write_text(self, status: HTTPStatus, body: str) -> None:
         encoded = body.encode("utf-8")
@@ -165,18 +198,19 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             result.append("|".join(fields))
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
-    def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False, v5: bool = False) -> None:
+    def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False,
+                      v5: bool = False, profile_header: str | None = None) -> None:
         """Read-only V2 instruction feed: signals plus attributable explicit exits.
 
         Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
         Historical signal entries remain visible for managing weekend-held trades;
         the EA independently rejects stale *new* entries.
         """
-        if not self.config.demo_feed_enabled:
+        if not self.config.demo_feed_enabled and profile_header is None:
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "demo_feed_disabled"})
             return
         state = _json(self.config.signal_state_path)
-        lines = ["DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2"))]
+        lines = [profile_header or ("DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")))]
         for signal in state.get("signals", []):
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
                 continue
@@ -278,14 +312,20 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self._write_text(HTTPStatus.OK, "\n".join(lines) + "\n")
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
-        if self.path != "/v2/demo/telemetry":
+        profile_match = re.fullmatch(r"/v5/accounts/([23])/telemetry", self.path)
+        profile = self.config.profiles.get(int(profile_match.group(1))) if profile_match else None
+        if self.path != "/v2/demo/telemetry" and not profile_match:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
-        if not self._authorized():
+        if profile_match and profile is None:
+            self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "profile_not_commissioned"})
+            return
+        if not self._authorized(profile["token"] if profile else None):
             self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
             return
-        if self.config.account1_login <= 0:
-            self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "account1_login_unconfigured"})
+        expected_login = profile["login"] if profile else self.config.account1_login
+        if expected_login <= 0:
+            self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "account_unconfigured"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -293,19 +333,25 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid_length"})
                 return
             payload = json.loads(self.rfile.read(length))
-            normalized = normalize_telemetry(payload, self.config.account1_login)
+            normalized = normalize_telemetry(
+                payload, expected_login,
+                expected_mode=profile["mode"] if profile else "DEMO",
+                expected_currency=profile["currency"] if profile else "GBP",
+                expected_server=profile["server"] if profile else None,
+            )
         except (ValueError, TypeError, UnicodeDecodeError, KeyError) as exc:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_telemetry", "detail": str(exc)[:100]})
             return
-        path = self.config.account1_telemetry_path
+        path = profile["telemetry_path"] if profile else self.config.account1_telemetry_path
         try:
             # Preserve the EA's latest broker-side rejection reason across MT5
             # restarts, even though its in-memory 120-item journal resets.
             # Only merge previously authenticated, same-account snapshots.
             previous = _json(path)
             if (previous.get("login") == normalized.get("login")
-                    and previous.get("mode") == "DEMO"
-                    and previous.get("currency") == "GBP"):
+                    and previous.get("mode") == normalized.get("mode")
+                    and previous.get("currency") == normalized.get("currency")
+                    and previous.get("server") == normalized.get("server")):
                 decisions = {}
                 from datetime import datetime, timedelta, timezone
                 cutoff = datetime.now(timezone.utc) - timedelta(days=7)
@@ -332,7 +378,9 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             logger.exception("MT5 telemetry write failure")
             self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "telemetry_storage_failed"})
             return
-        self._write_json(HTTPStatus.OK, {"accepted": True, "account": "demo1"})
+        self._write_json(HTTPStatus.OK, {"accepted": True, "account": (
+            f"profile{profile_match.group(1)}" if profile_match else "demo1"
+        )})
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         if self.path == "/health":
@@ -344,6 +392,29 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     "time": datetime.now(UTC).isoformat(),
                 },
             )
+            return
+
+        profile_match = re.fullmatch(r"/v5/accounts/([23])/(feed|snapshot)", self.path)
+        if profile_match:
+            account_id = int(profile_match.group(1))
+            profile = self.config.profiles.get(account_id)
+            if profile is None:
+                self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "profile_not_commissioned"})
+                return
+            if not self._authorized(profile["token"]):
+                self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                return
+            if profile_match.group(2) == "feed":
+                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5")
+            else:
+                snapshot = _json(profile["telemetry_path"])
+                if (snapshot.get("login") != profile["login"]
+                        or snapshot.get("mode") != profile["mode"]
+                        or snapshot.get("currency") != profile["currency"]
+                        or snapshot.get("server") != profile["server"]):
+                    self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no_verified_profile_telemetry"})
+                    return
+                self._write_json(HTTPStatus.OK, snapshot)
             return
 
         if self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed", "/v5/demo/feed"):

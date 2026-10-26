@@ -74,7 +74,7 @@ class SixTargetContracts(unittest.TestCase):
         self.assertIn('if(fields==16 && f[0]=="S")', EA)
         self.assertIn('double fifth=StringToDouble(f[12]);', EA)
         self.assertIn('double sixth=StringToDouble(f[13]);', EA)
-        self.assertIn('lines = ["DKDEMO5" if v5 else', GATEWAY)
+        self.assertIn('lines = [profile_header or ("DKDEMO5" if v5 else', GATEWAY)
         self.assertIn('self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed", "/v5/demo/feed")', GATEWAY)
         self.assertIn('supported = 6 if (v4 or v5) else (4 if v3 else 3)', GATEWAY)
         self.assertIn('if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":', GATEWAY)
