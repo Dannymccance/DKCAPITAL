@@ -85,6 +85,26 @@ Messages are routed only after the Telegram listener and Discord bot have
 been updated on the VPS. No historical replay is performed on a freshly
 initialized mirror state, but existing mirror offsets remain intact.
 
+## Vantage XAUUSD pips versus cash P&L
+
+Vantage defines **one gold pip as a $0.01 XAUUSD price move**, confirmed
+by its [July 2026 gold-pips guide](https://www.vantagemarkets.com/en/academy/counting-gold-pips/).
+The GBP MT5 dashboard therefore retains `MT5_XAU_PIP_SIZE=0.01`.
+
+The existing **weekly signal pips** and **lifetime weekly average**
+sum each signal's volume-weighted exit-price move once per signal,
+regardless of the different lot sizes across signals. They are valid
+price-movement statistics, **not money-weighted net returns**. Positive
+signal pips can coincide with negative realised GBP P&L when losses
+occur on larger positions, or because of commissions and swaps.
+
+The MT5 account dashboard also shows the **lot-weighted average move**
+across all closed lots during the week, before commissions and swaps.
+This is an independent diagnostic of monetary exposure, *not* a replacement
+for cumulative signal pips or the lifetime average. Neither pip measure
+is a direct substitute for broker-confirmed cash P&L. No changes to
+MT5 EA, risk rules, execution, or simulated paper-trading pip conventions.
+
 ## Average weekly MT5 pips
 
 The **MT5 Demo Account 1 Discord dashboard** displays an `Average weekly`
