@@ -37,7 +37,8 @@ class RecoveryParityTests(unittest.TestCase):
         self.assertTrue(result["accounts"]["1"]["crash_recovery_configured"])
         self.assertTrue(result["accounts"]["3"]["crash_recovery_configured"])
         self.assertFalse(result["accounts"]["3"]["boot_recovery_configured"])
-        self.assertFalse(result["accounts"]["3"]["frozen_terminal_recovery_eligible"])
+        self.assertFalse(result["accounts"]["3"]["frozen_terminal_recovery_verified"])
+        self.assertFalse(result["accounts"]["3"]["reconciliation_support_declared"])
         self.assertTrue(result["accounts"]["3"]["telemetry"]["feed_ok"])
 
     def test_stale_snapshot_never_certified(self):
