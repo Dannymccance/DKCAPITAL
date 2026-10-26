@@ -16,7 +16,7 @@ fail() { echo "BLOCKED: $*" >&2; exit 2; }
 root_only() { [[ "$(id -u)" = 0 ]] || fail "Run as root on the VPS"; }
 source_check() {
  [[ -s "$SRC" ]] || fail "missing reviewed source"
- grep -qx '#property version "2.10"' "$SRC" || fail "source is not V2.11"
+ grep -qx '#property version "2.11"' "$SRC" || fail "source is not V2.11"
  grep -q 'DKDEMO5' "$SRC" || fail "wrong EA feed handshake"
  grep -q 'const int TP6_LEG = 7;' "$SRC" || fail "TP6 native broker magic missing"
  grep -Fq 'magic%10<=(ulong)TP6_LEG;' "$SRC" || fail "unsigned broker magic fix missing"
@@ -49,7 +49,7 @@ checks={
  "zero broker positions":x.get("broker_positions_total")==0,
  "zero pending orders":x.get("broker_orders_total")==0,
  "broker stops protected":x.get("broker_positions_protected") is True,
- "broker feed 200 or old-gateway 404 during V4 bootstrap":x.get("feed_http") in (200,404),
+ "broker feed 200 or old-gateway 404 during V5 bootstrap":x.get("feed_http") in (200,404),
 }
 print("INFO demo entry setting (not a backend-deployment gate):",x.get("entry_enabled"))
 for key,ok in checks.items(): print(("PASS" if ok else "BLOCK"),key)
@@ -74,7 +74,7 @@ r=Request("http://127.0.0.1:8765/v5/demo/feed",headers={"Authorization":"Bearer 
 with urlopen(r,timeout=8) as result:
  lines=result.read(300000).decode().splitlines()
  if result.status!=200 or not lines or lines[0]!="DKDEMO5":
-  raise SystemExit("BLOCK: invalid V4 gateway")
+  raise SystemExit("BLOCK: invalid V5 gateway")
  print("PASS authenticated DKDEMO5 feed; entries:",sum(1 for l in lines[1:] if l.startswith("S|") and "|ACTIVE|" in l))
 PY
 }
