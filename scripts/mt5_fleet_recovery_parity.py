@@ -88,9 +88,13 @@ def parity_report(data_dir: Path, now: datetime) -> dict[str, Any]:
             "boot_recovery_configured":
                 mt5.get("enabled") is True and vnc.get("enabled") is True,
             # The demo timer is distinct from the newer opt-in live supervisor.
-            "frozen_terminal_recovery_eligible":
-                health["live_reconciliation_supported"]
-                if snapshot.get("mode") == "REAL" else None,
+            "reconciliation_support_declared": health["live_reconciliation_supported"],
+            "freeze_recovery_timer": _show(
+                "dkcapital-mt5-autoheal.timer" if ident == 1
+                else "dkcapital-mt5-recovery-supervisor.timer"
+            ),
+            "frozen_terminal_recovery_verified": False if snapshot.get("mode") == "REAL"
+                else None,  # live activation requires separate broker acceptance tests
         }
     return {
         "checked_at": now.isoformat(), "accounts": accounts,
