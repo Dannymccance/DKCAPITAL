@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dkcapital.mt5_pip_history import record_weekly_average, weekly_average
+from dkcapital.discord_bot import _mt5_account1_embed
+from dkcapital.mt5_account_reporting import normalize_telemetry
 
 
 LOGIN = 5057220041
@@ -92,6 +94,27 @@ class LifetimeWeeklyPipTests(unittest.TestCase):
                                            snapshot(records), now=self.now)
             self.assertTrue(result["source_capped"])
             self.assertEqual(result["archived_deals"], 1)
+
+    def test_discord_dashboard_shows_average_without_target(self):
+        when = datetime.now(UTC).isoformat()
+        raw = {
+            "version": 2, "mode": "DEMO", "login": LOGIN,
+            "currency": "GBP", "generated_at": when,
+            "balance": 1000, "equity": 1000, "margin": 0,
+            "free_margin": 1000, "bid": 4010, "ask": 4010.2,
+            "positions": [], "deals": [],
+        }
+        verified = normalize_telemetry(raw, LOGIN)
+        archive = {"average_pips": 122.2, "first_trade": "2026-10-12",
+                   "weeks": 3, "source_capped": False}
+        embed = _mt5_account1_embed(verified, pip_size=.01,
+                                   weekly_pip_history=archive)
+        fields = {field.name: str(field.value) for field in embed.fields}
+        performance = fields["Realised performance (broker deals)"]
+        self.assertIn("Average weekly: **+122.2 pips**", performance)
+        self.assertIn("3 calendar weeks", performance)
+        self.assertNotIn("target", performance.lower())
+
 
     def test_no_data_or_naive_current_time(self):
         self.assertIsNone(weekly_average([], now=self.now))
