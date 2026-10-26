@@ -85,6 +85,30 @@ Messages are routed only after the Telegram listener and Discord bot have
 been updated on the VPS. No historical replay is performed on a freshly
 initialized mirror state, but existing mirror offsets remain intact.
 
+## Average weekly MT5 pips
+
+The **MT5 Demo Account 1 Discord dashboard** displays an `Average weekly`
+pips counter alongside broker-confirmed realised performance. The counter:
+
+- Uses real MT5 closing deals rather than Telegram signal claims or floating P&L.
+- Counts each provider signal as one volume-weighted price move per local
+  calendar week, consistent with the existing `This week` pip metric.
+- Divides the sum by all calendar weeks since the earliest archived broker
+  entry, including zero-trade weeks and the current partial week.
+- Shows the first recorded trade date and the number of weeks, with **no
+  performance target** or target-progress bar.
+
+The Discord bot preserves unique authenticated broker deals in
+`/app/data/mt5-account1-pip-history.json` (or
+`MT5_ACCOUNT1_PIP_HISTORY_PATH`). The file persists through Docker restarts
+on the existing shared `dkcapital-data` volume. Do not delete it: a lost
+archive cannot be recreated from an MT5 snapshot once old deals fall outside
+the EA's 90-day, 1,000-deal reporting window. If the upstream feed reaches
+1,000 deals, the dashboard warns that the recorded average might be
+incomplete. The counter is therefore explicitly **since the first recorded
+broker trade**, not a guaranteed whole-account lifetime history when earlier
+data have already aged out. No MT5 EA or execution rules are changed.
+
 ## Discord dashboard
 
 Once the bot is online, run this slash command in the channel where you want the live dashboard:

@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
+from dkcapital.mt5_pip_history import record_weekly_average
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
 from dkcapital.mt5_broker_events import discover_events, notification_embed
@@ -1079,7 +1080,8 @@ def _signal_embed(
 
 def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
                         telegram_healthy: bool | None = None,
-                        processor_healthy: bool | None = None) -> discord.Embed:
+                        processor_healthy: bool | None = None,
+                        weekly_pip_history: dict[str, Any] | None = None) -> discord.Embed:
     """Broker-based Account 1 view; never source/provider paper statistics."""
     summary = summarize(snapshot, pip_size=pip_size)
     stale = summary["stale"]
@@ -1130,7 +1132,16 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
             f"This week: {dot(summary['week_realized_gbp'])} **£{summary['week_realized_gbp']:+,.2f}**\n"
             f"This week: {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
             "(one price move per signal)\n"
-            f"Signals with MT5 exits this week: {summary['week_closed_signals']}\n"
+            + (
+                (f"Average weekly: **{weekly_pip_history['average_pips']:+,.1f} pips** "
+                 f"(since {weekly_pip_history['first_trade']}, "
+                 f"{weekly_pip_history['weeks']} calendar weeks including this week)\n"
+                 + ("History feed capped at 1,000 deals: average may omit some trades.\n"
+                    if weekly_pip_history.get("source_capped") else ""))
+                if weekly_pip_history is not None else
+                "Average weekly: **unavailable** (no verified archive)\n"
+              )
+            + f"Signals with MT5 exits this week: {summary['week_closed_signals']}\n"
             f"Closing deals this week: {summary['week_closed_legs']}"
         ), inline=False,
     )
@@ -1198,6 +1209,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     mt5_pip_size = float(os.getenv("MT5_XAU_PIP_SIZE", "0.01"))
     mt5_snapshot = Path(os.getenv("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json"))
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
+    mt5_pip_history_path = Path(os.getenv("MT5_ACCOUNT1_PIP_HISTORY_PATH", "/app/data/mt5-account1-pip-history.json"))
     mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
     weekly_channel_id = int(os.getenv("DISCORD_WEEKLY_RECORD_CHANNEL_ID", "0"))
@@ -1260,9 +1272,17 @@ def build_bot(settings: Settings) -> commands.Bot:
                 processor_stamp is not None
                 and (datetime.now(UTC) - processor_stamp).total_seconds() <= 90
             )
+            try:
+                weekly_pip_history = record_weekly_average(
+                    mt5_pip_history_path, snapshot, pip_size=mt5_pip_size,
+                )
+            except (ValueError, TypeError, KeyError, OSError, json.JSONDecodeError):
+                logger.exception("Unable to update MT5 broker-deal history")
+                weekly_pip_history = None
             embed = _mt5_account1_embed(
                 snapshot, pip_size=mt5_pip_size,
                 telegram_healthy=telegram_ok, processor_healthy=processor_ok,
+                weekly_pip_history=weekly_pip_history,
             )
             try:
                 channel = bot.get_channel(mt5_channel_id) or await bot.fetch_channel(mt5_channel_id)
