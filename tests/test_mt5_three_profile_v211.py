@@ -68,6 +68,17 @@ class ProfileBuildTests(unittest.TestCase):
         self.assertIn("HighRiskSignalPct<=0 || HighRiskSignalPct>MaxSignalRiskPct", source)
 
 
+    def test_private_account3_ex5_staging_is_explicit_and_owner_only(self):
+        import subprocess
+        stage = Path(__file__).resolve().parents[1] / "scripts/stage_mt5_v211_profile.sh"
+        syntax = subprocess.run(["bash", "-n", str(stage)], capture_output=True, text=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        content = stage.read_text(encoding="utf-8")
+        self.assertIn('"${2:-}" == "--private"', content)
+        self.assertIn("DKcapitalV211_Account3_REAL_USD_Private.mq5", content)
+        self.assertIn("file_mode=0600", content)
+        self.assertIn('"$ACCOUNT" == 3', content)
+
     def test_account3_private_token_defaults_are_local_only(self):
         synthetic_token = "abcd" * 16
         source = generate(3, 36193223, "REAL", "USD",
