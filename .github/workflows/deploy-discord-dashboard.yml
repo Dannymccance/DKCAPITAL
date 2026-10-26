@@ -1,0 +1,109 @@
+name: Deploy DK Capital Discord dashboard
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dkcapital-discord-dashboard-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: mt5-recovery-deployment
+    timeout-minutes: 15
+    steps:
+      - name: Check out reviewed main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate dashboard and broker reporting
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements.txt
+          PYTHONPATH=src python -m unittest discover -s tests -q
+          python -m compileall -q src tests
+
+      - name: Require preconfigured VPS credentials
+        env:
+          VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
+          VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
+          VPS_KEY: ${{ secrets.DKCAPITAL_VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.DKCAPITAL_VPS_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          for field in VPS_HOST VPS_USER VPS_KEY VPS_HOST_KEY; do
+            if [ -z "${!field}" ]; then
+              echo "::error::Missing ${field} deployment secret in the mt5-recovery-deployment environment or repository."
+              exit 1
+            fi
+          done
+
+      - name: Rebuild and restart Discord bot ONLY
+        env:
+          VPS_HOST: ${{ secrets.DKCAPITAL_VPS_HOST }}
+          VPS_USER: ${{ secrets.DKCAPITAL_VPS_USER }}
+          VPS_KEY: ${{ secrets.DKCAPITAL_VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.DKCAPITAL_VPS_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$VPS_KEY" > "$HOME/.ssh/dkcapital_deploy_key"
+          printf '%s\n' "$VPS_HOST_KEY" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/dkcapital_deploy_key" "$HOME/.ssh/known_hosts"
+
+          ssh -i "$HOME/.ssh/dkcapital_deploy_key" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$VPS_USER@$VPS_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/dkcapital
+
+          test "$(git branch --show-current)" = "main" || {
+            echo "Refusing deployment: VPS checkout is not on main"
+            exit 1
+          }
+          test -z "$(git status --porcelain --untracked-files=no)" || {
+            echo "Refusing deployment: VPS tracked files have local changes"
+            exit 1
+          }
+
+          git fetch origin main
+          git merge --ff-only origin/main
+          docker compose --profile discord config -q
+
+          # Rebuild only the bot. No Telegram listener, MT5 gateway or EA restart.
+          docker compose --profile discord build discord-bot
+          docker compose --profile discord up -d --no-deps discord-bot
+
+          # Confirm the running bot contains the merged reporting implementation.
+          docker compose --profile discord exec -T discord-bot \
+            python -c 'from dkcapital.mt5_pip_history import record_weekly_average, weekly_average; print("MT5 weekly pip module import: OK")'
+
+          docker compose --profile discord exec -T discord-bot python - <<'PY'
+          import os
+          from pathlib import Path
+          dashboard = os.getenv("MT5_DASHBOARD_CHANNEL_ID", "").strip()
+          if not dashboard or not dashboard.isdecimal() or int(dashboard) <= 0:
+              raise SystemExit("MT5_DASHBOARD_CHANNEL_ID not configured; dashboard cannot update")
+          if not Path("/app/data").is_dir():
+              raise SystemExit("Persistent /app/data volume missing")
+          print("Dashboard channel configured; persistent volume present")
+          PY
+
+          container="$(docker compose --profile discord ps -q discord-bot)"
+          test -n "$container"
+          test "$(docker inspect -f '{{.State.Running}}' "$container")" = "true"
+          echo "Discord bot running with weekly pip reporting code"
+          echo "MT5 EA, gateway, Telegram listener and their containers were not restarted"
+          REMOTE
