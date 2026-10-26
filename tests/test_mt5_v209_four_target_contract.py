@@ -33,7 +33,7 @@ class FourTargetCompatibility(unittest.TestCase):
         self.assertIn('lines = ["DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2"))]', GATEWAY)
         self.assertIn('supported = 6 if (v4 or v5) else (4 if v3 else 3)', GATEWAY)
         self.assertIn('if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":', GATEWAY)
-        self.assertIn('if v4:', GATEWAY)
+        self.assertIn('if v4 or v5:', GATEWAY)
         self.assertIn('elif v3 and count >= 4:', GATEWAY)
 
     def test_broker_magic_5_6_7_reporting_and_stop_evidence(self):
