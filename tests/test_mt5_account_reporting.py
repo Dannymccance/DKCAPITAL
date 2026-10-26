@@ -131,6 +131,33 @@ class ReportingUnitTests(unittest.TestCase):
         self.assertEqual(result["portfolio_risk_gbp"], 1.5)
         self.assertEqual(result["positions"][0]["floating_pips"], 10.0)
 
+    def test_weekly_pips_are_one_tenth_dollar_not_one_cent_and_do_not_force_pnl_sign(self):
+        """Different lot sizes can produce positive price pips but negative GBP P&L."""
+        data = example()
+        now = datetime.now(UTC).isoformat()
+        other_magic = MAGIC + 100
+        data["positions"] = []
+        data["deals"] = [
+            {"ticket": 201, "position_id": 21, "magic": MAGIC + 1,
+             "entry_type": "IN", "side": "BUY", "lots": 0.01,
+             "price": 4000, "profit": 0, "commission": 0, "swap": 0, "time": now},
+            {"ticket": 202, "position_id": 21, "magic": MAGIC + 1,
+             "entry_type": "OUT", "side": "SELL", "lots": 0.01,
+             "price": 4015.0, "profit": 12.00, "commission": 0, "swap": 0, "time": now},
+            {"ticket": 203, "position_id": 22, "magic": other_magic + 1,
+             "entry_type": "IN", "side": "BUY", "lots": 0.08,
+             "price": 4000, "profit": 0, "commission": 0, "swap": 0, "time": now},
+            {"ticket": 204, "position_id": 22, "magic": other_magic + 1,
+             "entry_type": "OUT", "side": "SELL", "lots": 0.08,
+             "price": 3996.557, "profit": -21.61, "commission": 0, "swap": 0, "time": now},
+        ]
+        snapshot = normalize_telemetry(data, LOGIN)
+        result = summarize(snapshot)
+        self.assertEqual(result["week_realized_pips"], 115.6)
+        self.assertEqual(result["week_realized_gbp"], -9.61)
+        self.assertEqual(result["week_closed_signals"], 2)
+        self.assertEqual(result["week_closed_legs"], 2)
+
     def test_accepts_fourth_layer_as_owned_broker_position(self):
         data = example()
         when = datetime.now(UTC).isoformat()
