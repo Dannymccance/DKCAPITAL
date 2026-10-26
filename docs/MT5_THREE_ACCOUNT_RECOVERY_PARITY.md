@@ -122,3 +122,43 @@ be alerted, not hidden or forcibly restarted. A supervised reboot test for
 Kyle is still needed to verify the installed EA, feed and pending orders
 reconcile correctly. The live **freeze** recovery remains uncommissioned on
 both REAL accounts pending genuine EA broker reconciliation.
+
+## Three-account host monitoring parity (no live automatic restart)
+
+Commission the existing independent per-account systemd audit timer to read all
+three broker-verified identities instead of silently monitoring only Account1.
+This does **not** enable the recovery supervisor for live accounts.
+
+After this PR passes CI and merges, pull main and use the AUDIT mode first:
+
+    cd /opt/dkcapital
+    git fetch origin main
+    git merge --ff-only origin/main
+    python3 scripts/commission_mt5_fleet_monitoring.py
+
+This checks all three authenticated feed/snapshots, broker identity, independent
+tokens, 4% risk, 2% daily warning-only, expected armed state and that
+`dkcapital-mt5-profile-audit.timer` is already running.
+
+To add missing Account2 and Account3 to the service audit:
+
+    python3 scripts/commission_mt5_fleet_monitoring.py --install
+
+It writes only the monitored-profile registry into the shared Docker data
+volume (preserving existing Account1 monitoring policy), without enabling any
+new timer, restarting a terminal, placing a trade or changing an EA.
+
+Every REAL profile is registered as `auto_recover=false`. This is intentional:
+the telemetry currently reports `restart_reconciliation_supported=false`;
+setting `auto_recover=true` or bypassing its gate would be unsafe. The
+separate shared supervisor remains uncommissioned for live restarts.
+
+The currently running `dkcapital-mt5-profile-audit.timer` will pick up new
+profiles on its next cycle. Inspect the host audit result and safe dry-run
+supervisor:
+
+    python3 scripts/mt5_profile_audit.py
+    python3 scripts/mt5_recovery_supervisor.py
+
+Verify profile count 3, all services active, and no live restart attempt.
+The demo's existing independent frozen-terminal recovery timer remains enabled.
