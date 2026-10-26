@@ -29,6 +29,13 @@ class ProfileBuildTests(unittest.TestCase):
             self.assertIn(f"/v5/accounts/{index}/feed", candidate)
             self.assertIn(f"/v5/accounts/{index}/telemetry", candidate)
             self.assertIn(f'AccountInfoString(ACCOUNT_SERVER)=="{server}"', candidate)
+            # The runtime POST must actually carry the broker server; identity
+            # checks alone do not satisfy the gateway's required payload.
+            self.assertIn(
+                r'json+="\"server\":\""+AccountInfoString(ACCOUNT_SERVER)+"\",";',
+                candidate,
+            )
+            self.assertIn(rf'\"mode\":\"{mode}\",\"currency\":\"{ccy}\"', candidate)
             self.assertIn(f'ACCOUNT_TRADE_MODE_{mode}', candidate)
             self.assertIn(f'AccountInfoString(ACCOUNT_CURRENCY)=="{ccy}"', candidate)
             self.assertIn("input bool EnableNewEntries = false;", candidate)
