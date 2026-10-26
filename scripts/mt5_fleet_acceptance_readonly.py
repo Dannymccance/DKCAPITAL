@@ -87,7 +87,7 @@ def validate_snapshot(data: dict, n: int, env: dict, *, now: datetime,
         if stamp.tzinfo is None:
             raise ValueError("missing timezone")
         age = (now - stamp.astimezone(UTC)).total_seconds()
-        if age < 0 or age > 150:
+        if age < -5 or age > 150:
             issues.append("stale telemetry")
     except (ValueError, TypeError, KeyError):
         issues.append("invalid telemetry timestamp")
