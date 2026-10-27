@@ -24,7 +24,7 @@ class DanRiskTests(unittest.TestCase):
         dan = generate(3, 710003, "REAL", "USD", "Vantage-Live", 130)
         self.assertIn("int UKTradingHour()", dan)
         self.assertIn("int hour=UKTradingHour();", dan)
-        self.assertIn("return hour>=1 && hour<9 ? 8.0 : 2.0;", dan)
+        self.assertIn("return hour>=1 && hour<9 ? 10.0 : 4.0;", dan)
         self.assertIn("return RiskBalanceAccountCurrency()*SessionRiskPct()/100.0;", dan)
         self.assertEqual(dan.count("return RiskBalanceAccountCurrency()*SessionRiskPct()/100.0;"), 2)
         self.assertIn("highRisk?MathMin(SessionRiskPct(),HighRiskSignalPct):SessionRiskPct()", dan)
@@ -46,21 +46,21 @@ class DanRiskTests(unittest.TestCase):
         # Independent reference for the EA's final-Sunday UTC 01:00 switch.
         london = ZoneInfo("Europe/London")
         cases = [
-            ("2026-03-29T00:59:00+00:00", 0, 2),
-            ("2026-03-29T01:00:00+00:00", 2, 8),
-            ("2026-10-25T00:59:00+00:00", 1, 8),
-            ("2026-10-25T01:00:00+00:00", 1, 8),
-            ("2026-10-27T00:59:59+00:00", 0, 2),
-            ("2026-10-27T01:00:00+00:00", 1, 8),
-            ("2026-10-27T08:59:59+00:00", 8, 8),
-            ("2026-10-27T09:00:00+00:00", 9, 2),
-            ("2026-07-01T08:00:00+00:00", 9, 2),
+            ("2026-03-29T00:59:00+00:00", 0, 4),
+            ("2026-03-29T01:00:00+00:00", 2, 10),
+            ("2026-10-25T00:59:00+00:00", 1, 10),
+            ("2026-10-25T01:00:00+00:00", 1, 10),
+            ("2026-10-27T00:59:59+00:00", 0, 4),
+            ("2026-10-27T01:00:00+00:00", 1, 10),
+            ("2026-10-27T08:59:59+00:00", 8, 10),
+            ("2026-10-27T09:00:00+00:00", 9, 4),
+            ("2026-07-01T08:00:00+00:00", 9, 4),
         ]
         for iso, local_hour, risk in cases:
             with self.subTest(iso=iso):
                 hour = datetime.fromisoformat(iso).astimezone(london).hour
                 self.assertEqual(hour, local_hour)
-                self.assertEqual(8 if 1 <= hour < 9 else 2, risk)
+                self.assertEqual(10 if 1 <= hour < 9 else 4, risk)
 
 
 class DanOnlySwitchTests(unittest.TestCase):
