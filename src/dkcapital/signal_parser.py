@@ -383,6 +383,8 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     # the TP1 EA must obtain bid/ask and verify TP1/SL before submitting.
     if (symbol == "XAUUSD" and direction
             and _gws_order_kind(normalized) == "MARKET_NOW"
+            and _extract_tps(normalized).get(1) is not None
+            and _explicit_sl(normalized) is not None
             and re.search(r"\b(?:XAU\s*/?\s*USD|XAUUSD|XAU|GOLD)\b", normalized)):
         return [ParsedAction(
             kind="new_signal", symbol="XAUUSD", direction=direction,
