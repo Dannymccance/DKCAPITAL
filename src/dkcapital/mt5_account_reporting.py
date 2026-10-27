@@ -319,7 +319,8 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         direction = 1 if p["side"] == "BUY" else -1
         market = snapshot["bid"] if direction == 1 else snapshot["ask"]
         marked_pips = (market - p["entry"]) * direction / pip_size
-        risk = p["risk_gbp"]
+        risk = (p.get("risk_account_currency") if snapshot["currency"] == "USD"
+                else p.get("risk_gbp"))
         if risk is None or p["sl"] <= 0:
             risk_unknown = True
         else:
