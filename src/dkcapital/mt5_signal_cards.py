@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from dkcapital.mt5_tp1_policy import provider_label
 from dkcapital.mt5_active_account import matches_active_account, account_label, money_sign
 
 MAGIC_BASE = 5100000000
@@ -117,8 +118,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     """Gold channel card: provider intent vs actual MT5 fills, clearly separated."""
     import discord
 
-    provider = {"gws": "GWS", "elite": "Elite Portfolios"}.get(
-        str(signal.get("source_style") or "").lower(), "Telegram Provider")
+    provider = provider_label(signal)
     side = str(signal.get("direction") or "?")
     embed = discord.Embed(
         title=f"{side} XAUUSD",
