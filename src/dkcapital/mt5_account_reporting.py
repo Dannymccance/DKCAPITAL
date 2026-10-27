@@ -60,7 +60,7 @@ def normalize_telemetry(payload: Any, expected_login: int, *,
     if abs((datetime.now(UTC) - generated).total_seconds()) > 120:
         raise ValueError("stale or future-dated telemetry")
     if payload.get("risk_schedule") is not None:
-        if payload.get("risk_schedule") != "UK_V1" or "credit" not in payload:
+        if payload.get("risk_schedule") != "UK_V2" or "credit" not in payload:
             raise ValueError("invalid live UK session risk telemetry")
     fields = ("balance", "equity", "margin", "free_margin", "bid", "ask")
     numeric = {field: _number(payload[field], minimum=0) for field in fields}
@@ -242,7 +242,7 @@ def normalize_telemetry(payload: Any, expected_login: int, *,
         "signal_risk_cap_gbp": (_number(payload["signal_risk_cap_gbp"], minimum=0)
                                 if "signal_risk_cap_gbp" in payload else None),
         "credit": _number(payload.get("credit", 0), minimum=0),
-        "risk_schedule": "UK_V1" if payload.get("risk_schedule") == "UK_V1" else None,
+        "risk_schedule": "UK_V2" if payload.get("risk_schedule") == "UK_V2" else None,
         "portfolio_risk_cap_account_currency": (
             _number(payload["portfolio_risk_cap_account_currency"], minimum=0)
             if "portfolio_risk_cap_account_currency" in payload else None
