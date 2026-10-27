@@ -59,6 +59,15 @@ def source_id(signal: dict[str, Any]) -> int | None:
         return None
 
 
+def provider_label(signal: dict[str, Any]) -> str:
+    ident = source_id(signal)
+    if ident in APPROVED_SOURCES:
+        return APPROVED_SOURCES[ident]
+    return {"gws": "GWS", "elite": "Elite Portfolios"}.get(
+        str(signal.get("source_style") or "").lower(), "Telegram provider"
+    )
+
+
 def _float(value: Any) -> float:
     result = float(value)
     if not isfinite(result):
