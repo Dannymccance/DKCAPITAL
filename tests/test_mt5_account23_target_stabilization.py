@@ -48,7 +48,7 @@ class Account23TargetStabilizationTests(unittest.TestCase):
         with urlopen(Request(url, headers={"Authorization": "Bearer " + token}), timeout=3) as response:
             return response.read().decode().splitlines()
 
-    def signal(self, targets, *, age_seconds=10, source="gws"):
+    def signal(self, targets, *, age_seconds=10, edit_age_seconds=None, source="gws"):
         self.path.write_text(json.dumps({"signals": [{
             "symbol": "XAUUSD", "signal_id": "-1000:321",
             "status": "ACTIVE", "direction": "SELL",
@@ -57,6 +57,7 @@ class Account23TargetStabilizationTests(unittest.TestCase):
             "tps": {str(i+1): value for i, value in enumerate(targets)},
             "opened_at": (datetime.now(UTC) - timedelta(seconds=age_seconds)).isoformat(),
             "source_style": source, "history": [],
+            "last_update_at": (datetime.now(UTC) - timedelta(seconds=(age_seconds if edit_age_seconds is None else edit_age_seconds))).isoformat(),
         }]}))
 
     def test_fresh_gws_single_target_held_on_account2_only(self):
@@ -64,22 +65,30 @@ class Account23TargetStabilizationTests(unittest.TestCase):
         self.assertEqual(self.feed(), ["DKACCOUNT2V5"])
         self.assertEqual(len(self.feed(profile=False)), 2)  # Account 1 unchanged.
 
-    def test_edit_to_four_targets_releases_immediately(self):
+    def test_edit_to_four_targets_releases_after_quiet_period(self):
         self.signal([3995])
         self.assertEqual(len(self.feed()), 1)
-        self.signal([3995, 3994, 3993, 3990])
+        self.signal([3995, 3994, 3993, 3990], age_seconds=120, edit_age_seconds=50)
         lines = self.feed()
         self.assertEqual(len(lines), 2)
         self.assertEqual(lines[1].split("|")[8:14],
                          ["3995.0", "3994.0", "3993.0", "3990.0", "0.0", "0.0"])
 
-    def test_single_target_never_releases_on_timeout(self):
+    def test_genuine_single_target_releases_after_quiet_period(self):
         self.signal([3995], age_seconds=100)
-        self.assertEqual(self.feed(), ["DKACCOUNT2V5"])
+        self.assertEqual(len(self.feed()), 2)
 
     def test_two_target_gws_signal_not_blocked(self):
-        self.signal([3995, 3990])
+        self.signal([3995, 3990], age_seconds=60)
         self.assertEqual(len(self.feed()), 2)
+
+    def test_recent_edit_restarts_stabilization(self):
+        self.signal([3995, 3994, 3993, 3990], age_seconds=120, edit_age_seconds=5)
+        self.assertEqual(self.feed(), ["DKACCOUNT2V5"])
+
+    def test_two_target_edit_waits_for_quiet_period(self):
+        self.signal([3995, 3990], age_seconds=120, edit_age_seconds=5)
+        self.assertEqual(self.feed(), ["DKACCOUNT2V5"])
 
     def test_other_provider_unaffected(self):
         self.signal([3995], source="elite")
