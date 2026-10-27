@@ -246,22 +246,20 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             if (nums and nums != list(range(1, len(nums) + 1))) or len(nums) > 6:
                 continue
             count = len(nums)
-            # Account 2/3 only: do not expose a newly posted single-TP GWS
-            # signal as executable while provider Telegram edits may still add
-            # the remaining native targets. Do not change Account 1's feed,
-            # and do not suppress rows for existing broker positions: once a
-            # row has been exposed, it must remain available for SL/BE updates.
+            # Account 2/3 only: fail closed for a GWS entry with fewer
+            # than two actual numeric take-profits. A timer must NEVER
+            # turn a partial TP1-only signal into an executable trade.
+            # No CANCELLED instruction is emitted, because that could
+            # unintentionally close an existing position. An existing
+            # single-target position requires separate broker management
+            # review before deploying this filter.
             if (profile_account in (2, 3) and status == "ACTIVE"
-                    and count == 1 and signal.get("source_style") == "gws"):
-                age_seconds = (datetime.now(UTC) - opened).total_seconds()
-                if 0 <= age_seconds < 90:
-                    # Omit rather than emit CANCELLED: a CANCELLED instruction
-                    # could be interpreted as an exit by a running terminal.
-                    logger.info(
-                        "Account %s GWS one-target entry awaiting amendments: signal=%s age=%.1fs",
-                        profile_account, ident, age_seconds,
-                    )
-                    continue
+                    and count < 2 and signal.get("source_style") == "gws"):
+                logger.warning(
+                    "Account %s GWS entry held pending >=2 native targets: signal=%s target_count=%s",
+                    profile_account, ident, count,
+                )
+                continue
             if signal.get("tp3_open") and (count != 2 or any(prices[6:])):
                 continue
             # Older EAs have only 3 or 4 target slots. Mark unsupported
