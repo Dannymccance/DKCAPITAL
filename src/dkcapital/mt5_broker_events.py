@@ -10,6 +10,7 @@ from typing import Any
 
 from dkcapital.mt5_signal_cards import mt5_group
 from dkcapital.mt5_trade_results import verified_snapshot
+from dkcapital.mt5_active_account import money_sign, account_label
 
 MAX_SEEN = 6000
 MAX_PENDING = 5000
@@ -43,7 +44,7 @@ def _positions(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _fmt(value: float) -> str:
-    return f"£{value:+,.2f}"
+    return f"{money_sign()}{value:+,.2f}"
 
 
 def discover_events(
@@ -225,5 +226,5 @@ def notification_embed(event: dict[str, Any]):
     )
     embed = discord.Embed(title=f"DK Capital | {event['title']}",
                           description=event["body"], color=color)
-    embed.set_footer(text="Verified MT5 broker telemetry | DEMO Account 1")
+    embed.set_footer(text=f"Verified MT5 broker telemetry | {account_label()}")
     return embed
