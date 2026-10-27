@@ -73,9 +73,9 @@ class Account23TargetStabilizationTests(unittest.TestCase):
         self.assertEqual(lines[1].split("|")[8:14],
                          ["3995.0", "3994.0", "3993.0", "3990.0", "0.0", "0.0"])
 
-    def test_genuine_single_target_releases_after_stabilization(self):
+    def test_single_target_never_releases_on_timeout(self):
         self.signal([3995], age_seconds=100)
-        self.assertEqual(len(self.feed()), 2)
+        self.assertEqual(self.feed(), ["DKACCOUNT2V5"])
 
     def test_two_target_gws_signal_not_blocked(self):
         self.signal([3995, 3990])
