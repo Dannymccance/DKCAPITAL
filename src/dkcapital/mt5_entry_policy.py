@@ -80,3 +80,30 @@ def new_entry_block_reason(
         if incoming_chat is None or held_chat is None or incoming_chat != held_chat:
             return "OPPOSING_GROUP_POSITION_ACTIVE"
     return None
+
+
+def recent_entry_blocks(
+    signals: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+    *,
+    verified: bool,
+    now: datetime | None = None,
+) -> list[dict[str, str]]:
+    """Report current blocked opportunities without rewriting provider status."""
+    now = now or datetime.now(UTC)
+    blocked: list[dict[str, str]] = []
+    for signal in signals:
+        if not isinstance(signal, dict) or signal.get("status") != "ACTIVE":
+            continue
+        try:
+            opened = datetime.fromisoformat(str(signal["opened_at"]).replace("Z", "+00:00"))
+            if opened.tzinfo is None or not -15 <= (now - opened).total_seconds() <= 300:
+                continue
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        reason = ("BROKER_TELEMETRY_UNVERIFIED" if not verified else
+                  new_entry_block_reason(signal, signals, snapshot))
+        if reason:
+            blocked.append({"signal_id": str(signal.get("signal_id") or ""),
+                            "reason": reason})
+    return blocked
