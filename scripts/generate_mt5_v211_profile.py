@@ -79,6 +79,9 @@ double SessionRiskPct()
     double targetLots=FloorLots(
        MathMax(0.0,budget-initialLegCount*RiskPaddingAccountCurrencyPerLeg)
        /(probeLoss/probeLot));""")
+    patch('json+="\\\"equity\\\":"+N(AccountInfoDouble(ACCOUNT_EQUITY),2)+",";',
+          'json+="\\\"equity\\\":"+N(AccountInfoDouble(ACCOUNT_EQUITY),2)+",";'
+          + '\n   json+="\\\"credit\\\":"+N(AccountInfoDouble(ACCOUNT_CREDIT),2)+",";')
     patch('json+="\\\"signal_risk_cap_pct\\\":"+N(MaxSignalRiskPct,3);',
           'json+="\\\"signal_risk_cap_pct\\\":"+N(SessionRiskPct(),3);')
     patch('json+="\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);',
