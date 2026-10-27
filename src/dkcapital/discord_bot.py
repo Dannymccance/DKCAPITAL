@@ -1544,11 +1544,11 @@ def build_bot(settings: Settings) -> commands.Bot:
         if not state.get("announced"):
             try:
                 await channel.send(
-                    "**DK CAPITAL | ACCOUNT ENTRY CONFIRMATIONS ACTIVE**\\n"
+                    "**DK CAPITAL | ACCOUNT ENTRY CONFIRMATIONS ACTIVE**\n"
                     "Future parsed XAUUSD signals get one reference showing "
-                    "Kyle, Dan and Demo independently.\\n"
+                    "Kyle, Dan and Demo independently.\n"
                     "✅ = broker entry verified | ⏳ = awaiting fill | "
-                    "❌ = no confirmed fill | ⚠️ = cannot verify.\\n"
+                    "❌ = no confirmed fill | ⚠️ = cannot verify.\n"
                     "Existing MT5 positions and trades are not replayed. "
                     "Updates are read-only.",
                     allowed_mentions=discord.AllowedMentions.none(),
