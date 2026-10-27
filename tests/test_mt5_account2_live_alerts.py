@@ -29,6 +29,8 @@ def snapshot(account: int) -> dict:
         **identity,
         "feed_http": 200,
         "entry_enabled": True,
+        "terminal_trade_allowed": True,
+        "mql_trade_allowed": True,
         "broker_positions_total": 0,
         "broker_orders_total": 0,
         "broker_positions_protected": True,
