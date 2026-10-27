@@ -38,7 +38,7 @@ class LiveReportingTests(unittest.TestCase):
             "balance": 2500, "equity": 3100, "credit": 625,
             "margin": 0, "free_margin": 3100, "bid": 4000, "ask": 4000.5,
             "positions": [], "deals": [], "feed_http": 200,
-            "entry_enabled": False, "signal_risk_cap_pct": 8.0,
+            "entry_enabled": False, "signal_risk_cap_pct": 10.0,
             "signal_risk_cap_account_currency": 200,
             "portfolio_risk_cap_account_currency": 200,
         }, 710003, expected_mode="REAL", expected_currency="USD",
