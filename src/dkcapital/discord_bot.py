@@ -1152,8 +1152,9 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
         name=prefix+"Account",
         value=(
             f"Balance: **{sign}{summary['balance']:,.2f}**\n"
-            f"Equity: **{sign}{summary['equity']:,.2f}**\n"
-            f"Floating P&L: {dot(summary['floating_gbp'])} **{sign}{summary['floating_gbp']:+,.2f}**\n"
+            f"Equity: **{sign}{summary['equity']:,.2f}**" +
+            (f" (including {sign}{float(snapshot.get('credit') or 0):,.2f} credit)" if live else "") + "\n" +
+            f"Floating P&L (excluding credit): {dot(summary['floating_gbp'])} **{sign}{summary['floating_gbp']:+,.2f}**\n"
             f"Free margin: {sign}{summary['free_margin']:,.2f}"
         ), inline=False,
     )
