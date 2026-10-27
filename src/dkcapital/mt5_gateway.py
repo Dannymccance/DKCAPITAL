@@ -42,11 +42,12 @@ class GatewayConfig:
         self.host = os.getenv("MT5_GATEWAY_HOST", "0.0.0.0").strip() or "0.0.0.0"
         self.port = _env_int("MT5_GATEWAY_PORT", 8765)
         self.token = os.getenv("MT5_GATEWAY_TOKEN", "").strip()
+        self.dan_only = os.getenv("MT5_DAN_ONLY", "false").strip().lower() in {"true", "1", "yes"}
         self.demo_feed_enabled = os.getenv("MT5_DEMO_FEED_ENABLED", "false").strip().lower() in {"true", "1", "yes"}
         self.account1_login = _env_int("MT5_ACCOUNT1_LOGIN", 0)
         self.account1_telemetry_path = _env_path("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json")
         self.profiles: dict[int, dict[str, Any]] = {}
-        for account_id in (2, 3):
+        for account_id in ((3,) if self.dan_only else (2, 3)):
             prefix = f"MT5_ACCOUNT{account_id}_"
             raw = {key: os.getenv(prefix + key, "").strip()
                    for key in ("LOGIN", "MODE", "CURRENCY", "SERVER", "TOKEN")}
@@ -81,7 +82,9 @@ class GatewayConfig:
             )
         if not 1 <= self.port <= 65535:
             raise RuntimeError("MT5_GATEWAY_PORT must be between 1 and 65535")
-        all_logins = [self.account1_login] if self.account1_login > 0 else []
+        if self.dan_only and (3 not in self.profiles or self.profiles[3]["mode"] != "REAL"):
+            raise RuntimeError("Dan-only mode requires authenticated REAL MT5 Account 3")
+        all_logins = [self.account1_login] if self.account1_login > 0 and not self.dan_only else []
         all_tokens = [self.token]
         for profile in self.profiles.values():
             all_logins.append(profile["login"])
@@ -350,7 +353,19 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                                           str(action["kind"]).upper(), str(pct)]))
         self._write_text(HTTPStatus.OK, "\n".join(lines) + "\n")
 
+    def _retired_route(self) -> bool:
+        if not self.config.dan_only:
+            return False
+        if (self.path.startswith(("/v1/demo/", "/v2/demo/", "/v3/demo/",
+                                  "/v4/demo/", "/v5/demo/",
+                                  "/v5/accounts/1/", "/v5/accounts/2/"))):
+            self._write_json(HTTPStatus.GONE, {"error": "mt5_profile_retired", "active_account": 3})
+            return True
+        return False
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        if self._retired_route():
+            return
         profile_match = re.fullmatch(r"/v5/accounts/([23])/telemetry", self.path)
         profile = self.config.profiles.get(int(profile_match.group(1))) if profile_match else None
         if self.path != "/v2/demo/telemetry" and not profile_match:
@@ -422,6 +437,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         )})
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        if self._retired_route():
+            return
         if self.path == "/health":
             self._write_json(
                 HTTPStatus.OK,
