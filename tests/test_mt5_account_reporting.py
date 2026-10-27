@@ -69,6 +69,39 @@ class ReportingUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_telemetry(data, LOGIN)
 
+    def test_live_uk_v2_telemetry_survives_normalization_and_rejects_old_version(self):
+        live = example()
+        live.update({
+            "mode": "REAL", "currency": "USD", "server": "Vantage-Live",
+            "credit": 250.0, "risk_schedule": "UK_V2",
+            "signal_risk_cap_pct": 4.0,
+            "signal_risk_cap_account_currency": 40.0,
+            "portfolio_risk_cap_account_currency": 40.0,
+        })
+        def normalize(payload):
+            return normalize_telemetry(
+                payload, LOGIN, expected_mode="REAL",
+                expected_currency="USD", expected_server="Vantage-Live",
+            )
+        recorded = normalize(live)
+        self.assertEqual(recorded["risk_schedule"], "UK_V2")
+        self.assertEqual(recorded["credit"], 250.0)
+        self.assertEqual(recorded["portfolio_risk_cap_account_currency"], 40.0)
+        self.assertEqual(recorded["signal_risk_cap_pct"], 4.0)
+
+        with self.assertRaisesRegex(ValueError, "invalid live UK session risk telemetry"):
+            normalize({**live, "risk_schedule": "UK_V1"})
+        with self.assertRaisesRegex(ValueError, "invalid live UK session risk telemetry"):
+            normalize({**live, "risk_schedule": "UK_V3"})
+        without_credit = {k: v for k, v in live.items() if k != "credit"}
+        with self.assertRaisesRegex(ValueError, "invalid live UK session risk telemetry"):
+            normalize(without_credit)
+
+        # The old EA's unscheduled telemetry remains observable for
+        # protective management, but cannot attest the new entry contract.
+        previous = {k: v for k, v in live.items() if k != "risk_schedule"}
+        self.assertIsNone(normalize(previous)["risk_schedule"])
+
     def test_accountwide_exposure_telemetry_normalization(self):
         data = example()
         data.update({
