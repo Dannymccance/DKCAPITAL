@@ -1349,7 +1349,7 @@ def build_bot(settings: Settings) -> commands.Bot:
             elif not recovery.get("healthy"):
                 problems.add("TELEGRAM_RECOVERY_SCAN_INCOMPLETE")
 
-        if mt5_channel_id and snapshot and summary:
+        if mt5_channel_id and ((snapshot and summary) or live_only):
             config = _load_json(mt5_dashboard_config)
             recovery_state = _load_json(telegram_recovery_status_path)
             recovery_stamp = _local_datetime(recovery_state.get("checked_at"), "UTC")
@@ -1364,18 +1364,28 @@ def build_bot(settings: Settings) -> commands.Bot:
                 processor_stamp is not None
                 and (datetime.now(UTC) - processor_stamp).total_seconds() <= 90
             )
-            try:
-                weekly_pip_history = record_weekly_average(
-                    mt5_pip_history_path, snapshot, pip_size=mt5_pip_size,
+            weekly_pip_history = None
+            if snapshot and summary and verified_snapshot(snapshot):
+                try:
+                    weekly_pip_history = record_weekly_average(
+                        mt5_pip_history_path, snapshot, pip_size=mt5_pip_size,
+                    )
+                except (ValueError, TypeError, KeyError, OSError, json.JSONDecodeError):
+                    logger.exception("Unable to update MT5 broker-deal history")
+            if snapshot and summary:
+                embed = _mt5_account1_embed(
+                    snapshot, pip_size=mt5_pip_size,
+                    telegram_healthy=telegram_ok, processor_healthy=processor_ok,
+                    weekly_pip_history=weekly_pip_history,
                 )
-            except (ValueError, TypeError, KeyError, OSError, json.JSONDecodeError):
-                logger.exception("Unable to update MT5 broker-deal history")
-                weekly_pip_history = None
-            embed = _mt5_account1_embed(
-                snapshot, pip_size=mt5_pip_size,
-                telegram_healthy=telegram_ok, processor_healthy=processor_ok,
-                weekly_pip_history=weekly_pip_history,
-            )
+            else:
+                embed = discord.Embed(
+                    title="DK Capital | MT5 Live Account",
+                    description=("LIVE ACCOUNT | BROKER TELEMETRY UNVERIFIED. "
+                                 "No broker P&L, entry fills, or risk capacity can be confirmed. "
+                                 "EA execution must not be considered operational."),
+                    color=discord.Color.orange(),
+                )
             try:
                 channel = bot.get_channel(mt5_channel_id) or await bot.fetch_channel(mt5_channel_id)
                 message_id = config.get("message_id")
@@ -1944,7 +1954,7 @@ def build_bot(settings: Settings) -> commands.Bot:
         if not weekly_channel_id:
             return
         snapshot = _load_json(mt5_snapshot)
-        if not snapshot:
+        if not verified_snapshot(snapshot):
             return
         now = datetime.now(UTC)
         state = _load_json(weekly_state_path)
@@ -1973,19 +1983,20 @@ def build_bot(settings: Settings) -> commands.Bot:
             logger.warning("Weekly report awaiting broker snapshot near Friday close")
             return
         start = record["starting_balance"]
-        start_text = f"£{start:,.2f} (first recorded balance this week)" if start is not None else "Not recorded"
+        sign = money_sign()
+        start_text = f"{sign}{start:,.2f} (first recorded balance this week)" if start is not None else "Not recorded"
         embed = discord.Embed(
-            title=f"DK Capital | Weekly Record | {week_key}",
-            description="MT5 broker-confirmed XAUUSD demo performance",
+            title=f"DK Capital | {account_label()} Weekly Record | {week_key}",
+            description=f"MT5 broker-confirmed XAUUSD {account_label()} performance",
             color=discord.Color.blue(),
         )
         embed.add_field(name="Starting balance", value=start_text, inline=False)
-        embed.add_field(name="Ending balance", value=f"£{record['ending_balance']:,.2f}", inline=True)
-        embed.add_field(name="Weekly P&L", value=f"£{record['realized_pnl']:+,.2f}", inline=True)
+        embed.add_field(name="Ending balance", value=f"{sign}{record['ending_balance']:,.2f}", inline=True)
+        embed.add_field(name="Weekly P&L", value=f"{sign}{record['realized_pnl']:+,.2f}", inline=True)
         embed.add_field(name="Weekly pips", value=f"{record['weekly_pips']:+,.1f} (once per signal)", inline=False)
         embed.add_field(name="Trades taken", value=str(record["trades_taken"]), inline=True)
         embed.add_field(name="Signals with exits", value=str(record["closed_signals"]), inline=True)
-        embed.set_footer(text="Broker deals only | Friday 17:00 New York market close | GBP")
+        embed.set_footer(text=f"{account_label()} | Broker deals only | Friday 17:00 New York close | {record.get('currency', 'USD' if live_only else 'GBP')}")
         channel = bot.get_channel(weekly_channel_id) or await bot.fetch_channel(weekly_channel_id)
         message = await channel.send(embed=embed)
         state.setdefault("published", {})[week_key] = message.id
