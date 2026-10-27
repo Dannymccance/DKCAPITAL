@@ -120,8 +120,11 @@ def record_weekly_average(path: Path, snapshot: dict[str, Any], *,
     fail visibly instead of silently resetting lifetime performance.
     """
     expected = active_identity()
-    if expected is None or any(snapshot.get(field) != value for field, value in expected.items()):
-        raise ValueError("broker history account identity mismatch")
+    if dan_only_enabled():
+        if expected is None or any(snapshot.get(field) != value for field, value in expected.items()):
+            raise ValueError("broker history account identity mismatch")
+    elif snapshot.get("mode") != "DEMO" or snapshot.get("currency") != "GBP":
+        raise ValueError("expected MT5 demo GBP history")
     login = int(snapshot["login"])
     if login <= 0:
         raise ValueError("invalid broker login")
