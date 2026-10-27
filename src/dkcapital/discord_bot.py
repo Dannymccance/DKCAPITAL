@@ -16,6 +16,9 @@ from discord.ext import commands, tasks
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
+from dkcapital.mt5_active_account import (
+    dan_only_enabled, matches_active_account, account_label, money_sign,
+)
 from dkcapital.mt5_live_alerts import account2_issues, account3_issues, trading_permission_issues
 from dkcapital.mt5_entry_confirmations import build_confirmation, signal_is_new
 from dkcapital.mt5_pip_history import record_weekly_average
@@ -1109,14 +1112,16 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
                         telegram_healthy: bool | None = None,
                         processor_healthy: bool | None = None,
                         weekly_pip_history: dict[str, Any] | None = None) -> discord.Embed:
-    """Broker-based Account 1 view; never source/provider paper statistics."""
+    """Broker-based active-account view; never source/provider paper statistics."""
     summary = summarize(snapshot, pip_size=pip_size)
     stale = summary["stale"]
+    live = dan_only_enabled()
+    sign = money_sign()
     def dot(value: float) -> str:
         return "🟢" if value > 0 else ("🔴" if value < 0 else "⚪")
-    status = "STALE / NOT LIVE" if stale else "DEMO | MT5 broker data"
+    status = "STALE / UNVERIFIED" if stale else ("REAL | MT5 broker data" if live else "DEMO | MT5 broker data")
     embed = discord.Embed(
-        title="DK Capital | MT5 Demo Account 1",
+        title=f"DK Capital | MT5 {account_label()}",
         description=(
             f"**{status}** | Login `{summary['login']}`\n"
             f"Last received: {summary['received_at']}\n"
@@ -1131,7 +1136,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
     embed.add_field(
         name="Execution status",
         value=("🟢 MT5 telemetry fresh" if not stale else "🔴 MT5 telemetry stale") +
-              "\n" + ("🟢 EA ARMED (DEMO)" if summary.get("entry_enabled") else "🔴 EA DISABLED") +
+              "\n" + (("🟢 EA ARMED (LIVE)" if live else "🟢 EA ARMED (DEMO)") if summary.get("entry_enabled") else "🔴 EA DISABLED") +
               "\n" + ("🟢 Instruction feed connected" if summary.get("feed_http") == 200 else "🔴 Instruction feed disconnected") +
               "\n" + health(telegram_healthy, "Telegram listener") +
               "\n" + health(processor_healthy, "Signal processor") +
@@ -1146,17 +1151,17 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
     embed.add_field(
         name=prefix+"Account",
         value=(
-            f"Balance: **£{summary['balance']:,.2f}**\n"
-            f"Equity: **£{summary['equity']:,.2f}**\n"
-            f"Floating P&L: {dot(summary['floating_gbp'])} **£{summary['floating_gbp']:+,.2f}**\n"
-            f"Free margin: £{summary['free_margin']:,.2f}"
+            f"Balance: **{sign}{summary['balance']:,.2f}**\n"
+            f"Equity: **{sign}{summary['equity']:,.2f}**\n"
+            f"Floating P&L: {dot(summary['floating_gbp'])} **{sign}{summary['floating_gbp']:+,.2f}**\n"
+            f"Free margin: {sign}{summary['free_margin']:,.2f}"
         ), inline=False,
     )
     embed.add_field(
         name=prefix+"Realised performance (broker deals)",
         value=(
-            f"Today: {dot(summary['today_realized_gbp'])} **£{summary['today_realized_gbp']:+,.2f}**\n"
-            f"This week: {dot(summary['week_realized_gbp'])} **£{summary['week_realized_gbp']:+,.2f}**\n"
+            f"Today: {dot(summary['today_realized_gbp'])} **{sign}{summary['today_realized_gbp']:+,.2f}**\n"
+            f"This week: {dot(summary['week_realized_gbp'])} **{sign}{summary['week_realized_gbp']:+,.2f}**\n"
             f"This week (signal pips): {dot(summary['week_realized_pips'])} **{summary['week_realized_pips']:+,.1f} pips** "
             "(each signal counted once)\n"
             f"Lot-weighted average move: {dot(summary['week_lot_weighted_pips'])} "
@@ -1175,18 +1180,30 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
             f"Closing deals this week: {summary['week_closed_legs']}"
         ), inline=False,
     )
-    if summary["risk_unknown"]:
-        risk_text = "**UNKNOWN — inspect protective stops**"
-    else:
-        risk_text = f"**£{summary['portfolio_risk_gbp']:,.2f} / £150.00**"
-    groups = len({p["group"] for p in summary["positions"]})
+    cap = snapshot.get("portfolio_risk_cap_account_currency") if live else 150.0
+    cap = float(cap) if type(cap) in (float, int) and cap >= 0 else None
     remaining = summary["portfolio_risk_gbp"]
-    available = "UNKNOWN" if remaining is None else f"£{max(0.0, 150.0 - remaining):,.2f}"
-    risk_limit_text = (f"4% maximum planned per signal at provider SL (current cap £{float(snapshot['signal_risk_cap_gbp']):,.2f})"
-                       if snapshot.get("signal_risk_cap_pct") == 4.0 and snapshot.get("signal_risk_cap_gbp") is not None
-                       else f"Configured cap: {snapshot.get('signal_risk_cap_pct', 'unreported')}%"
-                       if snapshot.get("signal_risk_cap_pct") is not None
-                       else "Per-signal risk cap not reported by this EA")
+    if summary["risk_unknown"]:
+        risk_text = "**UNKNOWN - inspect protective stops**"
+    else:
+        risk_text = f"**{sign}{remaining:,.2f} / " + (f"{sign}{cap:,.2f}**" if cap is not None else "UNKNOWN cap**")
+    groups = len({p["group"] for p in summary["positions"]})
+    available = ("UNKNOWN" if remaining is None or cap is None
+                 else f"{sign}{max(0.0, cap - remaining):,.2f}")
+    if live:
+        pct = snapshot.get("signal_risk_cap_pct")
+        active_pct = f"{float(pct):g}%" if type(pct) in (float, int) else "unverified"
+        risk_limit_text = (
+            f"UK 01:00-09:00 8% / other hours 2%. "
+            f"Active: {active_pct}. Provider HIGH RISK signals capped at 2%. "
+            f"Broker-exposed balance excludes credit."
+        )
+    else:
+        risk_limit_text = (f"4% maximum planned per signal at provider SL (current cap £{float(snapshot['signal_risk_cap_gbp']):,.2f})"
+                           if snapshot.get("signal_risk_cap_pct") == 4.0 and snapshot.get("signal_risk_cap_gbp") is not None
+                           else f"Configured cap: {snapshot.get('signal_risk_cap_pct', 'unreported')}%"
+                           if snapshot.get("signal_risk_cap_pct") is not None
+                           else "Per-signal risk cap not reported by this EA")
     embed.add_field(
         name="Risk and exposure",
         value=f"Per-signal stop-risk: **{risk_limit_text}**\n"
@@ -1210,7 +1227,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
                     f"{dot(p['profit'])} TP{p['leg']} • {p['lots']:.2f} lot • "
                     f"entry {p['entry']:.2f} • SL {p['sl']:.2f} • "
                     f"TP {p['tp']:.2f} • **{p['floating_pips']:+,.1f} pips** • "
-                    f"£{p['profit']:+,.2f}"
+                    f"{sign}{p['profit']:+,.2f}"
                 )
             embed.add_field(
                 name=f"XAUUSD {legs[0]['side']} | Group {group}",
@@ -1219,7 +1236,7 @@ def _mt5_account1_embed(snapshot: dict[str, Any], *, pip_size: float,
             )
         if len(grouped)>14:
             embed.add_field(name="More groups",value=f"+{len(grouped)-14} not shown",inline=False)
-    embed.set_footer(text="DEMO ACCOUNT 1 | MT5 fills & deals only; provider claims excluded")
+    embed.set_footer(text=f"{account_label().upper()} | MT5 fills & deals only; provider claims excluded")
     return embed
 
 
