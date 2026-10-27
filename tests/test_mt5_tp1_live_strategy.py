@@ -24,8 +24,8 @@ def current(at: str = "2026-10-27T08:15:00+00:00") -> datetime:
 def snapshot() -> dict:
     return {
         "mode": "REAL", "currency": "USD", "balance": 1000,
-        "equity": 1250, "credit": 250, "risk_schedule": "TP1_V1",
-        "signal_risk_cap_pct": 8.0, "portfolio_risk_cap_account_currency": 80.0,
+        "equity": 1100, "credit": 300, "risk_schedule": "TP1_V1",
+        "signal_risk_cap_pct": 8.0, "portfolio_risk_cap_account_currency": 64.0,
         "bid": 4000, "ask": 4000.2, "positions": [],
         "unmanaged_positions_count": 0, "broker_orders_total": 0,
     }
