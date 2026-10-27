@@ -354,7 +354,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self._write_text(HTTPStatus.OK, "\n".join(lines) + "\n")
 
     def _retired_route(self) -> bool:
-        if not self.config.dan_only:
+        if not getattr(self.config, "dan_only", False):
             return False
         if (self.path.startswith(("/v1/demo/", "/v2/demo/", "/v3/demo/",
                                   "/v4/demo/", "/v5/demo/",
