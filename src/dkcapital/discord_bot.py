@@ -20,6 +20,7 @@ from dkcapital.mt5_live_alerts import account2_issues, account3_issues, trading_
 from dkcapital.mt5_entry_confirmations import build_confirmation, signal_is_new
 from dkcapital.mt5_pip_history import record_weekly_average
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
+from dkcapital.mt5_entry_policy import new_entry_block_reason
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
 from dkcapital.mt5_broker_events import discover_events, notification_embed
 from dkcapital.telegram_discord_mirror import chats_channel_id, sync_mirror
@@ -1862,6 +1863,14 @@ def build_bot(settings: Settings) -> commands.Bot:
                 prior = {"message_id": prior}
             prior = prior if isinstance(prior, dict) else {}
             broker_state = broker_signal_state(signal_id, broker_snapshot)
+            if (signal.get("status") == "ACTIVE"
+                    and broker_state.get("fresh")
+                    and not broker_state.get("has_broker_record")):
+                # This decision is based on Account 1's *actual* positions,
+                # not a Telegram TP/SL claim or another account's exposure.
+                broker_state["backend_entry_block"] = new_entry_block_reason(
+                    signal, signals, broker_snapshot
+                )
             fingerprint = json.dumps({
                 "direction": signal.get("direction"),
                 "entry_low": signal.get("entry_low"),

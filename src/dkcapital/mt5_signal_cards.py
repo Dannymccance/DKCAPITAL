@@ -189,6 +189,10 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
                         value=(f"**{reason}** | {at}{quote}" if code != "NOT_YET_RECORDED"
                                else "Not filled on MT5; rejection reason not verified.")[:1024],
                         inline=False)
+    if state.get("backend_entry_block"):
+        embed.add_field(name="Backend entry restriction",
+                        value=str(state["backend_entry_block"]).replace("_", " ")[:1024],
+                        inline=False)
     # Show broker entry failures even after a partial fill; they are often
     # the only explanation for incomplete target allocation.
     entry_decision = state.get("decision") or {}

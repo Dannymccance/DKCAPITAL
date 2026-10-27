@@ -13,6 +13,7 @@ from typing import Any
 
 from dkcapital.mt5_account_reporting import normalize_telemetry
 from dkcapital.execution_quality import execution_quality, edit_ready, planned_rr
+from dkcapital.mt5_entry_policy import new_entry_block_reason, verified_snapshot, recent_entry_blocks
 
 from dkcapital.logging_setup import configure_logging
 
@@ -200,7 +201,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
     def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False,
-                      v5: bool = False, profile_header: str | None = None) -> None:
+                      v5: bool = False, profile_header: str | None = None,
+                      account_id: int | None = None) -> None:
         """Read-only V2 instruction feed: signals plus attributable explicit exits.
 
         Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
@@ -211,8 +213,26 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.FORBIDDEN, {"error": "demo_feed_disabled"})
             return
         state = _json(self.config.signal_state_path)
+        all_signals = state.get("signals")
+        if not isinstance(all_signals, list):
+            all_signals = []
+        # A separate broker snapshot is mandatory to authorize new V5 entries
+        # on each account. A stale/mismatched snapshot blocks ENTRY only.
+        entry_snapshot: dict[str, Any] = {}
+        entry_snapshot_verified = True
+        if v5 and account_id in (1, 2, 3):
+            profile = self.config.profiles.get(account_id) if account_id != 1 else None
+            path = profile["telemetry_path"] if profile else self.config.account1_telemetry_path
+            entry_snapshot = _json(path)
+            entry_snapshot_verified = verified_snapshot(
+                entry_snapshot,
+                login=profile["login"] if profile else self.config.account1_login,
+                mode=profile["mode"] if profile else "DEMO",
+                currency=profile["currency"] if profile else "GBP",
+                server=profile["server"] if profile else None,
+            )
         lines = [profile_header or ("DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")))]
-        for signal in state.get("signals", []):
+        for signal in all_signals:
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
                 continue
             ident = str(signal.get("signal_id", ""))
@@ -262,6 +282,14 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 rr = planned_rr(signal)
                 if (not readiness.get("ready")
                         or rr.get("single_tp_below_1r") is True):
+                    status = "CANCELLED"
+            # The existing EA applies TryEntry only for ACTIVE rows, but
+            # calls ManageLegs for *all* S rows and reads A/L action records.
+            # Never remove these rows when an account-specific entry is barred.
+            if v5 and account_id in (1, 2, 3) and status == "ACTIVE":
+                if not entry_snapshot_verified:
+                    status = "CANCELLED"
+                elif new_entry_block_reason(signal, all_signals, entry_snapshot):
                     status = "CANCELLED"
             stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
             if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
@@ -416,7 +444,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
                 return
             if profile_match.group(2) == "feed":
-                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5")
+                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5", account_id=account_id)
             else:
                 snapshot = _json(profile["telemetry_path"])
                 if (snapshot.get("login") != profile["login"]
@@ -430,9 +458,16 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     signals = state.get("signals")
                     if not isinstance(signals, list):
                         signals = []
-                    self._write_json(
-                        HTTPStatus.OK, execution_quality(signals, snapshot)
+                    report = execution_quality(signals, snapshot)
+                    report["entry_blocks"] = recent_entry_blocks(
+                        signals, snapshot,
+                        verified=verified_snapshot(
+                            snapshot, login=profile["login"],
+                            mode=profile["mode"], currency=profile["currency"],
+                            server=profile["server"],
+                        ),
                     )
+                    self._write_json(HTTPStatus.OK, report)
                 else:
                     self._write_json(HTTPStatus.OK, snapshot)
             return
@@ -442,7 +477,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
                 return
             self._demo_v2_feed(v3=self.path == "/v3/demo/feed", v4=self.path == "/v4/demo/feed",
-                               v5=self.path == "/v5/demo/feed")
+                               v5=self.path == "/v5/demo/feed",
+                               account_id=1 if self.path == "/v5/demo/feed" else None)
             return
 
         # Account 1 uses its existing authenticated DEMO telemetry snapshot.
@@ -464,7 +500,15 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             signals = state.get("signals")
             if not isinstance(signals, list):
                 signals = []
-            self._write_json(HTTPStatus.OK, execution_quality(signals, snapshot))
+            report = execution_quality(signals, snapshot)
+            report["entry_blocks"] = recent_entry_blocks(
+                signals, snapshot,
+                verified=verified_snapshot(
+                    snapshot, login=self.config.account1_login,
+                    mode="DEMO", currency="GBP",
+                ),
+            )
+            self._write_json(HTTPStatus.OK, report)
             return
 
         if self.path == "/v2/demo/account1":
