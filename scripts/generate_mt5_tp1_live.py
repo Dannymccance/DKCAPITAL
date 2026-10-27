@@ -80,8 +80,8 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
           '   // One broker-native TP1 position, never split targets.\n'
           '   for(int t=1;t<MAX_NATIVE_TARGETS;t++) targets[t]=0;\n'
           '   int targetCount=0;')
-    patch('    if(openRunner)\n    {\n       if(!EnableOpenRunnerEntries)',
-          '    if(false && openRunner)\n    {\n       if(!EnableOpenRunnerEntries)')
+    patch('   if(openRunner)\n   {\n      if(!EnableOpenRunnerEntries)',
+          '   if(false && openRunner)\n   {\n      if(!EnableOpenRunnerEntries)')
     patch('      // The separately tracked 10% layer exits at TP2.',
           '      // Legacy orders are managed by their original EA until closed.\n'
           '      // TP1-only orders always retain their actual TP1 target.')
