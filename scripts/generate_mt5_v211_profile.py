@@ -33,7 +33,7 @@ def _dan_session_risk(source: str) -> str:
 {
    // Clock is UTC, independent of broker server time. BST begins at 01:00
    // UTC on the last Sunday in March and ends at 01:00 UTC on the last
-   // Sunday in October. Both repeated 01:xx hours are in the 8% window.
+   // Sunday in October. Both repeated 01:xx hours are in the 10% window.
    datetime utc=TimeGMT();
    MqlDateTime now;TimeToStruct(utc,now);
    MqlDateTime t=now;t.mon=3;t.day=31;t.hour=1;t.min=0;t.sec=0;
@@ -51,7 +51,7 @@ def _dan_session_risk(source: str) -> str:
 double SessionRiskPct()
 {
    int hour=UKTradingHour();
-   return hour>=1 && hour<9 ? 8.0 : 2.0;
+   return hour>=1 && hour<9 ? 10.0 : 4.0;
 }
 """
     patch("double SignalRiskLimitAccountCurrency(const bool highRisk=false)",
@@ -88,12 +88,12 @@ double SessionRiskPct()
           'json+=",\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);'
           + '\n   json+=",\\\"portfolio_risk_cap_account_currency\\\":"+N(PortfolioRiskLimitAccountCurrency(),2);')
     patch('json+="\\\"margin\\\":"+N(AccountInfoDouble(ACCOUNT_MARGIN),2)+",";',
-          'json+="\\\"risk_schedule\\\":\\\"UK_V1\\\",";'
+          'json+="\\\"risk_schedule\\\":\\\"UK_V2\\\",";'
           + '\n   json+="\\\"margin\\\":"+N(AccountInfoDouble(ACCOUNT_MARGIN),2)+",";')
     patch("// Keep the existing balance-based targetLots calculation below unchanged.",
           "// Dan: size by broker-valued stop loss within the active UK session risk budget.")
     patch("// The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.",
-          "// The 8% or 2% per-signal ceiling is a HARD planned-risk cap at the provider SL.")
+          "// The 10% or 4% per-signal ceiling is a HARD planned-risk cap at the provider SL.")
     patch("// Do not reserve an unused percentage of the 4% signal cap for a",
           "// Do not reserve an unused percentage of the active session signal cap for a")
     patch('Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,',
