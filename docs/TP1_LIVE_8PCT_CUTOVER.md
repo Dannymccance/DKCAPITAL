@@ -17,6 +17,7 @@ Inputs in the generated EA (not a simulator):
 | MQL input | Default | Behavior |
 | --- | --- | --- |
 | `MaxSignalRiskPct` | **8.0** | Broker-valued maximum initial SL loss per signal |
+| `MaxPortfolioRiskPct` | **8.0** | Configurable aggregate percentage ceiling |
 | `HighRiskSignalPct` | **8.0** | Same per-signal ceiling in TP1 mode |
 | `MaxGroupRiskAccountCurrency` | **80.0** | Retained effective absolute-group ceiling at $1,000 reference |
 | `MaxPortfolioRiskAccountCurrency` | **80.0** | Retained effective aggregate ceiling at $1,000 reference |
