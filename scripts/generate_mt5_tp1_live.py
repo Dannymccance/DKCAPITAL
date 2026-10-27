@@ -114,6 +114,10 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
           '         if(low<0 || high<0) continue; // 0/0 is valid unquoted NOW reference')
     patch('      Print("DK2 filled signal=",id," targets=",targetCount,',
           '      Print("DK2 TP1 broker fill confirmed signal=",id," targets=",targetCount,')
+    # No Friday-only arbitrary lot cap: every new position is sized by its
+    # broker-valued stop exposure, actual margin and remaining 8% budget.
+    patch('   if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);',
+          '   // No Friday-only lot throttle in the TP1 8% live strategy.')
     patch('   // Durable intent before first broker request prevents duplicates on restart.',
           '   Print("DK2 TP1 order intent signal=",id," plannedStopLossUSD=",budget,\n'
           '         " lotTarget=",targetLots," brokerMarginFree=",AccountInfoDouble(ACCOUNT_MARGIN_FREE));\n'
