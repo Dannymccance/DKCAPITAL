@@ -309,9 +309,9 @@ class ParsedAction:
 
 def _gws_order_kind(normalized: str) -> str:
     # A genuine limit is never silently changed to an immediate market fill.
-    if re.search(r"\\b(?:BUY|SELL)\\s+LIMIT\\b|\\bLIMIT\\s+(?:BUY|SELL)\\b", normalized):
+    if re.search(r"\b(?:BUY|SELL)\s+LIMIT\b|\bLIMIT\s+(?:BUY|SELL)\b", normalized):
         return "LIMIT"
-    if re.search(r"\\b(?:BUY|SELL)\\s+(?:(?:XAU\\s*/?\\s*USD|XAUUSD|XAU|GOLD)\\s+)?NOW\\b|\\b(?:XAU\\s*/?\\s*USD|XAUUSD|XAU|GOLD)\\s+(?:BUY|SELL)\\s+NOW\\b", normalized):
+    if re.search(r"\b(?:BUY|SELL)\s+(?:(?:XAU\s*/?\s*USD|XAUUSD|XAU|GOLD)\s+)?NOW\b|\b(?:XAU\s*/?\s*USD|XAUUSD|XAU|GOLD)\s+(?:BUY|SELL)\s+NOW\b", normalized):
         return "MARKET_NOW"
     return "UNSPECIFIED"
 
@@ -383,7 +383,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
     # the TP1 EA must obtain bid/ask and verify TP1/SL before submitting.
     if (symbol == "XAUUSD" and direction
             and _gws_order_kind(normalized) == "MARKET_NOW"
-            and re.search(r"\\b(?:XAU\\s*/?\\s*USD|XAUUSD|XAU|GOLD)\\b", normalized)):
+            and re.search(r"\b(?:XAU\s*/?\s*USD|XAUUSD|XAU|GOLD)\b", normalized)):
         return [ParsedAction(
             kind="new_signal", symbol="XAUUSD", direction=direction,
             entry_low=0.0, entry_high=0.0, tps=_extract_tps(normalized),
