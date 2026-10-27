@@ -199,7 +199,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
     def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False,
-                      v5: bool = False, profile_header: str | None = None) -> None:
+                      v5: bool = False, profile_header: str | None = None,
+                      profile_account: int | None = None) -> None:
         """Read-only V2 instruction feed: signals plus attributable explicit exits.
 
         Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
@@ -245,6 +246,22 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             if (nums and nums != list(range(1, len(nums) + 1))) or len(nums) > 6:
                 continue
             count = len(nums)
+            # Account 2/3 only: do not expose a newly posted single-TP GWS
+            # signal as executable while provider Telegram edits may still add
+            # the remaining native targets. Do not change Account 1's feed,
+            # and do not suppress rows for existing broker positions: once a
+            # row has been exposed, it must remain available for SL/BE updates.
+            if (profile_account in (2, 3) and status == "ACTIVE"
+                    and count == 1 and signal.get("source_style") == "gws"):
+                age_seconds = (datetime.now(UTC) - opened).total_seconds()
+                if 0 <= age_seconds < 90:
+                    # Omit rather than emit CANCELLED: a CANCELLED instruction
+                    # could be interpreted as an exit by a running terminal.
+                    logger.info(
+                        "Account %s GWS one-target entry awaiting amendments: signal=%s age=%.1fs",
+                        profile_account, ident, age_seconds,
+                    )
+                    continue
             if signal.get("tp3_open") and (count != 2 or any(prices[6:])):
                 continue
             # Older EAs have only 3 or 4 target slots. Mark unsupported
@@ -405,7 +422,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
                 return
             if profile_match.group(2) == "feed":
-                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5")
+                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5", profile_account=account_id)
             else:
                 snapshot = _json(profile["telemetry_path"])
                 if (snapshot.get("login") != profile["login"]
