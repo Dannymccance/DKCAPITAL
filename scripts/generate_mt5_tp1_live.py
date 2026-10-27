@@ -75,11 +75,11 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
           '   {RecordDecision(id,"ENTRY","ENTRY_DEVIATION_EXCEEDED",age);return;}')
     patch('      (buy ? providerSL>=zLow : providerSL<=zHigh))',
           '       (zLow>0 && zHigh>0 && (buy ? providerSL>=zLow : providerSL<=zHigh)))')
-    patch('    targets[3]=tp4;targets[4]=tp5;targets[5]=tp6;\n    int targetCount=0;',
-          '    targets[3]=tp4;targets[4]=tp5;targets[5]=tp6;\n'
-          '    // One broker-native TP1 position, never split targets.\n'
-          '    for(int t=1;t<MAX_NATIVE_TARGETS;t++) targets[t]=0;\n'
-          '    int targetCount=0;')
+    patch('   targets[3]=tp4;targets[4]=tp5;targets[5]=tp6;\n   int targetCount=0;',
+          '   targets[3]=tp4;targets[4]=tp5;targets[5]=tp6;\n'
+          '   // One broker-native TP1 position, never split targets.\n'
+          '   for(int t=1;t<MAX_NATIVE_TARGETS;t++) targets[t]=0;\n'
+          '   int targetCount=0;')
     patch('    if(openRunner)\n    {\n       if(!EnableOpenRunnerEntries)',
           '    if(false && openRunner)\n    {\n       if(!EnableOpenRunnerEntries)')
     patch('      // The separately tracked 10% layer exits at TP2.',
