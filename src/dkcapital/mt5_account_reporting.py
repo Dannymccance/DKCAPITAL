@@ -224,6 +224,8 @@ def normalize_telemetry(payload: Any, expected_login: int, *,
         **numeric, **broker_exposure, "positions": out_pos, "deals": out_deals,
         "feed_http": _integer(payload.get("feed_http", 0)),
         "entry_enabled": payload.get("entry_enabled") is True,
+        "terminal_trade_allowed": (payload.get("terminal_trade_allowed") if type(payload.get("terminal_trade_allowed")) is bool else None),
+        "mql_trade_allowed": (payload.get("mql_trade_allowed") if type(payload.get("mql_trade_allowed")) is bool else None),
         "layer_entries_enabled": payload.get("layer_entries_enabled") is True,
         "daily_loss_warning": payload.get("daily_loss_warning") is True,
         "daily_loss_guard_mode": (
