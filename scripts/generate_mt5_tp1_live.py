@@ -33,7 +33,7 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
           '// DKcapital TP1 v1: production-capable account 3 REAL USD, entry opt-in')
     patch('#property version "2.11"', '#property version "2.12"')
     patch('input double MaxSignalRiskPct = 4.0;',
-          'input double MaxSignalRiskPct = 8.0; // Live TP1 per-trade SL risk')
+          'input double MaxSignalRiskPct = 8.0; // Live TP1 per-trade SL risk\n'          'input double MaxPortfolioRiskPct = 8.0; // Live TP1 aggregate ceiling')
     patch('input double HighRiskSignalPct = 2.0;',
           'input double HighRiskSignalPct = 8.0; // TP1 signal ceiling; configurable')
     patch('input double MaxGroupRiskAccountCurrency = 75.0; // Legacy, unused on Dan.',
@@ -49,9 +49,9 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
           '      MaxGroupRiskAccountCurrency*RiskBalanceAccountCurrency()/RiskReferenceBalanceAccountCurrency);\n}')
     patch('double PortfolioRiskLimitAccountCurrency()\n{\n   return RiskBalanceAccountCurrency()*SessionRiskPct()/100.0;\n}',
           'double PortfolioRiskLimitAccountCurrency()\n{\n'
-          '   return MathMin(RiskBalanceAccountCurrency()*8.0/100.0,\n'
+          '   return MathMin(RiskBalanceAccountCurrency()*MaxPortfolioRiskPct/100.0,\n'
           '      MaxPortfolioRiskAccountCurrency*RiskBalanceAccountCurrency()/RiskReferenceBalanceAccountCurrency);\n}')
-    patch('return hour>=1 && hour<9 ? 10.0 : 4.0;',
+    patch('int hour=UKTradingHour();\n   return hour>=1 && hour<9 ? 10.0 : 4.0;',
           'return MaxSignalRiskPct; // 8% default, no legacy session cap')
     patch('json+="\\\"risk_schedule\\\":\\\"UK_V2\\\",";',
           'json+="\\\"risk_schedule\\\":\\\"TP1_V1\\\",";')
@@ -85,6 +85,13 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
     patch('      // The separately tracked 10% layer exits at TP2.',
           '      // Legacy orders are managed by their original EA until closed.\n'
           '      // TP1-only orders always retain their actual TP1 target.')
+    patch('   bool tp1Confirmed=TP1BrokerConfirmed(id);',
+          '   // Single-position TP1: there is no remaining leg to move to BE.')
+    patch('input bool EnableStormConditionalTP1 = false;',
+          'const bool EnableStormConditionalTP1 = false; // TP1 never shifts TP1 to TP2')
+    patch('MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||',
+          'MaxSignalRiskPct<=0 || MaxSignalRiskPct>100 ||\n'
+          '      MaxPortfolioRiskPct<=0 || MaxPortfolioRiskPct>100 ||')
     patch('      bool preserveBE=(slMode=="BREAKEVEN" ||\n'
           '                       (tp1Confirmed && leg!=1 && slMode!="DEFER_BE") ||\n'
           '                       slAlreadyAtOrBeyondBE);',
