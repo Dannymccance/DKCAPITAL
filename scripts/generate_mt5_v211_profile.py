@@ -79,6 +79,11 @@ double SessionRiskPct()
     double targetLots=FloorLots(
        MathMax(0.0,budget-initialLegCount*RiskPaddingAccountCurrencyPerLeg)
        /(probeLoss/probeLot));""")
+    patch('json+="\\\"signal_risk_cap_pct\\\":"+N(MaxSignalRiskPct,3);',
+          'json+="\\\"signal_risk_cap_pct\\\":"+N(SessionRiskPct(),3);')
+    patch('json+="\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);',
+          'json+="\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);'
+          + '\n   json+=",\\\"portfolio_risk_cap_account_currency\\\":"+N(PortfolioRiskLimitAccountCurrency(),2);')
     patch("// Keep the existing balance-based targetLots calculation below unchanged.",
           "// Dan: size by broker-valued stop loss within the active UK session risk budget.")
     patch("// The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.",
