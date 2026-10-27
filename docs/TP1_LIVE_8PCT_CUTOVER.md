@@ -100,6 +100,10 @@ this GitHub branch.
    a private MQ5/EX5 containing the embedded feed token.
 4. Compile with actual MetaEditor, inspect errors and warnings, record source
    and EX5 SHA-256. GitHub Python CI **does not compile MQL5**.
+   After validating the compiler result, stage only with
+   `METAEDITOR_ERRORS=0 METAEDITOR_WARNINGS=0 bash scripts/stage_mt5_tp1_live.sh`.
+   This never attaches the new EA, overwrites an existing release, changes a
+   broker order or activates trading.
 5. First reconcile any surviving legacy positions: retain their original EA
    or wait for native TP/SL exits, and check native protection and ownership.
    Do not run two EAs that can operate the same orders concurrently.
