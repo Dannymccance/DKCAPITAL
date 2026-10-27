@@ -22,6 +22,8 @@ def healthy():
         "login": 36193223, "mode": "REAL", "currency": "USD",
         "server": "VantageMarkets-Live 4", "feed_http": 200,
         "entry_enabled": True,
+        "terminal_trade_allowed": True,
+        "mql_trade_allowed": True,
         "broker_positions_total": 0, "broker_orders_total": 0,
         "broker_positions_protected": True,
         "balance": 1217.45, "equity": 2800.95,
