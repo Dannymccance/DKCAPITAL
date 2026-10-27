@@ -1111,6 +1111,8 @@ void SendTelemetry()
    json+="\"bid\":"+N(q.bid,5)+",\"ask\":"+N(q.ask,5);
    json+=",\"feed_http\":"+IntegerToString(last_feed_http);
    json+=",\"entry_enabled\":"+(EnableNewEntries?"true":"false");
+   json+=",\"terminal_trade_allowed\":"+((bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)?"true":"false");
+   json+=",\"mql_trade_allowed\":"+((bool)MQLInfoInteger(MQL_TRADE_ALLOWED)?"true":"false");
    json+=",\"layer_entries_enabled\":"+(EnableLayerEntries?"true":"false");
    json+=",\"daily_loss_warning\":"+(DailyEquityWarningActive()?"true":"false");
    json+=",\"daily_loss_guard_mode\":\"ALERT_ONLY\"";
