@@ -337,7 +337,9 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         "received_at": snapshot["received_at"], "stale": (now - received).total_seconds() > 120,
         "balance": snapshot["balance"], "equity": snapshot["equity"],
         "free_margin": snapshot["free_margin"], "margin": snapshot["margin"],
-        "floating_gbp": round(snapshot["equity"] - snapshot["balance"], 2),
+        "floating_gbp": round(snapshot["equity"] - snapshot["balance"]
+                              - (float(snapshot.get("credit") or 0)
+                                 if snapshot.get("mode") == "REAL" else 0), 2),
         "today_realized_gbp": round(today_cash, 2),
         "week_realized_gbp": round(weekly_cash, 2),
         "week_realized_pips": round(weekly_pips, 1),
