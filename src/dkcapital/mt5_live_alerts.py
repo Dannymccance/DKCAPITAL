@@ -1,4 +1,4 @@
-"""Read-only broker-telemetry alert rules for Dan's REAL MT5 Account 3.
+"""Read-only broker-telemetry alert rules for independently monitored REAL MT5 accounts.
 
 This module neither submits orders nor restarts trading terminals.
 It consumes authenticated gateway snapshots, never MT5 credentials.
@@ -10,7 +10,6 @@ from math import isfinite
 from typing import Any
 
 
-PREFIX = "MT5_ACCOUNT3"
 STALE_SECONDS = 150
 HOST_STALE_SECONDS = 180
 RECENT_RESTART_SECONDS = 300
@@ -28,13 +27,16 @@ def _age(value: Any, now: datetime) -> float:
         return float("inf")
 
 
-def account3_issues(
+def live_account_issues(
     snapshot: dict[str, Any], now: datetime, *,
-    login: int, mode: str, currency: str, server: str,
+    account_id: int, login: int, mode: str, currency: str, server: str,
     expect_entries: bool | None = None,
     host: dict[str, Any] | None = None,
 ) -> set[str]:
-    """Check Account 3 only; never infer health from an unrelated demo account."""
+    """Detect exactly the same failures for Account 2 or 3, with isolated codes."""
+    if account_id not in (2, 3):
+        raise ValueError("Live account alerts require Account 2 or 3")
+    PREFIX = f"MT5_ACCOUNT{account_id}"
     if login <= 0 or not server or mode not in {"DEMO", "REAL"} or currency not in {"GBP", "USD"}:
         return {f"{PREFIX}_ALERT_CONFIGURATION_INVALID"}
     problems: set[str] = set()
@@ -69,10 +71,37 @@ def account3_issues(
             if cap > balance * pct / 100 + 0.02:
                 problems.add(f"{PREFIX}_RISK_CAP_EXCEEDS_CASH_BALANCE")
     if host is not None and host and _age(host.get("checked_at"), now) <= HOST_STALE_SECONDS:
-        info = (host.get("accounts") or {}).get("3")
+        info = (host.get("accounts") or {}).get(str(account_id))
         if isinstance(info, dict):
             if info.get("active") is not True:
                 problems.add(f"{PREFIX}_TERMINAL_DOWN")
             if _age(info.get("last_restart_at"), now) < RECENT_RESTART_SECONDS:
                 problems.add(f"{PREFIX}_TERMINAL_RECENTLY_RESTARTED")
     return problems
+
+def account3_issues(
+    snapshot: dict[str, Any], now: datetime, *,
+    login: int, mode: str, currency: str, server: str,
+    expect_entries: bool | None = None,
+    host: dict[str, Any] | None = None,
+) -> set[str]:
+    """Backward-compatible Dan Account 3 alert contract."""
+    return live_account_issues(
+        snapshot, now, account_id=3, login=login, mode=mode,
+        currency=currency, server=server,
+        expect_entries=expect_entries, host=host,
+    )
+
+
+def account2_issues(
+    snapshot: dict[str, Any], now: datetime, *,
+    login: int, mode: str, currency: str, server: str,
+    expect_entries: bool | None = None,
+    host: dict[str, Any] | None = None,
+) -> set[str]:
+    """Kyle Account 2 uses the identical broker checks as Dan."""
+    return live_account_issues(
+        snapshot, now, account_id=2, login=login, mode=mode,
+        currency=currency, server=server,
+        expect_entries=expect_entries, host=host,
+    )
