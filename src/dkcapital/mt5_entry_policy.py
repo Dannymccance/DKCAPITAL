@@ -14,7 +14,7 @@ from dkcapital.mt5_signal_cards import mt5_group
 
 def verified_uk_session_risk(snapshot: dict[str, Any], *,
                              now: datetime | None = None) -> bool:
-    """Require EA-attested UK 8%/2% broker risk, not a gateway-config guess.
+    """Require EA-attested UK 10%/4% broker risk, not a gateway-config guess.
 
     A prior 4% V2.11 binary must remain management-only after migration.
     Risk caps come from the EA's actual broker balance, equity and credit.
@@ -24,9 +24,9 @@ def verified_uk_session_risk(snapshot: dict[str, Any], *,
 
     now = now or datetime.now(UTC)
     hour = now.astimezone(ZoneInfo("Europe/Isle_of_Man")).hour
-    pct = 8.0 if 1 <= hour < 9 else 2.0
+    pct = 10.0 if 1 <= hour < 9 else 4.0
     try:
-        if snapshot.get("risk_schedule") != "UK_V1":
+        if snapshot.get("risk_schedule") != "UK_V2":
             return False
         if snapshot.get("mode") != "REAL" or snapshot.get("currency") != "USD":
             return False
