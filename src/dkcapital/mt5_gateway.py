@@ -246,20 +246,28 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             if (nums and nums != list(range(1, len(nums) + 1))) or len(nums) > 6:
                 continue
             count = len(nums)
-            # Account 2/3 only: fail closed for a GWS entry with fewer
-            # than two actual numeric take-profits. A timer must NEVER
-            # turn a partial TP1-only signal into an executable trade.
-            # No CANCELLED instruction is emitted, because that could
-            # unintentionally close an existing position. An existing
-            # single-target position requires separate broker management
-            # review before deploying this filter.
+            # Account 2/3 only: wait for GWS Telegram edits to settle.
+            # A genuine single-target trade is valid after the quiet period;
+            # multiple targets must all be present before sizing at execution.
+            # The most recent edit restarts the quiet period. This is an
+            # entry stabilization gate, not a completeness guarantee.
             if (profile_account in (2, 3) and status == "ACTIVE"
-                    and count < 2 and signal.get("source_style") == "gws"):
-                logger.warning(
-                    "Account %s GWS entry held pending >=2 native targets: signal=%s target_count=%s",
-                    profile_account, ident, count,
-                )
-                continue
+                    and signal.get("source_style") == "gws"):
+                try:
+                    updated = datetime.fromisoformat(
+                        str(signal.get("last_update_at") or signal["opened_at"]).replace("Z", "+00:00")
+                    )
+                    if updated.tzinfo is None:
+                        updated = updated.replace(tzinfo=UTC)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+                quiet_seconds = (datetime.now(UTC) - max(opened, updated)).total_seconds()
+                if quiet_seconds < 45:
+                    logger.info(
+                        "Account %s GWS entry waiting for edit stabilization: signal=%s tps=%s quiet=%.1fs",
+                        profile_account, ident, count, quiet_seconds,
+                    )
+                    continue
             if signal.get("tp3_open") and (count != 2 or any(prices[6:])):
                 continue
             # Older EAs have only 3 or 4 target slots. Mark unsupported
