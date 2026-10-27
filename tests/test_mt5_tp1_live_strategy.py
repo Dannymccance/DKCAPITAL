@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+from pathlib import Path
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -133,6 +136,18 @@ class Tp1PolicyTests(unittest.TestCase):
         self.assertEqual(ready["opened_at"], event["date"])
         self.assertEqual(ready["tps"]["1"], 4004.0)
         self.assertEqual(ready["current_sl"], 3993.0)
+
+    def test_documented_generator_command_runs_as_script(self):
+        # A module import in pytest/unittest is insufficient: the VPS release
+        # invokes this generator as a direct script from the repo root.
+        root = Path(__file__).resolve().parents[1]
+        p = subprocess.run(
+            [sys.executable, str(root / "scripts/generate_mt5_tp1_live.py"),
+             "--help"],
+            cwd=root, check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--feed-token-env-file", p.stdout)
 
     def test_generated_broker_ea_is_live_8pct_single_leg_and_disarmed(self):
         src=tp1_source(3, 710003, "REAL", "USD", "Vantage-Live", 130)
