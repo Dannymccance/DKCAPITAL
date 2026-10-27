@@ -199,7 +199,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         self._write_text(HTTPStatus.OK, "\n".join(result) + "\n")
 
     def _demo_v2_feed(self, *, v3: bool = False, v4: bool = False,
-                      v5: bool = False, profile_header: str | None = None) -> None:
+                      v5: bool = False, profile_header: str | None = None,
+                      profile_account: int | None = None) -> None:
         """Read-only V2 instruction feed: signals plus attributable explicit exits.
 
         Broker TP/SL fills are intentionally NOT inferred from Telegram statuses.
@@ -245,6 +246,46 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             if (nums and nums != list(range(1, len(nums) + 1))) or len(nums) > 6:
                 continue
             count = len(nums)
+            # Account 2/3 only: wait for GWS Telegram edits to settle.
+            # A genuine single-target trade is valid after the quiet period;
+            # multiple targets must all be present before sizing at execution.
+            # The most recent edit restarts the quiet period. This is an
+            # entry stabilization gate, not a completeness guarantee.
+            if (profile_account in (2, 3) and status == "ACTIVE"
+                    and signal.get("source_style") == "gws"):
+                try:
+                    updated = datetime.fromisoformat(
+                        str(signal.get("last_update_at") or signal["opened_at"]).replace("Z", "+00:00")
+                    )
+                    if updated.tzinfo is None:
+                        updated = updated.replace(tzinfo=UTC)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+                quiet_seconds = (datetime.now(UTC) - max(opened, updated)).total_seconds()
+                if quiet_seconds < 45:
+                    logger.info(
+                        "Account %s GWS entry waiting for edit stabilization: signal=%s tps=%s quiet=%.1fs",
+                        profile_account, ident, count, quiet_seconds,
+                    )
+                    continue
+                # A standalone TP1 must offer at least 1R against the
+                # provider SL. Use the least favourable zone boundary,
+                # not an optimistic midpoint; actual broker RR may be worse
+                # after spread/slippage, and must be checked on execution.
+                # A lower-RR TP1 can be part of a multi-target setup,
+                # so hold for further amendments rather than reject it.
+                if count == 1:
+                    worst_entry = prices[1] if direction == "BUY" else prices[0]
+                    stop_distance = ((worst_entry - prices[2]) if direction == "BUY"
+                                     else (prices[2] - worst_entry))
+                    reward_distance = ((prices[3] - worst_entry) if direction == "BUY"
+                                       else (worst_entry - prices[3]))
+                    if stop_distance <= 0 or reward_distance < stop_distance:
+                        logger.info(
+                            "Account %s GWS single TP below 1R; waiting for further targets: signal=%s reward=%s risk=%s",
+                            profile_account, ident, reward_distance, stop_distance,
+                        )
+                        continue
             if signal.get("tp3_open") and (count != 2 or any(prices[6:])):
                 continue
             # Older EAs have only 3 or 4 target slots. Mark unsupported
@@ -405,7 +446,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
                 return
             if profile_match.group(2) == "feed":
-                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5")
+                self._demo_v2_feed(v5=True, profile_header=f"DKACCOUNT{account_id}V5", profile_account=account_id)
             else:
                 snapshot = _json(profile["telemetry_path"])
                 if (snapshot.get("login") != profile["login"]
