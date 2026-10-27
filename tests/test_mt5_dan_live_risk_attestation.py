@@ -1,4 +1,4 @@
-"""Only the new EA's fresh UK_V1 broker risk telemetry permits live entries."""
+"""Only the new EA's fresh UK_V2 broker risk telemetry permits live entries."""
 from __future__ import annotations
 
 import json
@@ -29,26 +29,26 @@ class Recorder(Mt5GatewayHandler):
 class AttestedLiveRiskTests(unittest.TestCase):
     def test_utc_and_bst_session_boundaries(self):
         cases = [
-            ("2026-10-27T00:59:59+00:00", 2),
-            ("2026-10-27T01:00:00+00:00", 8),
-            ("2026-10-27T08:59:59+00:00", 8),
-            ("2026-10-27T09:00:00+00:00", 2),
-            ("2026-07-01T00:00:00+00:00", 8),
-            ("2026-07-01T07:59:59+00:00", 8),
-            ("2026-07-01T08:00:00+00:00", 2),
+            ("2026-10-27T00:59:59+00:00", 4),
+            ("2026-10-27T01:00:00+00:00", 10),
+            ("2026-10-27T08:59:59+00:00", 10),
+            ("2026-10-27T09:00:00+00:00", 4),
+            ("2026-07-01T00:00:00+00:00", 10),
+            ("2026-07-01T07:59:59+00:00", 10),
+            ("2026-07-01T08:00:00+00:00", 4),
         ]
         for iso, pct in cases:
             at = datetime.fromisoformat(iso)
             snap = {
-                "risk_schedule": "UK_V1", "mode": "REAL", "currency": "USD",
+                "risk_schedule": "UK_V2", "mode": "REAL", "currency": "USD",
                 "balance": 2000, "equity": 2400, "credit": 500,
                 "signal_risk_cap_pct": pct,
                 "portfolio_risk_cap_account_currency": 1900 * pct / 100,
             }
             with self.subTest(at=iso):
                 self.assertTrue(verified_uk_session_risk(snap, now=at))
-                self.assertFalse(verified_uk_session_risk({**snap, "signal_risk_cap_pct": 4}, now=at))
-                self.assertFalse(verified_uk_session_risk({**snap, "risk_schedule": "LEGACY"}, now=at))
+                self.assertFalse(verified_uk_session_risk({**snap, "signal_risk_cap_pct": 0}, now=at))
+                self.assertFalse(verified_uk_session_risk({**snap, "risk_schedule": "UK_V1"}, now=at))
                 self.assertFalse(verified_uk_session_risk({
                     **snap, "portfolio_risk_cap_account_currency": pct * 20,
                 }, now=at))
@@ -58,7 +58,7 @@ class AttestedLiveRiskTests(unittest.TestCase):
             root = Path(folder)
             now = datetime.now(UTC)
             hour = now.astimezone(ZoneInfo("Europe/Isle_of_Man")).hour
-            pct = 8.0 if 1 <= hour < 9 else 2.0
+            pct = 10.0 if 1 <= hour < 9 else 4.0
             env = {
                 "MT5_DAN_ONLY": "true",
                 "MT5_GATEWAY_TOKEN": "g"*32,
@@ -84,7 +84,7 @@ class AttestedLiveRiskTests(unittest.TestCase):
                 "version":2, "mode":"REAL", "currency":"USD", "server":"Vantage-Live",
                 "login":710003, "received_at":now.isoformat(), "positions":[],
                 "balance":2000, "equity":2500, "credit":500,
-                "risk_schedule":"UK_V1", "signal_risk_cap_pct":pct,
+                "risk_schedule":"UK_V2", "signal_risk_cap_pct":pct,
                 "portfolio_risk_cap_account_currency":2000*pct/100,
             }
             (root / "dan.json").write_text(json.dumps(snapshot))
@@ -101,7 +101,7 @@ class AttestedLiveRiskTests(unittest.TestCase):
                 self.assertIn(f"A|{signal_id}|124|CLOSE|", ok)
 
                 for mutation in (
-                    {"risk_schedule": None}, {"signal_risk_cap_pct":4},
+                    {"risk_schedule": None}, {"signal_risk_cap_pct":0},
                     {"portfolio_risk_cap_account_currency": 900},
                     {"received_at": (now-timedelta(minutes=10)).isoformat()},
                 ):
@@ -112,10 +112,10 @@ class AttestedLiveRiskTests(unittest.TestCase):
                         self.assertIn(f"S|{signal_id}|CANCELLED|BUY|", blocked)
                         self.assertIn(f"A|{signal_id}|124|CLOSE|", blocked)
 
-    def test_compiled_dan_candidate_telemeters_the_uk_v1_flag(self):
+    def test_compiled_dan_candidate_telemeters_the_uk_v2_flag(self):
         text = generate(3, 710003, "REAL", "USD", "Vantage-Live", 130)
         self.assertIn('risk_schedule', text)
-        self.assertIn('UK_V1', text)
+        self.assertIn('UK_V2', text)
         self.assertIn('N(SessionRiskPct(),3)', text)
         self.assertIn('PortfolioRiskLimitAccountCurrency()', text)
         self.assertIn('AccountInfoDouble(ACCOUNT_CREDIT)', text)
