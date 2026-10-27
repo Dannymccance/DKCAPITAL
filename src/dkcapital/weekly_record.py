@@ -1,4 +1,4 @@
-"""Weekly broker-confirmed performance reporting for the XAUUSD demo account."""
+"""Weekly broker-confirmed performance reporting for the active MT5 account."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
