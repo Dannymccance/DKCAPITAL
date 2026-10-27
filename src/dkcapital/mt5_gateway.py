@@ -13,7 +13,8 @@ from typing import Any
 
 from dkcapital.mt5_account_reporting import normalize_telemetry
 from dkcapital.execution_quality import execution_quality, edit_ready, planned_rr
-from dkcapital.mt5_entry_policy import new_entry_block_reason, verified_snapshot, recent_entry_blocks
+from dkcapital.mt5_entry_policy import (new_entry_block_reason, verified_snapshot,
+                                        recent_entry_blocks, verified_uk_session_risk)
 
 from dkcapital.logging_setup import configure_logging
 
@@ -234,6 +235,11 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 currency=profile["currency"] if profile else "GBP",
                 server=profile["server"] if profile else None,
             )
+            if entry_snapshot_verified and account_id == 3 and self.config.dan_only:
+                # An older Account 3 EA with 4% static limits cannot enter new
+                # trades under the 8/2 UK risk contract. Retain all S/A/L
+                # instructions for stop changes and closes.
+                entry_snapshot_verified = verified_uk_session_risk(entry_snapshot)
         lines = [profile_header or ("DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")))]
         for signal in all_signals:
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
@@ -482,7 +488,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                             snapshot, login=profile["login"],
                             mode=profile["mode"], currency=profile["currency"],
                             server=profile["server"],
-                        ),
+                        ) and (not self.config.dan_only
+                               or verified_uk_session_risk(snapshot)),
                     )
                     self._write_json(HTTPStatus.OK, report)
                 else:
