@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from dkcapital.mt5_account_reporting import normalize_telemetry
-from dkcapital.execution_quality import execution_quality
+from dkcapital.execution_quality import execution_quality, edit_ready, planned_rr
 
 from dkcapital.logging_setup import configure_logging
 
@@ -253,6 +253,16 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             supported = 6 if (v4 or v5) else (4 if v3 else 3)
             if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":
                 status = "CANCELLED"  # Prevent legacy 4% high-risk entries.
+            # Entry-only GWS readiness on V5. CANCELLED prevents TryEntry,
+            # but the EA still invokes ManageLegs and processes provider actions
+            # for this very same row. Never omit a signal with live positions.
+            # All three accounts use the same V5 protocol and policy.
+            if v5 and status == "ACTIVE" and signal.get("source_style") == "gws":
+                readiness = edit_ready(signal)
+                rr = planned_rr(signal)
+                if (not readiness.get("ready")
+                        or rr.get("single_tp_below_1r") is True):
+                    status = "CANCELLED"
             stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
             if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
                 stop_mode = "DEFER_BE"

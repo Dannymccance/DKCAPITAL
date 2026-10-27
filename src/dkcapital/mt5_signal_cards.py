@@ -106,7 +106,9 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
     else:
         status = "PARTIAL / RECONCILIATION"
     return {"status": status, "legs": legs, "has_broker_record": has_record, "fresh": True,
-            "decision": latest_entry, "layer_decision": latest_layer}
+            "decision": latest_entry, "layer_decision": latest_layer,
+            "broker_entry_leg_count": sum(1 for x in legs.values() if x.get("entry") is not None),
+            "broker_history_complete": False}
 
 
 def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
@@ -138,7 +140,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
         if leg in (1, 2, 3) and leg > expected and leg not in state["legs"]:
             continue
         item = state["legs"].get(leg)
-        if leg >= 4 and (item is None or item.get("entry") is None):
+        if leg == 4 and (item is None or item.get("entry") is None):
             continue
         if item is None or item["entry"] is None:
             rows.append(f"⬜ TP{leg - 1 if leg >= 5 else leg} leg — **Not filled on MT5**")
@@ -187,6 +189,15 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
                         value=(f"**{reason}** | {at}{quote}" if code != "NOT_YET_RECORDED"
                                else "Not filled on MT5; rejection reason not verified.")[:1024],
                         inline=False)
+    # Show broker entry failures even after a partial fill; they are often
+    # the only explanation for incomplete target allocation.
+    entry_decision = state.get("decision") or {}
+    if state.get("has_broker_record") and str(entry_decision.get("code") or "") in {
+        "BROKER_ORDER_REJECTED_OR_PARTIAL", "MINIMUM_LEG_SIZE_OR_MARGIN",
+        "BROKER_TP_INVALID", "BROKER_SL_INVALID",
+    }:
+        embed.add_field(name="MT5 entry diagnostic",
+                        value=str(entry_decision.get("code"))[:1024], inline=False)
     layer = state.get("layer_decision")
     if layer and int(signal.get("layers") or 1) > 1:
         embed.add_field(name="MT5 layer decision",
