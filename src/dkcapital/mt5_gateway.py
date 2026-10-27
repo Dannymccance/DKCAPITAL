@@ -435,6 +435,28 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                                v5=self.path == "/v5/demo/feed")
             return
 
+        # Account 1 uses its existing authenticated DEMO telemetry snapshot.
+        # Diagnostics are read-only and do not change any EA instruction feed.
+        if self.path == "/v5/accounts/1/quality":
+            if not self._authorized():
+                self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                return
+            if self.config.account1_login <= 0:
+                self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "account1_login_unconfigured"})
+                return
+            snapshot = _json(self.config.account1_telemetry_path)
+            if (snapshot.get("login") != self.config.account1_login
+                    or snapshot.get("mode") != "DEMO"
+                    or snapshot.get("currency") != "GBP"):
+                self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no_verified_account1_telemetry"})
+                return
+            state = _json(self.config.signal_state_path)
+            signals = state.get("signals")
+            if not isinstance(signals, list):
+                signals = []
+            self._write_json(HTTPStatus.OK, execution_quality(signals, snapshot))
+            return
+
         if self.path == "/v2/demo/account1":
             if not self._authorized():
                 self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
