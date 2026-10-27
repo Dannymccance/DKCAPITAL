@@ -167,6 +167,7 @@ class Tp1PolicyTests(unittest.TestCase):
         self.assertIn('for(int i=0;i<initialLegCount;i++)',src)
         self.assertIn('double targetLots=FloorLots(',src)
         self.assertNotIn('return hour>=1 && hour<9 ? 10.0 : 4.0;',src)
+        self.assertNotIn('if(IsUKFriday()) targetLots=MathMin(targetLots,0.03);',src)
         with self.assertRaises(ValueError):
             tp1_source(2, 710003, "REAL", "USD", "Vantage-Live",130)
 
