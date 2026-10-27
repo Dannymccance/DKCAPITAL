@@ -104,7 +104,7 @@ def tp1_source(account_id: int, login: int, mode: str, currency: str,
           '   // Durable intent before first broker request prevents duplicates on restart.')
     if 'input bool EnableNewEntries = false;' not in source:
         raise RuntimeError("Unsafe live EA entry default")
-    required = ('"TP1_V1"', 'MaxSignalRiskPct = 8.0', 'UKTradingHour()>=15',
+    required = ('TP1_V1', 'MaxSignalRiskPct = 8.0', 'UKTradingHour()>=15',
                 'targets[t]=0;', 'if(true) return; // TP1 strategy never layers.',
                 'INITIAL_GROUP_RISK_SHARE = 1.0')
     for marker in required:
