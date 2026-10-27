@@ -75,6 +75,8 @@ class SafeFeedTests(unittest.TestCase):
         self.assertIn("|ACTIVE|SELL|", self.feed()[1])
 
     def test_legacy_feed_unchanged(self):
+        # Legacy V2 only accepts up to 3 numeric TP levels.
+        self.signal["tps"] = {"1":3995, "2":3994, "3":3993}
         self.assertIn("|ACTIVE|SELL|", self.feed(v5=False)[1])
 
 
