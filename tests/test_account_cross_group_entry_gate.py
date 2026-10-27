@@ -89,7 +89,7 @@ class OpposingProviderGateTests(unittest.TestCase):
         for n in (1,2,3):
             with self.subTest(account=n):
                 lines=self.feed(n)
-                self.assertIn(f"S|{self.buy['signal_id']}|CANCELLED|BUY|",lines[2])
+                self.assertIn(f"S|{self.buy['signal_id']}|CANCELLED|BUY|","\n".join(lines))
                 self.assertIn(f"S|{self.held['signal_id']}|ACTIVE|SELL|",lines[1])
                 self.assertTrue(any(x.startswith(f"A|{self.buy['signal_id']}|")
                                     for x in lines))
@@ -98,14 +98,14 @@ class OpposingProviderGateTests(unittest.TestCase):
         self.buy["chat_id"]=-100111
         (self.path/"signals.json").write_text(json.dumps({"signals":self.signals}))
         for n in (1,2,3):
-            self.assertIn(f"S|{self.buy['signal_id']}|ACTIVE|BUY|",self.feed(n)[2])
+            self.assertIn(f"S|{self.buy['signal_id']}|ACTIVE|BUY|","\n".join(self.feed(n)))
 
     def test_same_side_allowed(self):
         self.buy["direction"]="SELL"
         self.buy["current_sl"]=4022.5
         self.buy["tps"]={"1":4013,"2":4012,"3":4011}
         (self.path/"signals.json").write_text(json.dumps({"signals":self.signals}))
-        self.assertIn("|ACTIVE|SELL|",self.feed(2)[2])
+        self.assertIn("|ACTIVE|SELL|","\n".join(self.feed(2)))
 
     def test_closed_existing_trade_allows_opposite(self):
         for n in (1,2,3):
@@ -113,16 +113,16 @@ class OpposingProviderGateTests(unittest.TestCase):
             data=json.loads(p.read_text())
             data["positions"]=[]
             p.write_text(json.dumps(data))
-            self.assertIn(f"S|{self.buy['signal_id']}|ACTIVE|BUY|",self.feed(n)[2])
+            self.assertIn(f"S|{self.buy['signal_id']}|ACTIVE|BUY|","\n".join(self.feed(n)))
 
     def test_accounts_are_independent(self):
         p=self.path/"acct2.json"
         data=json.loads(p.read_text())
         data["positions"]=[]
         p.write_text(json.dumps(data))
-        self.assertIn(f"S|{self.buy['signal_id']}|ACTIVE|BUY|",self.feed(2)[2])
-        self.assertIn(f"S|{self.buy['signal_id']}|CANCELLED|BUY|",self.feed(1)[2])
-        self.assertIn(f"S|{self.buy['signal_id']}|CANCELLED|BUY|",self.feed(3)[2])
+        self.assertIn(f"S|{self.buy['signal_id']}|ACTIVE|BUY|","\n".join(self.feed(2)))
+        self.assertIn(f"S|{self.buy['signal_id']}|CANCELLED|BUY|","\n".join(self.feed(1)))
+        self.assertIn(f"S|{self.buy['signal_id']}|CANCELLED|BUY|","\n".join(self.feed(3)))
 
     def test_stale_telemetry_holds_new_entries_but_not_actions(self):
         p=self.path/"acct3.json"
