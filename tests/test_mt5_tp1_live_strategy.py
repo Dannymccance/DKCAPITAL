@@ -127,6 +127,7 @@ class Tp1PolicyTests(unittest.TestCase):
             "DKACCOUNT3V5", 'MaxSignalRiskPct = 8.0',
             'MaxPortfolioRiskAccountCurrency = 80.0',
             'MaxGroupRiskAccountCurrency = 80.0',
+            'MaxPortfolioRiskPct = 8.0',
             'input bool EnableNewEntries = false;',
             'UKTradingHour()>=15', 'targets[t]=0;',
             'OrderCalcProfit(', 'OrderCalcMargin(', 'TP1_V1',
