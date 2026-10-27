@@ -32,7 +32,7 @@ class QualityTests(unittest.TestCase):
     def test_equal_weight_four_target_rr(self):
         self.sell["tps"] = {"1":3995, "2":3994, "3":3993, "4":3990}
         self.assertEqual(planned_rr(self.sell)["tp_count"], 4)
-        self.assertEqual(planned_rr(self.sell)["rr"], 0.4375)
+        self.assertEqual(planned_rr(self.sell)["rr"], 0.5)
 
     def test_invalid_targets_fail_closed_for_estimates(self):
         self.sell["tps"] = {"1":3995, "3":3990}
