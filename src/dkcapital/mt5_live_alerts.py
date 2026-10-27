@@ -10,6 +10,25 @@ from math import isfinite
 from typing import Any
 
 
+def trading_permission_issues(snapshot: dict[str, Any], prefix: str) -> set[str]:
+    """Report independent permission gates; missing readings are UNKNOWN.
+
+    Older EA versions cannot prove permission is enabled. The reporting layer
+    intentionally does not infer permissions from entry_enabled or past fills.
+    """
+    issues: set[str] = set()
+    for field, suffix in (
+        ("terminal_trade_allowed", "TERMINAL_ALGO_TRADING_DISABLED"),
+        ("mql_trade_allowed", "EA_ALGO_TRADING_DISABLED"),
+    ):
+        value = snapshot.get(field)
+        if value is False:
+            issues.add(f"{prefix}_{suffix}")
+        elif value is not True:
+            issues.add(f"{prefix}_{suffix.replace('_DISABLED', '_UNVERIFIED')}")
+    return issues
+
+
 STALE_SECONDS = 150
 HOST_STALE_SECONDS = 180
 RECENT_RESTART_SECONDS = 300
@@ -49,6 +68,7 @@ def live_account_issues(
             problems.add(f"{PREFIX}_WRONG_ACCOUNT_TYPE")
         if snapshot.get("server") != server:
             problems.add(f"{PREFIX}_WRONG_BROKER_SERVER")
+        problems.update(trading_permission_issues(snapshot, PREFIX))
         if snapshot.get("feed_http") != 200:
             problems.add(f"{PREFIX}_INSTRUCTION_FEED_UNAVAILABLE")
         if expect_entries is not None and snapshot.get("entry_enabled") is not expect_entries:
