@@ -28,6 +28,14 @@ Inputs in the generated EA (not a simulator):
 | `EnableNewEntries` | **false** | Explicit broker-side activation only after release |
 | `EnableLayerEntries` | **false** | TP1 code disables layering regardless |
 
+The previous live template used $75 of group cap per $1,000 reference balance
+(7.5%), so it could NOT size a full 8% single position even when no other
+trades were open. The previous $150 portfolio input scaled to 15%, which by
+itself would not enforce the new 8% aggregate ceiling. The TP1 candidate
+explicitly changes both input defaults to **$80 per $1,000 reference balance**
+while keeping both existing limit checks active. This is a proposed source
+configuration, not an adjustment to any running EA.
+
 These retained absolute caps remain **active** in addition to 8% percentage
 limits. At the default values both ceilings equal 8% of risk capital. Operators
 changing the input caps must reconcile both, and the smaller limit prevails.
