@@ -88,13 +88,25 @@ def execution_quality(signals: list[dict[str, Any]], snapshot: dict[str, Any],
         provider = str(signal.get("source_style") or "unknown")
         expected = rr.get("tp_count")
         actual = len(held)
+        broker_entry_legs = {
+            int(d.get("magic", 0)) % 10 for d in snapshot.get("deals", [])
+            if isinstance(d, dict) and d.get("group") == group
+            and d.get("entry_type") == "IN"
+            and int(d.get("magic", 0)) % 10 in (1, 2, 3, 5, 6, 7)
+        }
+        # Compare historical fills where visible. Never classify missing
+        # historical legs as definitely rejected: deal windows are bounded.
+        observed_legs = broker_entry_legs | {
+            int(p.get("leg", 0)) for p in held if int(p.get("leg", 0)) in (1, 2, 3, 5, 6, 7)
+        }
         entry_prices = [float(p["entry"]) for p in held if p.get("entry") is not None]
         if held:
             provider_directions.setdefault(provider, set()).add(str(signal.get("direction")))
-            if expected is not None and actual < expected:
-                warnings.append({"code": "OPEN_LEG_COUNT_MISMATCH", "signal_id": sid,
-                                 "expected": expected, "open": actual,
-                                 "note": "Open positions only; closed legs require broker-deal reconciliation"})
+            if expected is not None and len(observed_legs) < expected:
+                warnings.append({"code": "BROKER_LEG_HISTORY_INCOMPLETE", "signal_id": sid,
+                                 "expected_current_targets": expected,
+                                 "observed_entry_legs": len(observed_legs),
+                                 "note": "History window or Telegram edits can explain mismatch; not proof of a failed fill"})
             for p in held:
                 if float(p.get("sl") or 0) <= 0:
                     warnings.append({"code": "MISSING_BROKER_STOP", "signal_id": sid,
@@ -106,7 +118,8 @@ def execution_quality(signals: list[dict[str, Any]], snapshot: dict[str, Any],
             lo, hi = float(signal["entry_low"]), float(signal["entry_high"])
             theoretical = hi if signal.get("direction") == "SELL" else lo
         details.append({"signal_id": sid, "provider": provider, "readiness": readiness,
-                        "planned": rr, "open_legs": actual, "expected_targets": expected,
+                        "planned": rr, "open_legs": actual, "observed_entry_legs": len(observed_legs),
+                        "expected_targets": expected,
                         "actual_average_entry": round(sum(entry_prices)/len(entry_prices), 5)
                             if entry_prices else None,
                         "hypothetical_best_zone_entry": theoretical,
