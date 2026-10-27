@@ -89,11 +89,20 @@ def _is_gold_message(text: str) -> bool:
 
 def _message_payload(event_type: str, message: Any, *, chat_title: str | None = None, sender_name: str | None = None) -> dict[str, Any]:
     media = getattr(message, "media", None)
+    forwarded = getattr(message, "fwd_from", None)
+    forwarded_peer = getattr(forwarded, "from_id", None) if forwarded else None
+    try:
+        origin = utils.get_peer_id(forwarded_peer) if forwarded_peer else None
+    except (TypeError, ValueError):
+        origin = None
 
     return {
         "event_type": event_type,
         "observed_at": datetime.now(UTC).isoformat(),
         "chat_id": getattr(message, "chat_id", None),
+        # Forwarded posts are never trusted solely by the destination chat.
+        "is_forwarded": forwarded is not None,
+        "forwarded_from_chat_id": origin,
         "message_id": getattr(message, "id", None),
         "sender_id": getattr(message, "sender_id", None),
         "sender_name": sender_name,
