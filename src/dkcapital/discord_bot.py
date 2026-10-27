@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
-from dkcapital.mt5_live_alerts import account2_issues, account3_issues
+from dkcapital.mt5_live_alerts import account2_issues, account3_issues, trading_permission_issues
 from dkcapital.mt5_entry_confirmations import build_confirmation, signal_is_new
 from dkcapital.mt5_pip_history import record_weekly_average
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
@@ -1297,6 +1297,8 @@ def build_bot(settings: Settings) -> commands.Bot:
             else:
                 if summary["stale"]:
                     problems.add("MT5_DEMO_TELEMETRY_STALE")
+                else:
+                    problems.update(trading_permission_issues(snapshot, "MT5_DEMO"))
                 if summary["risk_unknown"]:
                     problems.add("MT5_DEMO_NATIVE_STOP_OR_RISK_UNKNOWN")
                 if summary.get("feed_http") != 200:
