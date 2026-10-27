@@ -27,7 +27,7 @@ def snapshot() -> dict:
         "equity": 1100, "credit": 300, "risk_schedule": "TP1_V1",
         "signal_risk_cap_pct": 8.0, "portfolio_risk_cap_account_currency": 64.0,
         "bid": 4000, "ask": 4000.2, "positions": [],
-        "unmanaged_positions_count": 0, "broker_orders_total": 0,
+        "unmanaged_positions_count": 0, "broker_positions_total": 0, "broker_orders_total": 0,
     }
 
 
@@ -97,9 +97,22 @@ class Tp1PolicyTests(unittest.TestCase):
 
     def test_broker_position_conflicts_and_unmanaged(self):
         self.assertEqual(tp1_block_reason(incoming(), {**snapshot(), "positions": [
-            {"side": "SELL"}]}, now=current()), "OPPOSING_POSITION_ACTIVE")
+            {"side": "SELL"}], "broker_positions_total": 1}, now=current()), "OPPOSING_POSITION_ACTIVE")
         self.assertEqual(tp1_block_reason(incoming(), {**snapshot(),
-            "unmanaged_positions_count": 1}, now=current()), "UNMANAGED_BROKER_EXPOSURE")
+            "unmanaged_positions_count": 1, "broker_positions_total": 1}, now=current()), "UNMANAGED_BROKER_EXPOSURE")
+
+    def test_incomplete_broker_position_inventory_blocks_new_entries(self):
+        self.assertEqual(tp1_block_reason(incoming(), {
+            **snapshot(), "broker_positions_total": 2
+        }, now=current()), "POSITION_INVENTORY_UNVERIFIED")
+
+    def test_real_balance_is_not_a_margin_based_sizing_rule(self):
+        src=tp1_source(3, 710003, "REAL", "USD", "Vantage-Live", 130)
+        self.assertIn("OrderCalcProfit(side,GoldSymbol", src)
+        self.assertIn("OrderCalcMargin(type,GoldSymbol", src)
+        self.assertIn("probeLoss/probeLot", src)
+        self.assertIn("MaxPortfolioRiskPct/100.0", src)
+        self.assertIn("MAX_NATIVE_TARGETS", src)
 
     def test_edit_can_make_unquoted_now_executable_without_backdating(self):
         state=SignalState()
