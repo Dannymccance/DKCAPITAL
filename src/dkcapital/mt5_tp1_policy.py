@@ -118,12 +118,21 @@ def tp1_block_reason(signal: dict[str, Any], snapshot: dict[str, Any],
         high = _float(signal.get("entry_high") or 0)
         if low > 0 and high > 0 and not (min(low, high)-max_deviation_usd <= fill <= max(low, high)+max_deviation_usd):
             return "ENTRY_DEVIATION_EXCEEDED"
-        if int(snapshot.get("unmanaged_positions_count") or 0):
+        # Never trust incomplete MT5 position inventory, even if the broker
+        # exposure amount is missing or zero. Unknown manual trades can hedge,
+        # and their actual stop risk must not be assumed to be zero.
+        positions = snapshot["positions"]
+        total = int(snapshot["broker_positions_total"])
+        unmanaged = int(snapshot["unmanaged_positions_count"])
+        if (not isinstance(positions, list) or total < 0 or unmanaged < 0 or
+                total != len(positions) + unmanaged):
+            return "POSITION_INVENTORY_UNVERIFIED"
+        if unmanaged:
             return "UNMANAGED_BROKER_EXPOSURE"
         if int(snapshot.get("broker_orders_total") or 0):
             return "PENDING_BROKER_ORDERS"
         # Strict no-hedge rule, including same-provider opposite directions.
-        if any(p.get("side") != direction for p in snapshot.get("positions", [])):
+        if any(p.get("side") != direction for p in positions):
             return "OPPOSING_POSITION_ACTIVE"
         # The broker EA uses OrderCalcProfit and OrderCalcMargin for the
         # definitive lot size, stop exposure, slippage and spread decision.
