@@ -13,7 +13,7 @@ from typing import Any
 
 from dkcapital.mt5_account_reporting import normalize_telemetry
 from dkcapital.execution_quality import execution_quality, edit_ready, planned_rr
-from dkcapital.mt5_entry_policy import new_entry_block_reason, verified_snapshot
+from dkcapital.mt5_entry_policy import new_entry_block_reason, verified_snapshot, recent_entry_blocks
 
 from dkcapital.logging_setup import configure_logging
 
@@ -458,9 +458,16 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                     signals = state.get("signals")
                     if not isinstance(signals, list):
                         signals = []
-                    self._write_json(
-                        HTTPStatus.OK, execution_quality(signals, snapshot)
+                    report = execution_quality(signals, snapshot)
+                    report["entry_blocks"] = recent_entry_blocks(
+                        signals, snapshot,
+                        verified=verified_snapshot(
+                            snapshot, login=profile["login"],
+                            mode=profile["mode"], currency=profile["currency"],
+                            server=profile["server"],
+                        ),
                     )
+                    self._write_json(HTTPStatus.OK, report)
                 else:
                     self._write_json(HTTPStatus.OK, snapshot)
             return
@@ -493,7 +500,15 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             signals = state.get("signals")
             if not isinstance(signals, list):
                 signals = []
-            self._write_json(HTTPStatus.OK, execution_quality(signals, snapshot))
+            report = execution_quality(signals, snapshot)
+            report["entry_blocks"] = recent_entry_blocks(
+                signals, snapshot,
+                verified=verified_snapshot(
+                    snapshot, login=self.config.account1_login,
+                    mode="DEMO", currency="GBP",
+                ),
+            )
+            self._write_json(HTTPStatus.OK, report)
             return
 
         if self.path == "/v2/demo/account1":
