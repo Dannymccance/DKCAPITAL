@@ -1244,6 +1244,7 @@ def build_bot(settings: Settings) -> commands.Bot:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
 
+    live_only = dan_only_enabled()
     mt5_channel_raw = os.getenv("MT5_DASHBOARD_CHANNEL_ID", "").strip()
     mt5_alert_raw = os.getenv("MT5_ALERT_CHANNEL_ID", "").strip()
     account2_alert_raw = os.getenv("MT5_ACCOUNT2_ALERT_CHANNEL_ID", "1564421762752450592").strip()
@@ -1270,19 +1271,21 @@ def build_bot(settings: Settings) -> commands.Bot:
                                  else None)
     entry_confirm_raw = os.getenv("MT5_ENTRY_CONFIRMATION_CHANNEL_ID", "1564370691313377300").strip()
     entry_confirm_channel_id = int(entry_confirm_raw) if entry_confirm_raw.isdigit() else 0
-    entry_confirm_state_path = Path("/app/data/mt5-entry-confirmation-state.json")
+    entry_confirm_state_path = Path("/app/data/mt5-account3-live-entry-confirmation-state.json" if live_only else "/app/data/mt5-entry-confirmation-state.json")
     mt5_results_channel_id = int(os.getenv("MT5_RESULTS_CHANNEL_ID", "1561095999139877046"))
-    mt5_results_state_path = Path("/app/data/mt5-results-published.json")
+    mt5_results_state_path = Path("/app/data/mt5-account3-live-results-published.json" if live_only else "/app/data/mt5-results-published.json")
     mt5_changes_channel_id = int(os.getenv("MT5_CHANGES_CHANNEL_ID", "1561099532467445961"))
     mt5_tp_sl_channel_id = int(os.getenv("MT5_TP_SL_CHANNEL_ID", "1561099506337063073"))
-    mt5_events_state_path = Path("/app/data/mt5-broker-events-state.json")
+    mt5_events_state_path = Path("/app/data/mt5-account3-live-broker-events-state.json" if live_only else "/app/data/mt5-broker-events-state.json")
     mt5_channel_id = int(mt5_channel_raw) if mt5_channel_raw else 0
     mt5_alert_id = int(mt5_alert_raw) if mt5_alert_raw else 0
     mt5_pip_size = float(os.getenv("MT5_XAU_PIP_SIZE", "0.01"))
-    mt5_snapshot = Path(os.getenv("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json"))
+    mt5_snapshot = (Path("/app/data/mt5-account3.json") if live_only
+                    else Path(os.getenv("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json")))
     mt5_dashboard_config = Path("/app/data/mt5-dashboard-config.json")
-    mt5_pip_history_path = Path(os.getenv("MT5_ACCOUNT1_PIP_HISTORY_PATH", "/app/data/mt5-account1-pip-history.json"))
-    mt5_alert_state_path = Path("/app/data/mt5-alert-state.json")
+    mt5_pip_history_path = (Path("/app/data/mt5-account3-live-pip-history.json") if live_only
+                            else Path(os.getenv("MT5_ACCOUNT1_PIP_HISTORY_PATH", "/app/data/mt5-account1-pip-history.json")))
+    mt5_alert_state_path = Path("/app/data/mt5-account3-live-alert-state.json" if live_only else "/app/data/mt5-alert-state.json")
     account2_alert_state_path = Path("/app/data/mt5-account2-alert-state.json")
     account2_snapshot_path = Path("/app/data/mt5-account2.json")
     account3_alert_state_path = Path("/app/data/mt5-account3-alert-state.json")
@@ -1290,11 +1293,12 @@ def build_bot(settings: Settings) -> commands.Bot:
     account3_host_status_path = Path("/app/data/mt5-profile-host-status.json")
     telegram_recovery_status_path = Path("/app/data/telegram-recovery-status.json")
     weekly_channel_id = int(os.getenv("DISCORD_WEEKLY_RECORD_CHANNEL_ID", "0"))
-    weekly_state_path = Path(os.getenv("WEEKLY_RECORD_STATE_PATH", "/app/data/weekly-record-state.json"))
+    weekly_state_path = (Path("/app/data/mt5-account3-live-weekly-record-state.json") if live_only
+                         else Path(os.getenv("WEEKLY_RECORD_STATE_PATH", "/app/data/weekly-record-state.json")))
     telegram_mirror_channel_id = chats_channel_id()
     telegram_mirror_state_path = Path(os.getenv("TELEGRAM_MIRROR_STATE_PATH", "/app/data/telegram-mirror-state.json"))
 
-    async def update_mt5_account1() -> None:
+    async def update_active_mt5_account() -> None:
         if not mt5_channel_id and not mt5_alert_id:
             return
         if bot.is_ready():
@@ -1305,26 +1309,35 @@ def build_bot(settings: Settings) -> commands.Bot:
         snapshot = _load_json(mt5_snapshot)
         problems: set[str] = set()
         summary: dict[str, Any] | None = None
-        if not snapshot:
-            problems.add("MT5_DEMO_TELEMETRY_MISSING")
+        prefix = "MT5_LIVE" if live_only else "MT5_DEMO"
+        if not snapshot or (live_only and not matches_active_account(snapshot)):
+            problems.add(f"{prefix}_TELEMETRY_MISSING_OR_UNVERIFIED")
         else:
             try:
                 summary = summarize(snapshot, pip_size=mt5_pip_size)
             except (ValueError, TypeError, KeyError):
-                problems.add("MT5_DEMO_TELEMETRY_MALFORMED")
+                problems.add(f"{prefix}_TELEMETRY_MALFORMED")
             else:
                 if summary["stale"]:
-                    problems.add("MT5_DEMO_TELEMETRY_STALE")
+                    problems.add(f"{prefix}_TELEMETRY_STALE")
                 else:
-                    problems.update(trading_permission_issues(snapshot, "MT5_DEMO"))
+                    problems.update(trading_permission_issues(snapshot, prefix))
                 if summary["risk_unknown"]:
-                    problems.add("MT5_DEMO_NATIVE_STOP_OR_RISK_UNKNOWN")
+                    problems.add(f"{prefix}_NATIVE_STOP_OR_RISK_UNKNOWN")
                 if summary.get("feed_http") != 200:
-                    problems.add("MT5_DEMO_INSTRUCTION_FEED_UNAVAILABLE")
-                if any(risk > 75.01 for risk in summary.get("group_risks", {}).values()):
-                    problems.add("MT5_DEMO_GROUP_STOP_RISK_OVER_75")
-                if summary["portfolio_risk_gbp"] is not None and summary["portfolio_risk_gbp"]>150.01:
-                    problems.add("MT5_DEMO_AGGREGATE_STOP_RISK_OVER_150")
+                    problems.add(f"{prefix}_INSTRUCTION_FEED_UNAVAILABLE")
+                if live_only:
+                    ceiling = snapshot.get("portfolio_risk_cap_account_currency")
+                    if ceiling is None or type(ceiling) not in (int, float):
+                        problems.add("MT5_LIVE_SESSION_RISK_CAP_UNVERIFIED")
+                    elif (summary["portfolio_risk_gbp"] is not None
+                          and summary["portfolio_risk_gbp"] > float(ceiling) + 0.01):
+                        problems.add("MT5_LIVE_EXISTING_STOP_RISK_OVER_ACTIVE_SESSION_CAP")
+                else:
+                    if any(risk > 75.01 for risk in summary.get("group_risks", {}).values()):
+                        problems.add("MT5_DEMO_GROUP_STOP_RISK_OVER_75")
+                    if summary["portfolio_risk_gbp"] is not None and summary["portfolio_risk_gbp"] > 150.01:
+                        problems.add("MT5_DEMO_AGGREGATE_STOP_RISK_OVER_150")
 
         recovery = _load_json(telegram_recovery_status_path)
         if not recovery:
@@ -1375,12 +1388,12 @@ def build_bot(settings: Settings) -> commands.Bot:
                 if not message_id:
                     posted = await channel.send(embed=embed)
                     try:
-                        await posted.pin(reason="DKcapital MT5 Account 1 dashboard")
+                        await posted.pin(reason=f"DKcapital MT5 {account_label()} dashboard")
                     except (discord.Forbidden, discord.HTTPException):
                         logger.warning("Unable to pin MT5 dashboard")
                     _write_json(mt5_dashboard_config,{"channel_id":mt5_channel_id,"message_id":posted.id})
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.exception("Unable to publish MT5 Account 1 dashboard")
+                logger.exception("Unable to publish MT5 active account dashboard")
 
         if mt5_alert_id:
             prev = _load_json(mt5_alert_state_path)
@@ -1391,15 +1404,15 @@ def build_bot(settings: Settings) -> commands.Bot:
                 try:
                     channel = bot.get_channel(mt5_alert_id) or await bot.fetch_channel(mt5_alert_id)
                     for issue in to_send:
-                        await channel.send(f"🚨 DKcapital Account 1 DEMO alert: `{issue}` — investigate; new entries may be blocked by safety checks.")
+                        await channel.send(f"🚨 DKcapital {account_label()} alert: `{issue}` - investigate; new entries may be blocked by safety checks.")
                     for issue in recovered:
-                        await channel.send(f"✅ DKcapital Account 1 DEMO recovery: `{issue}` cleared.")
+                        await channel.send(f"✅ DKcapital {account_label()} recovery: `{issue}` cleared.")
                     _write_json(mt5_alert_state_path,{
                         "active": sorted(problems),
                         "checked_at": datetime.now(UTC).isoformat(),
                     })
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.exception("Unable to deliver MT5 Account 1 alert")
+                    logger.exception("Unable to deliver MT5 active account alert")
 
     async def update_mt5_live_alerts(account_id: int) -> None:
         """Identical fault/recovery notifications for isolated REAL accounts.
@@ -1566,7 +1579,7 @@ def build_bot(settings: Settings) -> commands.Bot:
                 await channel.send(
                     "**DK CAPITAL | ACCOUNT ENTRY CONFIRMATIONS ACTIVE**\n"
                     "Future parsed XAUUSD signals get one reference showing "
-                    "Kyle, Dan and Demo independently.\n"
+                    ("Live Account only.\n" if live_only else "Kyle, Dan and Demo independently.\n")
                     "✅ = broker entry verified | ⏳ = awaiting fill | "
                     "❌ = no confirmed fill | ⚠️ = cannot verify.\n"
                     "Existing MT5 positions and trades are not replayed. "
@@ -1582,11 +1595,11 @@ def build_bot(settings: Settings) -> commands.Bot:
         feed = _load_json(settings.signal_state_path)
         signals = [x for x in (feed.get("signals") or []) if isinstance(x, dict)
                    and str(x.get("symbol") or "").upper() == "XAUUSD"]
-        snapshots = {
+        snapshots = ({3: _load_json(account3_snapshot_path)} if live_only else {
             1: _load_json(mt5_snapshot),
             2: _load_json(account2_snapshot_path),
             3: _load_json(account3_snapshot_path),
-        }
+        })
         messages = state.setdefault("messages", {})
         suppressed = state.setdefault("suppressed", {})
         updates = 0
@@ -2063,7 +2076,7 @@ def build_bot(settings: Settings) -> commands.Bot:
 
     @tasks.loop(minutes=1)
     async def mt5_account1_loop() -> None:
-        await update_mt5_account1()
+        await update_active_mt5_account()
 
     @mt5_account1_loop.before_loop
     async def before_mt5_account1_loop() -> None:
@@ -2095,12 +2108,12 @@ def build_bot(settings: Settings) -> commands.Bot:
             mt5_account1_loop.start()
         if entry_confirm_channel_id and not mt5_entry_confirmation_loop.is_running():
             mt5_entry_confirmation_loop.start()
-        if account2_alert_id and not mt5_account2_alert_loop.is_running():
+        if not live_only and account2_alert_id and not mt5_account2_alert_loop.is_running():
             mt5_account2_alert_loop.start()
-        if account3_alert_id and account3_expected_login and not mt5_account3_alert_loop.is_running():
+        if not live_only and account3_alert_id and account3_expected_login and not mt5_account3_alert_loop.is_running():
             mt5_account3_alert_loop.start()
         # Legacy signal and paper dashboards are intentionally retired.
-        # MT5 Account 1 and its broker-confirmed signal cards remain active.
+        # The previous Account 1 outputs use the verified Live Account in Dan-only mode.
         if not internal_signal_loop.is_running():
             internal_signal_loop.start()
         if mt5_results_channel_id and not mt5_results_loop.is_running():
