@@ -10,9 +10,18 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from scripts.generate_mt5_v211_profile import (
-    generate, token_from_private_env, write_compiler_source,
-)
+# Both `python -m scripts.generate_mt5_tp1_live` and the documented
+# `python scripts/generate_mt5_tp1_live.py` must work from the repo root.
+try:
+    from scripts.generate_mt5_v211_profile import (
+        generate, token_from_private_env, write_compiler_source,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from generate_mt5_v211_profile import (
+        generate, token_from_private_env, write_compiler_source,
+    )
 
 
 def tp1_source(account_id: int, login: int, mode: str, currency: str,
