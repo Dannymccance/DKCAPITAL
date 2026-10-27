@@ -87,6 +87,9 @@ double SessionRiskPct()
     patch('json+=",\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);',
           'json+=",\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);'
           + '\n   json+=",\\\"portfolio_risk_cap_account_currency\\\":"+N(PortfolioRiskLimitAccountCurrency(),2);')
+    patch('json+="\\\"margin\\\":"+N(AccountInfoDouble(ACCOUNT_MARGIN),2)+",";',
+          'json+="\\\"risk_schedule\\\":\\\"UK_V1\\\",";'
+          + '\n   json+="\\\"margin\\\":"+N(AccountInfoDouble(ACCOUNT_MARGIN),2)+",";')
     patch("// Keep the existing balance-based targetLots calculation below unchanged.",
           "// Dan: size by broker-valued stop loss within the active UK session risk budget.")
     patch("// The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.",
