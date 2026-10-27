@@ -238,6 +238,11 @@ def normalize_telemetry(payload: Any, expected_login: int, *,
                                 if "signal_risk_cap_pct" in payload else None),
         "signal_risk_cap_gbp": (_number(payload["signal_risk_cap_gbp"], minimum=0)
                                 if "signal_risk_cap_gbp" in payload else None),
+        "credit": _number(payload.get("credit", 0), minimum=0),
+        "portfolio_risk_cap_account_currency": (
+            _number(payload["portfolio_risk_cap_account_currency"], minimum=0)
+            if "portfolio_risk_cap_account_currency" in payload else None
+        ),
         "signal_risk_cap_account_currency": (
             _number(payload["signal_risk_cap_account_currency"], minimum=0)
             if "signal_risk_cap_account_currency" in payload else None
