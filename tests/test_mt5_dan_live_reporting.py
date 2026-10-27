@@ -73,6 +73,7 @@ class LiveReportingTests(unittest.TestCase):
         self.assertEqual(result["portfolio_risk_gbp"], 30.0)
         self.assertEqual(snap["portfolio_risk_cap_account_currency"], 200)
         self.assertEqual(snap["credit"], 625)
+        self.assertEqual(result["floating_gbp"], -25.0)  # 3100 equity - 2500 balance - 625 bonus
 
     def test_new_live_pip_history_does_not_absorb_demo_archives(self):
         snap = self.broker()
