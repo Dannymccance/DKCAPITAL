@@ -62,8 +62,8 @@ def new_entry_block_reason(
     GWS Telegram rooms as one source. An unknown opposing group is blocked.
     """
     positions = snapshot.get("positions", [])
-    if int(snapshot.get("unmanaged_positions_count") or 0) > 0:
-        return "UNMANAGED_BROKER_POSITION"
+    # This is specifically a cross-Telegram-room policy. Unmanaged manual
+    # positions have no provider-room identity and must not be invented as one.
     if not positions:
         return None
     incoming_side = str(incoming.get("direction") or "")
