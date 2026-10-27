@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dkcapital.mt5_signal_cards import mt5_group
+from dkcapital.mt5_active_account import dan_only_enabled, live_identity
 
 MAX_AGE_SECONDS = 150
 PENDING_SECONDS = 180
@@ -43,7 +44,9 @@ def signal_is_new(signal: dict, cutover: str) -> bool:
 
 
 def validated(snapshot: dict, account: int, now: datetime) -> bool:
-    expected = IDENTITIES[account]
+    expected = live_identity() if dan_only_enabled() and account == 3 else IDENTITIES[account]
+    if expected is None:
+        return False
     if not isinstance(snapshot, dict) or snapshot.get("version") != 2:
         return False
     for field, value in expected.items():
@@ -129,14 +132,14 @@ def build_confirmation(signal: dict, snapshots: dict[int, dict],
         direction = "?"
     kept = dict(proofs) if isinstance(proofs, dict) else {}
     statuses: list[str] = []
-    for account in ORDER:
+    for account in ((3,) if dan_only_enabled() else ORDER):
         status, evidence = account_status(
             signal, account, snapshots.get(account, {}),
             kept.get(str(account)), now,
         )
         if evidence:
             kept[str(account)] = evidence
-        statuses.append(f"**{NAMES[account]}:** {status}")
+        statuses.append(f"**{'Live Account' if dan_only_enabled() else NAMES[account]}:** {status}")
     low, high = signal.get("entry_low"), signal.get("entry_high")
     entry = f"{low}–{high}" if low is not None and high is not None and low != high else str(low or "unknown")
     body = (

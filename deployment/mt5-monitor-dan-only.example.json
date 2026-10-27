@@ -1,0 +1,15 @@
+{
+  "accounts": [
+    {
+      "id": 3,
+      "enabled": true,
+      "label": "Dan LIVE Vantage",
+      "expected_mode": "REAL",
+      "expected_currency": "USD",
+      "expected_login": 0,
+      "expect_entries": false,
+      "auto_recover": false,
+      "recovery_policy": "disabled"
+    }
+  ]
+}

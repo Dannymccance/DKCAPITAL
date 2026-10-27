@@ -61,15 +61,20 @@ class KyleOnboardingTests(unittest.TestCase):
                     fd.write("MT5_ACCOUNT2_LOGIN=1234\n")
                 private_identity(env)
 
-    def test_common_v211_strategies_differ_only_in_identity_at_same_account_units(self):
+    def test_retired_kyle_source_keeps_legacy_rules_while_dan_uses_session_risk(self):
+        # Kyle's old private build is retained for audit/rollback, but his
+        # live feed is gated off under MT5_DAN_ONLY=true.
         synthetic = "1234" * 16
-        a = generate(2, 112233, "REAL", "USD", "Broker-Live", 150, feed_token=synthetic)
-        b = generate(3, 112233, "REAL", "USD", "Broker-Live", 150, feed_token=synthetic)
-        normalized = a.replace("COMPILED_ACCOUNT_ID = 2", "COMPILED_ACCOUNT_ID = 3").replace(
-            "/accounts/2/", "/accounts/3/").replace("DKACCOUNT2V5", "DKACCOUNT3V5").replace(
-            "profile 2", "profile 3").replace("Account 2 ready", "Account 3 ready").replace(
-            "profile 2", "profile 3")
-        self.assertEqual(normalized, b, "Kyle and Dan should share execution source byte-for-byte apart from identity")
+        kyle = generate(2, 112233, "REAL", "USD", "Broker-Live", 150, feed_token=synthetic)
+        dan = generate(3, 112233, "REAL", "USD", "Broker-Live", 150, feed_token=synthetic)
+        self.assertIn("COMPILED_ACCOUNT_ID = 2", kyle)
+        self.assertIn("COMPILED_ACCOUNT_ID = 3", dan)
+        self.assertIn("const double INITIAL_GROUP_RISK_SHARE = 0.85;", kyle)
+        self.assertNotIn("UKTradingHour()", kyle)
+        self.assertIn("const double INITIAL_GROUP_RISK_SHARE = 1.0;", dan)
+        self.assertIn("UKTradingHour()", dan)
+        self.assertIn("return hour>=1 && hour<9 ? 10.0 : 4.0;", dan)
+        self.assertIn("input bool EnableNewEntries = false;", dan)
 
 if __name__ == "__main__":
     unittest.main()

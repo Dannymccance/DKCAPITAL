@@ -6,6 +6,8 @@ Wants=docker.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/dkcapital
+# Apply only with the Dan-only cutover after the registry has Account 3 enabled.
+Environment=MT5_DAN_ONLY=true
 ExecStart=/usr/bin/python3 /opt/dkcapital/scripts/mt5_profile_audit.py
 TimeoutStartSec=60
 NoNewPrivileges=true

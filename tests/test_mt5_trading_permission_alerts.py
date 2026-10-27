@@ -34,7 +34,8 @@ class PermissionAlerts(unittest.TestCase):
         for field in ("terminal_trade_allowed", "mql_trade_allowed"):
             self.assertIn(field, template)
             self.assertIn(field, normalize)
-        self.assertIn('trading_permission_issues(snapshot, "MT5_DEMO")', bot)
+        self.assertIn('trading_permission_issues(snapshot, prefix)', bot)
+        self.assertIn('prefix = "MT5_LIVE" if live_only else "MT5_DEMO"', bot)
         self.assertIn("account2_issues", bot)
         self.assertIn("account3_issues", bot)
 

@@ -25,6 +25,9 @@ services:
     volumes:
       - dkcapital-data:/app/data
     restart: unless-stopped
+    # Archived research only. It must not launch by default with Dan live.
+    profiles:
+      - legacy-research
 
   bybit-demo:
     build: .

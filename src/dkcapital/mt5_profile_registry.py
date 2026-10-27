@@ -6,6 +6,7 @@ account is explicitly commissioned; there are no credentials in this file.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
     Fail closed on malformed profiles; watchdog will alert, not silently omit
     misconfigured accounts. Account 1 is always monitored.
     """
+    dan_only = os.getenv("MT5_DAN_ONLY", "false").strip().lower() in {"true", "1", "yes"}
     path = data_dir / PROFILE_REGISTRY_NAME
     default = [{
         "id": 1, "label": "Paper MT5 demo",
@@ -27,7 +29,7 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
         "auto_recover": False, "recovery_policy": "disabled",
     }]
     if not path.exists():
-        return default, True
+        return ([], False) if dan_only else (default, True)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("accounts"), list):
@@ -46,9 +48,11 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
             if type(raw.get("enabled")) is not bool:
                 raise ValueError("enabled must be explicit boolean")
             if not raw["enabled"]:
-                if ident == 1:
+                if ident == 1 and not dan_only:
                     raise ValueError("existing Account 1 must remain monitored")
                 continue
+            if dan_only and ident != 3:
+                continue  # Retired profiles cannot generate live monitoring/recovery tasks.
             label = raw.get("label")
             if not isinstance(label, str) or not label.strip() or len(label) > 80:
                 raise ValueError("invalid label")
@@ -79,11 +83,15 @@ def profiles_from_registry(data_dir: Path) -> tuple[list[dict[str, Any]], bool]:
                     "expect_entries": raw["expect_entries"],
                     "auto_recover": auto_recover, "recovery_policy": policy,
                 })
-        if 1 not in {p["id"] for p in result}:
+        enabled_ids = {p["id"] for p in result}
+        if dan_only:
+            if enabled_ids != {3} or result[0]["expected_mode"] != "REAL":
+                raise ValueError("Dan-only mode requires Account 3 REAL monitoring")
+        elif 1 not in enabled_ids:
             raise ValueError("existing Account 1 must remain monitored")
         return result, True
     except (OSError, ValueError, TypeError, OverflowError, KeyError, json.JSONDecodeError):
-        return default, False
+        return ([], False) if dan_only else (default, False)
 
 
 def telemetry_file(data_dir: Path, ident: int) -> Path:

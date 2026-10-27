@@ -59,6 +59,9 @@ def normalize_telemetry(payload: Any, expected_login: int, *,
     generated = _datetime(payload.get("generated_at"))
     if abs((datetime.now(UTC) - generated).total_seconds()) > 120:
         raise ValueError("stale or future-dated telemetry")
+    if payload.get("risk_schedule") is not None:
+        if payload.get("risk_schedule") != "UK_V1" or "credit" not in payload:
+            raise ValueError("invalid live UK session risk telemetry")
     fields = ("balance", "equity", "margin", "free_margin", "bid", "ask")
     numeric = {field: _number(payload[field], minimum=0) for field in fields}
     if numeric["bid"] <= 0 or numeric["ask"] < numeric["bid"]:
@@ -238,6 +241,12 @@ def normalize_telemetry(payload: Any, expected_login: int, *,
                                 if "signal_risk_cap_pct" in payload else None),
         "signal_risk_cap_gbp": (_number(payload["signal_risk_cap_gbp"], minimum=0)
                                 if "signal_risk_cap_gbp" in payload else None),
+        "credit": _number(payload.get("credit", 0), minimum=0),
+        "risk_schedule": "UK_V1" if payload.get("risk_schedule") == "UK_V1" else None,
+        "portfolio_risk_cap_account_currency": (
+            _number(payload["portfolio_risk_cap_account_currency"], minimum=0)
+            if "portfolio_risk_cap_account_currency" in payload else None
+        ),
         "signal_risk_cap_account_currency": (
             _number(payload["signal_risk_cap_account_currency"], minimum=0)
             if "signal_risk_cap_account_currency" in payload else None
@@ -319,7 +328,8 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         direction = 1 if p["side"] == "BUY" else -1
         market = snapshot["bid"] if direction == 1 else snapshot["ask"]
         marked_pips = (market - p["entry"]) * direction / pip_size
-        risk = p["risk_gbp"]
+        risk = (p.get("risk_account_currency") if snapshot["currency"] == "USD"
+                else p.get("risk_gbp"))
         if risk is None or p["sl"] <= 0:
             risk_unknown = True
         else:
@@ -331,7 +341,9 @@ def summarize(snapshot: dict[str, Any], *, pip_size: float = EXPECTED_PIP_SIZE,
         "received_at": snapshot["received_at"], "stale": (now - received).total_seconds() > 120,
         "balance": snapshot["balance"], "equity": snapshot["equity"],
         "free_margin": snapshot["free_margin"], "margin": snapshot["margin"],
-        "floating_gbp": round(snapshot["equity"] - snapshot["balance"], 2),
+        "floating_gbp": round(snapshot["equity"] - snapshot["balance"]
+                              - (float(snapshot.get("credit") or 0)
+                                 if snapshot.get("mode") == "REAL" else 0), 2),
         "today_realized_gbp": round(today_cash, 2),
         "week_realized_gbp": round(weekly_cash, 2),
         "week_realized_pips": round(weekly_pips, 1),

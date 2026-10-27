@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dkcapital.mt5_signal_cards import mt5_group
+from dkcapital.mt5_active_account import matches_active_account, dan_only_enabled, account_label
 
 EXPECTED_LOGIN = "5057220041"
 MANUAL_REASONS = {"CLIENT", "MOBILE", "WEB"}
@@ -26,9 +27,7 @@ def _instant(value: Any) -> datetime | None:
 def verified_snapshot(snapshot: dict[str, Any], *, now: datetime | None = None) -> bool:
     if not isinstance(snapshot, dict):
         return False
-    if (snapshot.get("version") != 2 or snapshot.get("mode") != "DEMO"
-            or str(snapshot.get("login")) != EXPECTED_LOGIN
-            or snapshot.get("currency") != "GBP"
+    if (snapshot.get("version") != 2 or not matches_active_account(snapshot)
             or not isinstance(snapshot.get("deals"), list)
             or not isinstance(snapshot.get("positions"), list)):
         return False
@@ -182,5 +181,5 @@ def result_embed(result: dict[str, Any]):
     embed.add_field(name="EXIT REASON", value=result["exit_type"], inline=True)
     embed.add_field(name="LATEST MT5 BALANCE",
                     value=f"{sign}{result['balance_latest']:,.2f}", inline=True)
-    embed.set_footer(text="MT5 closed deals only | Includes broker commissions and swaps | GBP demo account")
+    embed.set_footer(text=f"{account_label()} | MT5 closed deals only | Includes broker commissions and swaps")
     return embed
