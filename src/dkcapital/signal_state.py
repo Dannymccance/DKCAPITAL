@@ -42,6 +42,9 @@ class Signal:
     layer_max: float | None = None
     source_style: str | None = None
     source_chat_title: str | None = None
+    origin_chat_id: int | None = None
+    order_kind: str = "UNSPECIFIED"
+    entry_ready_at: str | None = None
     # When this Telegram post first became a parsed entry, not when it was sent.
     # Discord uses this for its no-history-spam cutover. EA uses opened_at.
     publish_ready_at: str | None = None
@@ -63,6 +66,7 @@ class SignalState:
     def __init__(self) -> None:
         self.messages: dict[tuple[int, int], dict[str, Any]] = {}
         self.first_valid_signal_at: dict[tuple[int, int], str] = {}
+        self.first_executable_signal_at: dict[tuple[int, int], str] = {}
         self.deleted_messages: dict[tuple[int, int], dict[str, Any]] = {}
         self.signals: dict[str, Signal] = {}
         self.message_targets: dict[tuple[int, int], list[str]] = {}
@@ -94,6 +98,21 @@ class SignalState:
                         elif event_type == "message_edited" and event.get("observed_at"):
                             stamp = str(event["observed_at"])
                         self.first_valid_signal_at[key] = stamp
+                if key not in self.first_executable_signal_at:
+                    full = parse_actions(
+                        str(event.get("text") or ""),
+                        int(event["reply_to_message_id"])
+                        if event.get("reply_to_message_id") is not None else None,
+                    )
+                    if any(a.kind == "new_signal" and a.order_kind == "MARKET_NOW"
+                           and a.sl is not None and a.tps.get(1) is not None
+                           for a in full):
+                        stamp = _timestamp(event)
+                        if event.get("edit_date"):
+                            stamp = str(event["edit_date"])
+                        elif event_type == "message_edited" and event.get("observed_at"):
+                            stamp = str(event["observed_at"])
+                        self.first_executable_signal_at[key] = stamp
                 self.messages[key] = event
                 self.deleted_messages.pop(key, None)
         elif event_type == "message_deleted":
@@ -101,6 +120,7 @@ class SignalState:
                 key = (int(chat_id), int(message_id))
                 removed = self.messages.pop(key, None)
                 self.first_valid_signal_at.pop(key, None)
+                self.first_executable_signal_at.pop(key, None)
                 if removed is not None:
                     self.deleted_messages[key] = removed
 
@@ -202,6 +222,10 @@ class SignalState:
                         high_risk=action.high_risk,
                         layer_max=action.layer_max,
                         source_style=action.source_style,
+                        order_kind=action.order_kind,
+                        origin_chat_id=(int(event.get("forwarded_from_chat_id") or 0)
+                                        if event.get("is_forwarded") else chat_id),
+                        entry_ready_at=self.first_executable_signal_at.get((chat_id, message_id)),
                         source_chat_title=str(event.get("chat_title") or "").strip()[:160] or None,
                         last_update_at=timestamp,
                         last_update_text=text,
@@ -469,6 +493,11 @@ class SignalState:
         signal.layer_max = action.layer_max
         signal.tp3_open = action.tp3_open
         signal.high_risk = signal.high_risk or action.high_risk
+        signal.order_kind = action.order_kind
+        signal.entry_ready_at = (
+            self.first_executable_signal_at.get((signal.chat_id, signal.root_message_id))
+            or signal.entry_ready_at
+        )
         signal.be_deferred = False
         if action.source_style is not None:
             signal.source_style = action.source_style
