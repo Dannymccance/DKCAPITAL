@@ -111,7 +111,7 @@ class KyleDiscordLiveAlertTests(unittest.TestCase):
         self.assertIn("update_mt5_account2_alerts()", bot)
         self.assertIn("rules = account2_issues", bot)
         self.assertIn("rules = account3_issues", bot)
-        self.assertIn("initial monitor status", bot.lower())
+        self.assertIn("initial monitoring status", bot.lower())
         for forbidden in ("systemctl", "PositionClose", "OrderSend", "WebRequest"):
             self.assertNotIn(forbidden, alerts)
 
