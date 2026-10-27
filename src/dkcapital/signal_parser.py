@@ -278,6 +278,7 @@ class ParsedAction:
     layer_max: float | None = None
     partial_percent: float | None = None
     source_style: str | None = None
+    order_kind: str = "UNSPECIFIED"  # MARKET_NOW / LIMIT / UNSPECIFIED
     scope: str = "none"
     reply_to_message_id: int | None = None
     raw_text: str = ""
@@ -299,10 +300,20 @@ class ParsedAction:
             "layer_max": self.layer_max,
             "partial_percent": self.partial_percent,
             "source_style": self.source_style,
+            "order_kind": self.order_kind,
             "scope": self.scope,
             "reply_to_message_id": self.reply_to_message_id,
             "raw_text": self.raw_text,
         }
+
+
+def _gws_order_kind(normalized: str) -> str:
+    # A genuine limit is never silently changed to an immediate market fill.
+    if re.search(r"\\b(?:BUY|SELL)\\s+LIMIT\\b|\\bLIMIT\\s+(?:BUY|SELL)\\b", normalized):
+        return "LIMIT"
+    if re.search(r"\\b(?:BUY|SELL)\\s+(?:(?:XAU\\s*/?\\s*USD|XAUUSD|XAU|GOLD)\\s+)?NOW\\b|\\b(?:XAU\\s*/?\\s*USD|XAUUSD|XAU|GOLD)\\s+(?:BUY|SELL)\\s+NOW\\b", normalized):
+        return "MARKET_NOW"
+    return "UNSPECIFIED"
 
 
 def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[ParsedAction]:
@@ -335,6 +346,7 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 sl=_explicit_sl(normalized),
                 layer_max=_layer_max(normalized),
                 source_style="gws",
+                order_kind=_gws_order_kind(normalized),
                 scope="new",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
@@ -359,11 +371,26 @@ def parse_actions(text: str, reply_to_message_id: int | None = None) -> list[Par
                 tp3_open=_tp3_open(normalized),
                 sl=_explicit_sl(normalized),
                 source_style="gws",
+                order_kind=_gws_order_kind(normalized),
                 scope="new",
                 reply_to_message_id=reply_to_message_id,
                 raw_text=text,
             )
         ]
+
+    # NOW messages can arrive before the provider supplies a quoted entry.
+    # Zero here is an explicit unknown reference, NEVER an executable price:
+    # the TP1 EA must obtain bid/ask and verify TP1/SL before submitting.
+    if (symbol == "XAUUSD" and direction
+            and _gws_order_kind(normalized) == "MARKET_NOW"
+            and re.search(r"\\b(?:XAU\\s*/?\\s*USD|XAUUSD|XAU|GOLD)\\b", normalized)):
+        return [ParsedAction(
+            kind="new_signal", symbol="XAUUSD", direction=direction,
+            entry_low=0.0, entry_high=0.0, tps=_extract_tps(normalized),
+            sl=_explicit_sl(normalized), high_risk=_explicit_high_risk(normalized),
+            source_style="gws", order_kind="MARKET_NOW", scope="new",
+            reply_to_message_id=reply_to_message_id, raw_text=text,
+        )]
 
     # A clearly formatted but malformed GOLD entry must not fall through
     # into an update and change the stop/target of an unrelated old trade.
