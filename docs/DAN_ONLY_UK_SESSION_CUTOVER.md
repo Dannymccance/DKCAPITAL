@@ -37,9 +37,28 @@
 7. In a **flat or individually reconciled** Dan terminal only, perform a controlled EA replacement. Validate the verified login, Vantage server, REAL USD mode, hedging, feed token, TP 1-6 native positions, broker minimum lots/margin, stop-loss updates, slippage, TP1-to-BE and duplicate-restart protection. Validate synthetic conditions straddling 00:59/01:00 and 08:59/09:00 UK, plus March/October clock changes. Monitor that an open overnight position prevents new daytime risk when total open exposure is already over 2%.
 8. Keep new entries disabled pending positive broker-side checks and explicit sign-off on the compiled version. **Do not assume a successful CI or merge proves live trading safety**.
 
+## Repurposing the former demo reporting interface
+
+The former demo **Discord dashboard message and channel** are the new **Live Account** display when `MT5_DAN_ONLY=true`. Account 3 remains the internal broker namespace so existing native tickets, per-signal magic values and deduplication records cannot be misattributed. User-facing cards no longer call it "Dan Account 3".
+
+- The former demo dashboard, `#signals` broker status cards, broker-verified entry confirmations, native TP/SL and provider amendment notifications, final results, weekly record and weekly-average-pips counter all use the **authenticated Account 3 REAL USD snapshot**. If there is no valid live telemetry at cutover, the dashboard displays **unverified**, rather than presenting the last demo account balance.
+- The former dashboard message reference `mt5-dashboard-config.json` is intentionally reused to edit the already-pinned embed in place. Do not delete it unless you intend to make a fresh pinned card.
+- Financial figures and broker exposure in the renamed output are USD, not GBP. The EA reports its live local-session percentage, its dollar stop-risk limits, and broker credit. The risk limit is the combined planned SL loss; a 2% daytime cap may be below the risk of overnight positions without liquidating those positions.
+- Demo and Kyle account telemetry are never read into new live performance records. Separate live state files include `mt5-account3-live-pip-history.json`, `mt5-account3-live-results-published.json`, `mt5-account3-live-broker-events-state.json`, `mt5-account3-live-weekly-record-state.json`, `mt5-account3-live-alert-state.json`, and `mt5-account3-live-entry-confirmation-state.json`. Existing historic demo/Kyle archives remain untouched.
+- The old three-account entry-confirmation summary becomes **Live Account only**. Existing original demo result cards in Discord history are *not retroactively deleted or rewritten*, so they should be treated as archived and clearly distinguished from newly published cards.
+- Existing live Account 3-only alert-loop delivery is disabled in Dan-only mode to avoid duplicating the repurposed main alert loop. Maintain the new main alert channel's permissions and authenticated watchdog separately. No new Discord channel ID is automatically provisioned.
+- The legacy independent `paper-engine` simulator no longer starts in the default Docker Compose profile. Existing running paper-engine containers must be explicitly stopped after reviewing their state: this change of Compose profile alone does not prove old containers stopped. Its historical ledger is retained read-only; never merge those synthetic trades into broker statistics.
+
+### Operational verification after redeployment
+
+1. Confirm the former demo dashboard changes to **DK Capital | MT5 Live Account**, and its login/mode/currency/server match Dan's broker. Deliberately test the missing/stale-telemetry state and verify no GBP demo balance is displayed.
+2. Confirm the feed's `signal_risk_cap_pct` and `portfolio_risk_cap_account_currency` are present and switch at 01:00 and 09:00 UK local time. These are broker-reported inputs, not assumed from the UI clock.
+3. Confirm the first new broker-native closing deal appears in the USD-only results history, correctly attributed to Account 3, with the original Telegram provider and native TP/SL exit reason. Verify new live pip archive contains only Dan's broker tickets.
+4. Confirm normal / HIGH RISK provider scenarios and 1-6 native TP targets on a **controlled disarmed trial**, and run regression checks after compiling. Retiring the demo must not alter Telegram parser input, forward provider SL amendments, or disable the existing same-account opposing-room entry restriction.
+
 ## Important known limitations
 
 - Account 1/2 source, archived tests, historical feeds and reporting code are retained behind the opt-in flag for rollback/audit purposes; they are not deployed active trading profiles in Dan-only mode. Removing source files is separate from removing deployed processes.
-- Some Discord cards and historical performance pipelines were built for Account 1. Do not interpret a demo-labelled P&L dashboard as Dan's realised trading results. A complete Dan-only dashboard migration and historical KPI isolation should be checked separately before retiring those channels.
+- The code now reuses the old demo interface for live USD broker records when the Dan-only flag is active. Its old Discord messages are historical and retain their previous demo labelling; no historical backfill into Dan's archive is performed.
 - The fixed broker-native `MaxGroupRiskAccountCurrency`/`MaxPortfolioRiskAccountCurrency` input fields remain in the derived source for legacy template compatibility but **do not override Dan's new percentage ceiling**. Do not use those legacy values to estimate Dan's current stop-loss risk.
 - This repository cannot observe current VPS processes or compile MQL5. Broker-flat status, Vantage native order acceptance and the current attached EA are unverified until checked at the terminal.
