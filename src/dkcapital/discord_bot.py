@@ -1579,8 +1579,8 @@ def build_bot(settings: Settings) -> commands.Bot:
                 await channel.send(
                     "**DK CAPITAL | ACCOUNT ENTRY CONFIRMATIONS ACTIVE**\n"
                     "Future parsed XAUUSD signals get one reference showing "
-                    ("Live Account only.\n" if live_only else "Kyle, Dan and Demo independently.\n")
-                    "✅ = broker entry verified | ⏳ = awaiting fill | "
+                    + ("Live Account only.\n" if live_only else "Kyle, Dan and Demo independently.\n")
+                    + "✅ = broker entry verified | ⏳ = awaiting fill | "
                     "❌ = no confirmed fill | ⚠️ = cannot verify.\n"
                     "Existing MT5 positions and trades are not replayed. "
                     "Updates are read-only.",
