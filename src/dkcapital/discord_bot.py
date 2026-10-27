@@ -17,6 +17,7 @@ from dkcapital.config import Settings
 from dkcapital.logging_setup import configure_logging
 from dkcapital.mt5_account_reporting import summarize
 from dkcapital.mt5_live_alerts import account2_issues, account3_issues
+from dkcapital.mt5_entry_confirmations import build_confirmation, signal_is_new
 from dkcapital.mt5_pip_history import record_weekly_average
 from dkcapital.mt5_signal_cards import broker_signal_state, mt5_group, mt5_signal_embed
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
@@ -1249,6 +1250,9 @@ def build_bot(settings: Settings) -> commands.Bot:
     account3_expected_entries = (account3_expected_entries_raw in {"1", "true", "yes"}
                                  if account3_expected_entries_raw in {"0", "1", "true", "false", "yes", "no"}
                                  else None)
+    entry_confirm_raw = os.getenv("MT5_ENTRY_CONFIRMATION_CHANNEL_ID", "1564370691313377300").strip()
+    entry_confirm_channel_id = int(entry_confirm_raw) if entry_confirm_raw.isdigit() else 0
+    entry_confirm_state_path = Path("/app/data/mt5-entry-confirmation-state.json")
     mt5_results_channel_id = int(os.getenv("MT5_RESULTS_CHANNEL_ID", "1561095999139877046"))
     mt5_results_state_path = Path("/app/data/mt5-results-published.json")
     mt5_changes_channel_id = int(os.getenv("MT5_CHANGES_CHANNEL_ID", "1561099532467445961"))
@@ -1510,6 +1514,113 @@ def build_bot(settings: Settings) -> commands.Bot:
 
     async def update_mt5_account2_alerts() -> None:
         await update_mt5_live_alerts(2)
+
+    async def update_mt5_entry_confirmations() -> None:
+        """One reference per signal, with independent broker-confirmed fills.
+
+        Never derive a green check from Telegram status, feed acknowledgements,
+        EA trading-state flags, or a different account's position.
+        """
+        if not entry_confirm_channel_id:
+            return
+        state = _load_json(entry_confirm_state_path)
+        now = datetime.now(UTC)
+        if not state.get("cutover"):
+            # Future-only cutover: never announce historical Telegram signals.
+            state = {
+                "cutover": now.isoformat(),
+                "messages": {},
+                "suppressed": {},
+                "initialized": True,
+                "announced": False,
+            }
+            _write_json(entry_confirm_state_path, state)
+        try:
+            channel = (bot.get_channel(entry_confirm_channel_id)
+                       or await bot.fetch_channel(entry_confirm_channel_id))
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception("Unable to access MT5 entry confirmation channel")
+            return
+        if not state.get("announced"):
+            try:
+                await channel.send(
+                    "**DK CAPITAL | ACCOUNT ENTRY CONFIRMATIONS ACTIVE**\n"
+                    "Future parsed XAUUSD signals get one reference showing "
+                    "Kyle, Dan and Demo independently.\n"
+                    "✅ = broker entry verified | ⏳ = awaiting fill | "
+                    "❌ = no confirmed fill | ⚠️ = cannot verify.\n"
+                    "Existing MT5 positions and trades are not replayed. "
+                    "Updates are read-only.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                state["announced"] = True
+                _write_json(entry_confirm_state_path, state)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception("Unable to announce MT5 entry confirmations")
+                return
+
+        feed = _load_json(settings.signal_state_path)
+        signals = [x for x in (feed.get("signals") or []) if isinstance(x, dict)
+                   and str(x.get("symbol") or "").upper() == "XAUUSD"]
+        snapshots = {
+            1: _load_json(mt5_snapshot),
+            2: _load_json(account2_snapshot_path),
+            3: _load_json(account3_snapshot_path),
+        }
+        messages = state.setdefault("messages", {})
+        suppressed = state.setdefault("suppressed", {})
+        updates = 0
+        for signal in _ordered_signals_for_discord(signals, messages):
+            sid = str(signal.get("signal_id") or "")
+            if not sid or len(sid) > 100:
+                continue
+            previous = messages.get(sid)
+            previous = previous if isinstance(previous, dict) else {}
+            if not previous and (sid in suppressed or not signal_is_new(signal, state["cutover"])):
+                continue
+            # Only follow signals for seven days after first valid publication.
+            # MT5 broker history and pending entries cannot be assumed complete forever.
+            ready = _local_datetime(signal.get("publish_ready_at") or signal.get("opened_at"), "UTC")
+            if ready is None or not 0 <= (now - ready).total_seconds() <= 7 * 86400:
+                continue
+            content, proofs = build_confirmation(
+                signal, snapshots, previous.get("proofs") or {}, now,
+            )
+            if len(content) > 1900:
+                logger.warning("Entry confirmation exceeds Discord length, skipping signal=%s", sid)
+                continue
+            fingerprint = __import__("hashlib").sha256(content.encode("utf-8")).hexdigest()
+            if previous.get("message_id") and previous.get("fingerprint") == fingerprint:
+                continue
+            if updates >= 4:
+                break
+            try:
+                if previous.get("message_id"):
+                    try:
+                        message = await channel.fetch_message(int(previous["message_id"]))
+                        await message.edit(
+                            content=content, allowed_mentions=discord.AllowedMentions.none()
+                        )
+                    except discord.NotFound:
+                        # Respect deliberate deletion of a confirmation card.
+                        suppressed[sid] = now.isoformat()
+                        messages.pop(sid, None)
+                        _write_json(entry_confirm_state_path, state)
+                        continue
+                else:
+                    message = await channel.send(
+                        content, allowed_mentions=discord.AllowedMentions.none()
+                    )
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception("Unable to publish entry confirmation signal=%s", sid)
+                break
+            messages[sid] = {
+                "message_id": message.id,
+                "fingerprint": fingerprint,
+                "proofs": proofs,
+            }
+            _write_json(entry_confirm_state_path, state)
+            updates += 1
 
     async def publish_mt5_results() -> None:
         """Publish once per fully broker-closed trade, never Telegram-only closures."""
@@ -1899,6 +2010,14 @@ def build_bot(settings: Settings) -> commands.Bot:
         await bot.wait_until_ready()
 
     @tasks.loop(minutes=1)
+    async def mt5_entry_confirmation_loop() -> None:
+        await update_mt5_entry_confirmations()
+
+    @mt5_entry_confirmation_loop.before_loop
+    async def before_mt5_entry_confirmation_loop() -> None:
+        await bot.wait_until_ready()
+
+    @tasks.loop(minutes=1)
     async def mt5_account2_alert_loop() -> None:
         await update_mt5_account2_alerts()
 
@@ -1946,6 +2065,8 @@ def build_bot(settings: Settings) -> commands.Bot:
 
         if (mt5_channel_id or mt5_alert_id) and not mt5_account1_loop.is_running():
             mt5_account1_loop.start()
+        if entry_confirm_channel_id and not mt5_entry_confirmation_loop.is_running():
+            mt5_entry_confirmation_loop.start()
         if account2_alert_id and not mt5_account2_alert_loop.is_running():
             mt5_account2_alert_loop.start()
         if account3_alert_id and account3_expected_login and not mt5_account3_alert_loop.is_running():
