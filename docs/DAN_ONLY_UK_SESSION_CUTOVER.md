@@ -21,6 +21,7 @@
 - **At 09:00, open earlier trades are not force-closed, and existing native SL/TP, provider actions and TP1-to-BE management continue.** If their current aggregate stop risk exceeds 2%, no new entries or increases in stop risk are permitted until exposure decreases. A falling limit does not retroactively shrink positions.
 - A 2% or 8% *planned* stop-loss budget cannot guarantee realised loss limits in a gap, broker outage or slippage; 8% is substantial exposure.
 - The EA still starts with `EnableNewEntries=false`; simply merging/restarting a gateway does not enable trading.
+- In Dan-only gateway mode, new V5 entry rows remain `CANCELLED` until the authenticated live EA has freshly reported `risk_schedule=UK_V1`, the correct current UK 8% or 2% tier, broker credit, and a matching broker-valued portfolio risk budget. Management rows and explicit provider closes continue even while entries are held. This prevents an old static 4% live EA from continuing to open positions during the migration.
 
 ## GitHub-first changeover, in order
 
