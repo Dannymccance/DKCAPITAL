@@ -268,6 +268,24 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                         profile_account, ident, count, quiet_seconds,
                     )
                     continue
+                # A standalone TP1 must offer at least 1R against the
+                # provider SL. Use the least favourable zone boundary,
+                # not an optimistic midpoint; actual broker RR may be worse
+                # after spread/slippage, and must be checked on execution.
+                # A lower-RR TP1 can be part of a multi-target setup,
+                # so hold for further amendments rather than reject it.
+                if count == 1:
+                    worst_entry = prices[1] if direction == "BUY" else prices[0]
+                    stop_distance = ((worst_entry - prices[2]) if direction == "BUY"
+                                     else (prices[2] - worst_entry))
+                    reward_distance = ((prices[3] - worst_entry) if direction == "BUY"
+                                       else (worst_entry - prices[3]))
+                    if stop_distance <= 0 or reward_distance < stop_distance:
+                        logger.info(
+                            "Account %s GWS single TP below 1R; waiting for further targets: signal=%s reward=%s risk=%s",
+                            profile_account, ident, reward_distance, stop_distance,
+                        )
+                        continue
             if signal.get("tp3_open") and (count != 2 or any(prices[6:])):
                 continue
             # Older EAs have only 3 or 4 target slots. Mark unsupported
