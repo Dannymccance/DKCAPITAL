@@ -42,8 +42,9 @@ changing the input caps must reconcile both, and the smaller limit prevails.
 Risk capital is the lower of balance and equity less broker credit. Conservative
 stop padding is included. The requested 8% is a stop-risk ceiling, not margin
 allocation or a guaranteed worst loss; slippage, gaps and commissions can
-increase realised losses. Friday size restrictions remain and may prevent
-the full 8% size.
+increase realised losses. The TP1 build removes the legacy Friday-only
+0.03-lot throttle. A broker minimum/maximum, margin limit, spread, stop
+rule or exhausted aggregate 8% risk allowance can still reduce/reject sizing.
 
 The only approved Telegram **origin** IDs for new entries are:
 
