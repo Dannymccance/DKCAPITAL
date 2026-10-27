@@ -27,6 +27,7 @@ jobs:
         run: |
           python -m py_compile ops/mt5/dkcapital-mt5-run ops/recovery/check_boot.py
           bash -n ops/recovery/install-recovery.sh
+          bash -n scripts/stage_mt5_tp1_live.sh
 
       - name: Run tests
         env:

@@ -11,6 +11,7 @@ from typing import Any
 
 from dkcapital.mt5_signal_cards import mt5_group
 from dkcapital.mt5_active_account import dan_only_enabled, live_identity
+from dkcapital.mt5_tp1_policy import provider_label
 
 MAX_AGE_SECONDS = 150
 PENDING_SECONDS = 180
@@ -125,8 +126,7 @@ def build_confirmation(signal: dict, snapshots: dict[int, dict],
     ident = str(signal.get("signal_id") or "")
     # Signal IDs come from Telegram channel/message references, not message text.
     ref = ident.replace("`", "").replace("\n", " ")[:100]
-    provider = {"gws": "GWS", "elite": "Elite Portfolios"}.get(
-        str(signal.get("source_style") or "").lower(), "Telegram provider")
+    provider = provider_label(signal)
     direction = str(signal.get("direction") or "?").upper()
     if direction not in ("BUY", "SELL"):
         direction = "?"
@@ -139,13 +139,16 @@ def build_confirmation(signal: dict, snapshots: dict[int, dict],
         )
         if evidence:
             kept[str(account)] = evidence
+            status += f" | MT5 ticket {evidence['ticket']}"
         statuses.append(f"**{'Live Account' if dan_only_enabled() else NAMES[account]}:** {status}")
     low, high = signal.get("entry_low"), signal.get("entry_high")
     entry = f"{low}–{high}" if low is not None and high is not None and low != high else str(low or "unknown")
     body = (
         f"**{direction} XAUUSD | {provider}**\n"
         f"**Signal reference:** `{ref}`\n"
-        f"**Entry zone:** {entry}\n\n"
+        f"**Entry zone:** {entry}\n"
+        f"**Provider TP1:** {(signal.get('tps') or {}).get('1', 'not supplied')} | "
+        f"**Provider SL:** {signal.get('current_sl') or 'not supplied'}\n\n"
         + "\n".join(statuses)
         + "\n\n*✅ = MT5 position or entry deal verified. "
           "❌ = no confirmed fill in available evidence (not proof of rejection). "

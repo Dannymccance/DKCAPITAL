@@ -6,9 +6,11 @@ No Telegram TP-hit, status or paper results are interpreted as broker fills.
 from __future__ import annotations
 
 from collections import defaultdict
+import os
 from datetime import UTC, datetime
 from typing import Any
 
+from dkcapital.mt5_tp1_policy import provider_label
 from dkcapital.mt5_active_account import matches_active_account, account_label, money_sign
 
 MAGIC_BASE = 5100000000
@@ -117,8 +119,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     """Gold channel card: provider intent vs actual MT5 fills, clearly separated."""
     import discord
 
-    provider = {"gws": "GWS", "elite": "Elite Portfolios"}.get(
-        str(signal.get("source_style") or "").lower(), "Telegram Provider")
+    provider = provider_label(signal)
     side = str(signal.get("direction") or "?")
     embed = discord.Embed(
         title=f"{side} XAUUSD",
@@ -134,8 +135,15 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     declared = signal.get("tps") or {}
     num_numeric = len(declared)
     has_runner = bool(signal.get("tp3_open"))
-    expected = 3 if has_runner else min(num_numeric, 6)
-    for leg in (1, 2, 3, 4, 5, 6, 7):
+    tp1_live = (os.getenv("MT5_STRATEGY_MODE", "legacy").lower() == "tp1_live"
+                and os.getenv("MT5_DAN_ONLY", "false").lower() in {"true", "yes", "1"})
+    expected = 1 if tp1_live else (3 if has_runner else min(num_numeric, 6))
+    # Show historic broker-filled multi-leg positions during transition, but
+    # never label TP2/TP3 as missing for a single-position TP1 strategy.
+    legacy_filled = tuple(sorted(k for k, v in state["legs"].items()
+                          if k != 1 and v.get("entry") is not None))
+    legs_to_display = (1,) + legacy_filled if tp1_live else (1, 2, 3, 4, 5, 6, 7)
+    for leg in legs_to_display:
         # 4 has always been the optional layer; 5 denotes numeric TP4.
         if leg >= 5 and num_numeric < leg - 1 and leg not in state["legs"]:
             continue
@@ -159,7 +167,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
         if item.get("tp") is not None:
             line += f" | TP {item['tp']:.2f}"
         rows.append(line)
-    embed.add_field(name="Broker-confirmed fills (with optional 10% layer)", value="\n".join(rows)[:1024], inline=False)
+    embed.add_field(name=("Broker-confirmed TP1 execution" if tp1_live else "Broker-confirmed fills (with optional 10% layer)"), value="\n".join(rows)[:1024], inline=False)
     if str(signal.get("sl_mode") or "").upper() == "BREAKEVEN":
         embed.add_field(name="Telegram requested SL", value="BREAKEVEN (await MT5 confirmation)", inline=False)
     elif signal.get("current_sl") is not None:
