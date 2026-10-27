@@ -109,10 +109,7 @@ class Tp1PolicyTests(unittest.TestCase):
             "text": "XAUUSD BUY NOW", "reply_to_message_id": None,
         }
         state.ingest_event(event)
-        signal=state.snapshot()["signals"][0]
-        self.assertEqual(signal["order_kind"], "MARKET_NOW")
-        self.assertIsNone(signal["entry_ready_at"])
-        self.assertEqual(signal["entry_low"], 0.0)
+        self.assertEqual(state.snapshot()["signals"], [])
 
         amended={**event, "event_type": "message_edited",
                  "edit_date": "2026-10-27T08:14:50+00:00",
