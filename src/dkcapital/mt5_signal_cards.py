@@ -9,6 +9,8 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from dkcapital.mt5_active_account import matches_active_account, account_label, money_sign
+
 MAGIC_BASE = 5100000000
 
 
@@ -28,7 +30,7 @@ def broker_signal_state(signal_id: str, telemetry: dict[str, Any] | None,
     """
     empty = {"status": "MT5 telemetry unavailable", "legs": {},
              "has_broker_record": False, "fresh": False}
-    if not telemetry or telemetry.get("version") != 2 or telemetry.get("mode") != "DEMO" or str(telemetry.get("currency")) != "GBP" or str(telemetry.get("login")) != "5057220041":
+    if not telemetry or telemetry.get("version") != 2 or not matches_active_account(telemetry):
         return empty
     try:
         stamp = datetime.fromisoformat(str(telemetry["received_at"]).replace("Z", "+00:00"))
@@ -120,7 +122,7 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
     side = str(signal.get("direction") or "?")
     embed = discord.Embed(
         title=f"{side} XAUUSD",
-        description=f"**Provider: {provider}**\n**MT5 DEMO ACCOUNT 1:** {state['status']}",
+        description=f"**Provider: {provider}**\n**MT5 {account_label().upper()}:** {state['status']}",
         color=discord.Color.green() if state["has_broker_record"] else discord.Color.orange(),
     )
     low = signal.get("entry_low")
@@ -207,5 +209,5 @@ def mt5_signal_embed(signal: dict[str, Any], state: dict[str, Any]):
         embed.add_field(name="MT5 layer decision",
                         value=str(layer.get("code", "UNVERIFIED")).replace("_", " ")[:1024],
                         inline=False)
-    embed.set_footer(text="DEMO | ✅ = MT5 ENTRY FILLED | CLOSED does not imply TP | No paper/provider P&L")
+    embed.set_footer(text=f"{account_label()} | MT5 fills only | CLOSED does not imply TP | No paper/provider P&L")
     return embed
