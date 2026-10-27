@@ -294,7 +294,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             # Older EAs have only 3 or 4 target slots. Mark unsupported
             # ACTIVE rows CANCELLED, rather than cause an incomplete fill.
             supported = 6 if (v4 or v5) else (4 if v3 else 3)
-            if (not tp1_mode and count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":
+            if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":
                 status = "CANCELLED"  # Prevent legacy 4% high-risk entries.
             # Entry-only GWS readiness on V5. CANCELLED prevents TryEntry,
             # but the EA still invokes ManageLegs and processes provider actions
