@@ -48,7 +48,7 @@ class KyleDiscordLiveAlertTests(unittest.TestCase):
 
     def test_identity_stale_feed_broker_stops_risk_and_arm_failures(self):
         failures = [
-            ({}, "MT5_ACCOUNT2_TELEMETRY_STALE"),
+            ({"received_at": None}, "MT5_ACCOUNT2_TELEMETRY_STALE"),
             ({"received_at": (NOW - timedelta(seconds=250)).isoformat()},
              "MT5_ACCOUNT2_TELEMETRY_STALE"),
             ({"login": 500}, "MT5_ACCOUNT2_WRONG_LOGIN"),
