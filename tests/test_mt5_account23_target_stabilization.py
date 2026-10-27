@@ -74,8 +74,17 @@ class Account23TargetStabilizationTests(unittest.TestCase):
         self.assertEqual(lines[1].split("|")[8:14],
                          ["3995.0", "3994.0", "3993.0", "3990.0", "0.0", "0.0"])
 
-    def test_genuine_single_target_releases_after_quiet_period(self):
+    def test_genuine_single_target_above_one_r_releases_after_quiet_period(self):
+        self.signal([3988], age_seconds=100)
+        self.assertEqual(len(self.feed()), 2)
+
+    def test_single_tp_below_one_r_waits_for_more_targets(self):
         self.signal([3995], age_seconds=100)
+        self.assertEqual(self.feed(), ["DKACCOUNT2V5"])
+        self.assertEqual(len(self.feed(profile=False)), 2)
+
+    def test_single_tp_exactly_one_r_is_allowed(self):
+        self.signal([3989], age_seconds=100)  # Sell 3997, SL 4005, TP 3989.
         self.assertEqual(len(self.feed()), 2)
 
     def test_two_target_gws_signal_not_blocked(self):
