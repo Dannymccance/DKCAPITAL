@@ -796,6 +796,9 @@ class SignalState:
         signal.history.append(history_event)
         signal.last_update_at = timestamp
         signal.last_update_text = text
+        if (signal.entry_ready_at is None and signal.order_kind == "MARKET_NOW"
+                and signal.current_sl is not None and signal.tps.get(1) is not None):
+            signal.entry_ready_at = timestamp
 
     def snapshot(self) -> dict[str, Any]:
         ordered = sorted(self.signals.values(), key=lambda s: (s.opened_at, s.signal_id))
