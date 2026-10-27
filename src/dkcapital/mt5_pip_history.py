@@ -12,6 +12,8 @@ import json
 from math import isfinite
 from pathlib import Path
 from typing import Any
+
+from dkcapital.mt5_active_account import active_identity, dan_only_enabled
 from zoneinfo import ZoneInfo
 
 LOCAL = ZoneInfo("Europe/Isle_of_Man")
@@ -117,8 +119,9 @@ def record_weekly_average(path: Path, snapshot: dict[str, Any], *,
     Existing ledger corruption, account switches or amended historical tickets
     fail visibly instead of silently resetting lifetime performance.
     """
-    if snapshot.get("mode") != "DEMO" or snapshot.get("currency") != "GBP":
-        raise ValueError("expected MT5 demo GBP history")
+    expected = active_identity()
+    if expected is None or any(snapshot.get(field) != value for field, value in expected.items()):
+        raise ValueError("broker history account identity mismatch")
     login = int(snapshot["login"])
     if login <= 0:
         raise ValueError("invalid broker login")
@@ -131,13 +134,17 @@ def record_weekly_average(path: Path, snapshot: dict[str, Any], *,
         if (not isinstance(stored, dict)
                 or stored.get("version") != HISTORY_VERSION
                 or stored.get("login") != login
-                or stored.get("currency") != "GBP"
+                or stored.get("currency") != expected["currency"]
+                or (dan_only_enabled() and
+                    (stored.get("mode") != "REAL"
+                     or stored.get("server") != expected["server"]))
                 or not isinstance(stored.get("deals"), list)):
             raise ValueError("broker history identity or structure mismatch")
     else:
         stored = {
             "version": HISTORY_VERSION, "login": login,
-            "currency": "GBP", "deals": [],
+            "currency": expected["currency"], "deals": [],
+            **({"mode": "REAL", "server": expected["server"]} if dan_only_enabled() else {}),
         }
 
     by_ticket: dict[int, dict[str, Any]] = {}
