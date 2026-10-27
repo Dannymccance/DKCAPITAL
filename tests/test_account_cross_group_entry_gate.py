@@ -146,11 +146,10 @@ class OpposingProviderGateTests(unittest.TestCase):
         self.assertEqual(new_entry_block_reason(self.buy,self.signals,data),
                          "OPPOSING_GROUP_POSITION_ACTIVE")
 
-    def test_unmanaged_positions_hold_new_entries(self):
+    def test_manual_positions_are_not_assumed_to_be_provider_groups(self):
         data=snapshot(11001,"SELL")
         data["unmanaged_positions_count"]=1
-        self.assertEqual(new_entry_block_reason(self.held,self.signals,data),
-                         "UNMANAGED_BROKER_POSITION")
+        self.assertIsNone(new_entry_block_reason(self.held,self.signals,data))
 
 
 if __name__=="__main__":
