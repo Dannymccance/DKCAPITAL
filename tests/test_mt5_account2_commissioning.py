@@ -73,7 +73,7 @@ class KyleOnboardingTests(unittest.TestCase):
         self.assertNotIn("UKTradingHour()", kyle)
         self.assertIn("const double INITIAL_GROUP_RISK_SHARE = 1.0;", dan)
         self.assertIn("UKTradingHour()", dan)
-        self.assertIn("return hour>=1 && hour<9 ? 8.0 : 2.0;", dan)
+        self.assertIn("return hour>=1 && hour<9 ? 10.0 : 4.0;", dan)
         self.assertIn("input bool EnableNewEntries = false;", dan)
 
 if __name__ == "__main__":
