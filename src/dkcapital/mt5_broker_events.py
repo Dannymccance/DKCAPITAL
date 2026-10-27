@@ -11,6 +11,7 @@ from typing import Any
 from dkcapital.mt5_signal_cards import mt5_group
 from dkcapital.mt5_trade_results import verified_snapshot
 from dkcapital.mt5_active_account import money_sign, account_label
+from dkcapital.mt5_tp1_policy import provider_label
 
 MAX_SEEN = 6000
 MAX_PENDING = 5000
@@ -24,8 +25,7 @@ def _lookup(signals: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
         sid = str(signal.get("signal_id") or "")
         if not sid:
             continue
-        name = {"gws": "GWS", "elite": "Elite Portfolios"}.get(
-            str(signal.get("source_style") or "").lower(), "Telegram provider")
+        name = provider_label(signal)
         for leg in (1, 2, 3, 4, 5, 6, 7):
             mapping[mt5_group(sid) * 10 + leg] = {
                 "provider": name, "signal_id": sid,
@@ -97,7 +97,7 @@ def discover_events(
             status = "LAYER FILLED" if int(d.get("magic") or 0) % 10 == 4 else "ENTRY FILLED"
             add({
                 "id": f"deal-{ticket}", "channel": "changes", "title": status,
-                "body": f"{prefix}\nMT5 fill: {float(d['lots']):.2f} lots @ {float(d['price']):.2f}",
+                "body": f"{prefix}\nMT5 ticket: {ticket}\nTelegram signal: {detail.get('signal_id', 'unmapped')}\nMT5 fill: {float(d['lots']):.2f} lots @ {float(d['price']):.2f}",
                 "timestamp": d.get("time"),
             })
         elif kind == "OUT":
