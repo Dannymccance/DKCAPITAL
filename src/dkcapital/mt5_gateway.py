@@ -479,7 +479,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "status": "ok",
-                    "mode": "shadow_only",
+                    "mode": ("production_live_gateway" if self.config.strategy_mode == "tp1_live"
+                             else "shadow_only"),
                     "time": datetime.now(UTC).isoformat(),
                 },
             )
