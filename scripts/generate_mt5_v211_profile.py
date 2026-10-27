@@ -82,10 +82,10 @@ double SessionRiskPct()
     patch('json+="\\\"equity\\\":"+N(AccountInfoDouble(ACCOUNT_EQUITY),2)+",";',
           'json+="\\\"equity\\\":"+N(AccountInfoDouble(ACCOUNT_EQUITY),2)+",";'
           + '\n   json+="\\\"credit\\\":"+N(AccountInfoDouble(ACCOUNT_CREDIT),2)+",";')
-    patch('json+="\\\"signal_risk_cap_pct\\\":"+N(MaxSignalRiskPct,3);',
-          'json+="\\\"signal_risk_cap_pct\\\":"+N(SessionRiskPct(),3);')
-    patch('json+="\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);',
-          'json+="\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);'
+    patch('json+=",\\\"signal_risk_cap_pct\\\":"+N(MaxSignalRiskPct,3);',
+          'json+=",\\\"signal_risk_cap_pct\\\":"+N(SessionRiskPct(),3);')
+    patch('json+=",\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);',
+          'json+=",\\\"signal_risk_cap_account_currency\\\":"+N(SignalRiskLimitAccountCurrency(),2);'
           + '\n   json+=",\\\"portfolio_risk_cap_account_currency\\\":"+N(PortfolioRiskLimitAccountCurrency(),2);')
     patch("// Keep the existing balance-based targetLots calculation below unchanged.",
           "// Dan: size by broker-valued stop loss within the active UK session risk budget.")
