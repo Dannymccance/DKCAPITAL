@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from dkcapital.mt5_account_reporting import normalize_telemetry
+from dkcapital.execution_quality import execution_quality
 
 from dkcapital.logging_setup import configure_logging
 
@@ -394,7 +395,7 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             )
             return
 
-        profile_match = re.fullmatch(r"/v5/accounts/([23])/(feed|snapshot)", self.path)
+        profile_match = re.fullmatch(r"/v5/accounts/([23])/(feed|snapshot|quality)", self.path)
         if profile_match:
             account_id = int(profile_match.group(1))
             profile = self.config.profiles.get(account_id)
@@ -414,7 +415,16 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                         or snapshot.get("server") != profile["server"]):
                     self._write_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no_verified_profile_telemetry"})
                     return
-                self._write_json(HTTPStatus.OK, snapshot)
+                if profile_match.group(2) == "quality":
+                    state = _json(self.config.signal_state_path)
+                    signals = state.get("signals")
+                    if not isinstance(signals, list):
+                        signals = []
+                    self._write_json(
+                        HTTPStatus.OK, execution_quality(signals, snapshot)
+                    )
+                else:
+                    self._write_json(HTTPStatus.OK, snapshot)
             return
 
         if self.path in ("/v2/demo/feed", "/v3/demo/feed", "/v4/demo/feed", "/v5/demo/feed"):
