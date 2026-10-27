@@ -16,6 +16,86 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "mt5/DKcapitalV2.mq5"
 
 
+
+def _dan_session_risk(source: str) -> str:
+    """Account 3 only: broker-SL-valued total exposure, UK-local 01:00-09:00.
+
+    No schedule is applied to legacy Account 1/2 source, and no
+    live trading is armed or compiled by this generator.
+    """
+    def patch(old: str, new: str) -> None:
+        nonlocal source
+        if source.count(old) != 1:
+            raise RuntimeError(f"Dan EA template changed: expected one {old!r}")
+        source = source.replace(old, new, 1)
+
+    uk_clock = """int UKTradingHour()
+{
+   // Clock is UTC, independent of broker server time. BST begins at 01:00
+   // UTC on the last Sunday in March and ends at 01:00 UTC on the last
+   // Sunday in October. Both repeated 01:xx hours are in the 8% window.
+   datetime utc=TimeGMT();
+   MqlDateTime now;TimeToStruct(utc,now);
+   MqlDateTime t=now;t.mon=3;t.day=31;t.hour=1;t.min=0;t.sec=0;
+   datetime march=StructToTime(t);
+   MqlDateTime m;TimeToStruct(march,m);
+   march-=(int)m.day_of_week*86400;
+   t.mon=10;t.day=31;
+   datetime october=StructToTime(t);
+   MqlDateTime o;TimeToStruct(october,o);
+   october-=(int)o.day_of_week*86400;
+   MqlDateTime uk;
+   TimeToStruct(utc+(utc>=march && utc<october?3600:0),uk);
+   return uk.hour;
+}
+double SessionRiskPct()
+{
+   int hour=UKTradingHour();
+   return hour>=1 && hour<9 ? 8.0 : 2.0;
+}
+"""
+    patch("double SignalRiskLimitAccountCurrency(const bool highRisk=false)",
+          uk_clock + "double SignalRiskLimitAccountCurrency(const bool highRisk=false)")
+    patch("double pct=highRisk?MathMin(MaxSignalRiskPct,HighRiskSignalPct):MaxSignalRiskPct;",
+          "double pct=highRisk?MathMin(SessionRiskPct(),HighRiskSignalPct):SessionRiskPct();")
+    patch("return MaxGroupRiskAccountCurrency*RiskBalanceAccountCurrency()/RiskReferenceBalanceAccountCurrency;",
+          "return RiskBalanceAccountCurrency()*SessionRiskPct()/100.0;")
+    patch("return MaxPortfolioRiskAccountCurrency*RiskBalanceAccountCurrency()/RiskReferenceBalanceAccountCurrency;",
+          "return RiskBalanceAccountCurrency()*SessionRiskPct()/100.0;")
+    # No artificial 15% reservation: initial entries can use the remaining
+    # stop-loss risk budget. Layers may enter only after exposure has fallen.
+    patch("const double INITIAL_GROUP_RISK_SHARE = 0.85;",
+          "const double INITIAL_GROUP_RISK_SHARE = 1.0;")
+    patch("double targetLots=FloorLots(MathFloor(AccountInfoDouble(ACCOUNT_BALANCE)/LotDenominatorAccountCurrency)*0.01);",
+          """// Size by actual broker-valued loss at the provider SL, NOT a fixed
+    // balance-to-lot multiplier. The existing margin/TP/Friday and stop
+    // safety checks below may reduce or reject this risk-budget target.
+    double probeLot=LotMin();
+    if(probeLot<=0)
+    {RecordDecision(id,"ENTRY","INVALID_BROKER_LOT_MINIMUM",age);return;}
+    double probeLoss=RiskAccountCurrency(buy,probeLot,fill,sl)-RiskPaddingAccountCurrencyPerLeg;
+    if(probeLoss<=0 || !MathIsValidNumber(probeLoss))
+    {RecordDecision(id,"ENTRY","INVALID_BROKER_STOP_VALUATION",age);return;}
+    double targetLots=FloorLots(
+       MathMax(0.0,budget-initialLegCount*RiskPaddingAccountCurrencyPerLeg)
+       /(probeLoss/probeLot));""")
+    patch("// Keep the existing balance-based targetLots calculation below unchanged.",
+          "// Dan: size by broker-valued stop loss within the active UK session risk budget.")
+    patch("// The 4% per-signal ceiling is a HARD planned-risk cap using the exact provider SL.",
+          "// The 8% or 2% per-signal ceiling is a HARD planned-risk cap at the provider SL.")
+    patch("// Do not reserve an unused percentage of the 4% signal cap for a",
+          "// Do not reserve an unused percentage of the active session signal cap for a")
+    patch('Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,',
+          'Print("DK2 DEMO Account 1 ready entryEnabled=",EnableNewEntries,') if False else None
+    # Legacy GBP constants remain accepted for compatibility with the shared
+    # EA template, but no longer override this account's percentage ceilings.
+    patch("input double MaxGroupRiskAccountCurrency = 75.0;",
+          "input double MaxGroupRiskAccountCurrency = 75.0; // Legacy, unused on Dan.")
+    patch("input double MaxPortfolioRiskAccountCurrency = 150.0;",
+          "input double MaxPortfolioRiskAccountCurrency = 150.0; // Legacy, unused on Dan.")
+    return source
+
+
 def generate(account_id: int, login: int, mode: str, currency: str,
              server: str, lot_denominator: float, feed_token: str | None = None) -> str:
     if account_id not in (2, 3):
@@ -108,6 +188,8 @@ def generate(account_id: int, login: int, mode: str, currency: str,
     replace('DK2 BLOCK requires approved GBP DEMO hedging login',
             f'DK2 BLOCK requires verified {mode} {currency} hedging profile {account_id}')
     replace("DK2 DEMO Account 1 ready", f"DK2 {mode} Account {account_id} ready")
+    if account_id == 3:
+        source = _dan_session_risk(source)
     # No profile is armed by source generation. Default remains false.
     if "input bool EnableNewEntries = false;" not in source:
         raise RuntimeError("Candidate lost safe disarmed default")
