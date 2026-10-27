@@ -15,6 +15,8 @@ from dkcapital.mt5_account_reporting import normalize_telemetry
 from dkcapital.execution_quality import execution_quality, edit_ready, planned_rr
 from dkcapital.mt5_entry_policy import (new_entry_block_reason, verified_snapshot,
                                         recent_entry_blocks, verified_uk_session_risk)
+from dkcapital.mt5_tp1_policy import (tp1_block_reason, attested_tp1_risk,
+                                       ENTRY_AGE_LIMIT_SECONDS)
 
 from dkcapital.logging_setup import configure_logging
 
@@ -44,6 +46,11 @@ class GatewayConfig:
         self.port = _env_int("MT5_GATEWAY_PORT", 8765)
         self.token = os.getenv("MT5_GATEWAY_TOKEN", "").strip()
         self.dan_only = os.getenv("MT5_DAN_ONLY", "false").strip().lower() in {"true", "1", "yes"}
+        self.strategy_mode = os.getenv("MT5_STRATEGY_MODE", "legacy").strip().lower()
+        if self.strategy_mode not in {"legacy", "tp1_live"}:
+            raise RuntimeError("Unknown MT5 strategy mode")
+        if self.strategy_mode == "tp1_live" and not self.dan_only:
+            raise RuntimeError("TP1 strategy requires authenticated Dan-only live mode")
         self.demo_feed_enabled = os.getenv("MT5_DEMO_FEED_ENABLED", "false").strip().lower() in {"true", "1", "yes"}
         self.account1_login = _env_int("MT5_ACCOUNT1_LOGIN", 0)
         self.account1_telemetry_path = _env_path("MT5_ACCOUNT1_TELEMETRY_PATH", "/app/data/mt5-account1.json")
@@ -220,6 +227,10 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
         all_signals = state.get("signals")
         if not isinstance(all_signals, list):
             all_signals = []
+        tp1_mode = bool(
+            v5 and account_id == 3 and getattr(self.config, "dan_only", False)
+            and getattr(self.config, "strategy_mode", "legacy") == "tp1_live"
+        )
         # A separate broker snapshot is mandatory to authorize new V5 entries
         # on each account. A stale/mismatched snapshot blocks ENTRY only.
         entry_snapshot: dict[str, Any] = {}
@@ -239,7 +250,10 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 # An older Account 3 EA with 4% static limits cannot enter new
                 # trades under the 8/2 UK risk contract. Retain all S/A/L
                 # instructions for stop changes and closes.
-                entry_snapshot_verified = verified_uk_session_risk(entry_snapshot)
+                entry_snapshot_verified = (
+                    attested_tp1_risk(entry_snapshot) if tp1_mode
+                    else verified_uk_session_risk(entry_snapshot)
+                )
         lines = [profile_header or ("DKDEMO5" if v5 else ("DKDEMO4" if v4 else ("DKDEMO3" if v3 else "DKDEMO2")))]
         for signal in all_signals:
             if not isinstance(signal, dict) or signal.get("symbol") != "XAUUSD":
@@ -280,13 +294,13 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             # Older EAs have only 3 or 4 target slots. Mark unsupported
             # ACTIVE rows CANCELLED, rather than cause an incomplete fill.
             supported = 6 if (v4 or v5) else (4 if v3 else 3)
-            if (count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":
+            if (not tp1_mode and count > supported or (signal.get("high_risk") and not v5)) and status == "ACTIVE":
                 status = "CANCELLED"  # Prevent legacy 4% high-risk entries.
             # Entry-only GWS readiness on V5. CANCELLED prevents TryEntry,
             # but the EA still invokes ManageLegs and processes provider actions
             # for this very same row. Never omit a signal with live positions.
             # All three accounts use the same V5 protocol and policy.
-            if v5 and status == "ACTIVE" and signal.get("source_style") == "gws":
+            if v5 and not tp1_mode and status == "ACTIVE" and signal.get("source_style") == "gws":
                 readiness = edit_ready(signal)
                 rr = planned_rr(signal)
                 if (not readiness.get("ready")
@@ -298,7 +312,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
             if v5 and account_id in (1, 2, 3) and status == "ACTIVE":
                 if not entry_snapshot_verified:
                     status = "CANCELLED"
-                elif new_entry_block_reason(signal, all_signals, entry_snapshot):
+                elif (tp1_block_reason(signal, entry_snapshot) if tp1_mode else
+                      new_entry_block_reason(signal, all_signals, entry_snapshot)):
                     status = "CANCELLED"
             stop_mode = str(signal.get("sl_mode") or "PRICE").upper()
             if signal.get("be_deferred") and stop_mode != "BREAKEVEN":
@@ -315,7 +330,19 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 fields.append(str(prices[6]))
             if v5:
                 fields.append("HIGH" if signal.get("high_risk") else "STANDARD")
-            fields.append(str(int(opened.timestamp())))
+            # In TP1 mode the first complete edited instruction controls age.
+            # Original Telegram timestamp is retained in signal-state history.
+            ready = opened
+            if tp1_mode and signal.get("entry_ready_at"):
+                try:
+                    ready = datetime.fromisoformat(
+                        str(signal["entry_ready_at"]).replace("Z", "+00:00")
+                    )
+                    if ready.tzinfo is None:
+                        ready = opened
+                except (ValueError, TypeError):
+                    ready = opened
+            fields.append(str(int(ready.timestamp())))
             lines.append("|".join(fields))
             for action in signal.get("history", []):
                 if not isinstance(action, dict) or action.get("kind") not in ("close", "partial_close", "add_layer"):
@@ -331,6 +358,8 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                 except (ValueError, TypeError):
                     continue
                 if action["kind"] == "add_layer":
+                    if tp1_mode:
+                        continue  # The live TP1 EA cannot layer.
                     # V2 layer instructions are executable only for GWS-style
                     # signals. The EA independently checks freshness, MT5 fills,
                     # native SL, better entry, size, and all risk budgets.
@@ -489,8 +518,21 @@ class Mt5GatewayHandler(BaseHTTPRequestHandler):
                             mode=profile["mode"], currency=profile["currency"],
                             server=profile["server"],
                         ) and (not self.config.dan_only
-                               or verified_uk_session_risk(snapshot)),
+                               or (attested_tp1_risk(snapshot)
+                             if getattr(self.config, "strategy_mode", "legacy") == "tp1_live"
+                             else verified_uk_session_risk(snapshot))),
                     )
+                    if getattr(self.config, "strategy_mode", "legacy") == "tp1_live":
+                        report["entry_blocks"].extend(
+                            {"signal_id": str(row.get("signal_id") or ""), "reason": reason}
+                            for row in signals if isinstance(row, dict)
+                            if row.get("status") == "ACTIVE"
+                            for reason in [tp1_block_reason(row, snapshot)]
+                            if reason is not None and not any(
+                                b["signal_id"] == str(row.get("signal_id") or "")
+                                for b in report["entry_blocks"]
+                            )
+                        )
                     self._write_json(HTTPStatus.OK, report)
                 else:
                     self._write_json(HTTPStatus.OK, snapshot)
