@@ -4,11 +4,12 @@ on:
   push:
     branches: [main]
     paths:
+      # Only source-intake/mirror changes redeploy the Telegram listener.
+      # Discord-only card formatting/routing is deployed manually to avoid
+      # interrupting live signal intake on a presentation-only PR.
       - src/dkcapital/telegram_listener.py
       - src/dkcapital/telegram_discord_mirror.py
-      - src/dkcapital/discord_bot.py
       - src/dkcapital/config.py
-      - .github/workflows/deploy-telegram-chats.yml
   workflow_dispatch:
 
 permissions:
