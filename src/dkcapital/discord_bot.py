@@ -28,7 +28,7 @@ from dkcapital.mt5_trade_results import completed_results, result_embed, verifie
 from dkcapital.mt5_broker_events import discover_events, notification_embed
 from dkcapital.telegram_discord_mirror import chats_channel_id, sync_mirror
 from dkcapital.gws_discord_routing import (
-    routing_path, load_routes, destination_for_signal, purge_channel_entries,
+    routing_path, load_routes, message_destination, purge_channel_entries,
 )
 from dkcapital.weekly_record import close_time, record_due, weekly_record
 
@@ -1915,21 +1915,17 @@ def build_bot(settings: Settings) -> commands.Bot:
             # Existing cards stay in their original channel so the edit
             # ledger remains valid. Only newly published GWS signals route
             # to their provider-specific destination after cutover.
-            if prior.get("message_id"):
-                channel_id = int(prior.get("channel_id")
-                                 or settings.discord_internal_signals_channel_id)
-            else:
-                channel_id = destination_for_signal(
-                    signal, routes,
-                    legacy_channel_id=settings.discord_internal_signals_channel_id,
+            channel_id = message_destination(
+                signal, prior, routes,
+                legacy_channel_id=settings.discord_internal_signals_channel_id,
+            )
+            if channel_id is None:
+                logger.warning(
+                    "Unverified GWS provider for parsed signal=%s; "
+                    "no Discord card published, source identity needs review",
+                    signal_id,
                 )
-                if channel_id is None:
-                    logger.warning(
-                        "Unverified GWS provider for parsed signal=%s; "
-                        "no Discord card published, source identity needs review",
-                        signal_id,
-                    )
-                    continue
+                continue
             broker_state = broker_signal_state(signal_id, broker_snapshot)
             if (signal.get("status") == "ACTIVE"
                     and broker_state.get("fresh")
