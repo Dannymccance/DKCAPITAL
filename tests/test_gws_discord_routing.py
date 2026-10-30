@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dkcapital.gws_discord_routing import (
-    PROVIDER_CHANNEL_NAMES, destination_for_signal, load_routes,
+    PROVIDER_CHANNEL_NAMES, destination_for_signal, message_destination, load_routes,
     provider_for_signal, purge_channel_entries, setup_channels,
 )
 from dkcapital.mt5_tp1_policy import CAPITAL_CHAT_ID, STORM_CHAT_ID
@@ -55,6 +55,24 @@ class SourceRoutingTests(unittest.TestCase):
         ]:
             self.assertIsNone(provider_for_signal(signal))
             self.assertIsNone(destination_for_signal(signal, ROUTES, legacy_channel_id=LEGACY))
+
+    def test_existing_cards_stay_in_original_channel_after_cutover(self):
+        storm = {"source_style": "gws", "origin_chat_id": STORM_CHAT_ID}
+        self.assertEqual(message_destination(
+            storm, {"message_id": 222}, ROUTES, legacy_channel_id=LEGACY
+        ), LEGACY)
+        self.assertEqual(message_destination(
+            storm, {"message_id": 333, "channel_id": ROUTES["CAPITAL"]},
+            ROUTES, legacy_channel_id=LEGACY
+        ), ROUTES["CAPITAL"])
+        self.assertEqual(message_destination(
+            storm, {}, ROUTES, legacy_channel_id=LEGACY
+        ), ROUTES["STORM"])
+        unknown = {"source_style": "gws", "chat_id": -100999,
+                   "origin_chat_id": -100999, "source_chat_title": "Unknown"}
+        self.assertIsNone(message_destination(
+            unknown, {}, ROUTES, legacy_channel_id=LEGACY
+        ))
 
     def test_legacy_and_other_providers_stay_on_original(self):
         signal = {"source_style": "gws", "origin_chat_id": STORM_CHAT_ID}
