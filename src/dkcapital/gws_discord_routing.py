@@ -84,6 +84,16 @@ def destination_for_signal(
     return routes.get(source) if source else None
 
 
+def message_destination(signal: dict, prior: dict, routes: dict[str, int] | None,
+                        *, legacy_channel_id: int) -> int | None:
+    """Existing cards never move channels; only new cards use source routing."""
+    if prior.get("message_id"):
+        return int(prior.get("channel_id") or legacy_channel_id)
+    return destination_for_signal(
+        signal, routes, legacy_channel_id=legacy_channel_id,
+    )
+
+
 def purge_channel_entries(registry: dict, *, channel_id: int,
                           legacy_channel_id: int, timestamp: str) -> bool:
     """Respect /delall on one provider channel without losing other channels."""
