@@ -27,6 +27,9 @@ from dkcapital.mt5_entry_policy import new_entry_block_reason
 from dkcapital.mt5_trade_results import completed_results, result_embed, verified_snapshot
 from dkcapital.mt5_broker_events import discover_events, notification_embed
 from dkcapital.telegram_discord_mirror import chats_channel_id, sync_mirror
+from dkcapital.gws_discord_routing import (
+    routing_path, load_routes, message_destination, purge_channel_entries,
+)
 from dkcapital.weekly_record import close_time, record_due, weekly_record
 
 logger = logging.getLogger("dkcapital.discord")
@@ -1872,10 +1875,16 @@ def build_bot(settings: Settings) -> commands.Bot:
                 "messages": {},
             })
             return
+        # Source-specific Discord routing is presentation-only; the MT5
+        # processor and its execution allowlist are unchanged. Missing map
+        # preserves legacy routing until explicit operator setup.
         try:
-            channel = bot.get_channel(settings.discord_internal_signals_channel_id) or await bot.fetch_channel(settings.discord_internal_signals_channel_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            logger.exception("Unable to access MT5 signal channel")
+            routes = load_routes(
+                routing_path(),
+                legacy_channel_id=settings.discord_internal_signals_channel_id,
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.exception("Invalid GWS Discord channel mapping; refusing publication")
             return
         messages = registry.setdefault("messages", {})
         # Fixed cutover prevents historical backlog on upgrade or restart.
@@ -1903,6 +1912,20 @@ def build_bot(settings: Settings) -> commands.Bot:
             if isinstance(prior, int):
                 prior = {"message_id": prior}
             prior = prior if isinstance(prior, dict) else {}
+            # Existing cards stay in their original channel so the edit
+            # ledger remains valid. Only newly published GWS signals route
+            # to their provider-specific destination after cutover.
+            channel_id = message_destination(
+                signal, prior, routes,
+                legacy_channel_id=settings.discord_internal_signals_channel_id,
+            )
+            if channel_id is None:
+                logger.warning(
+                    "Unverified GWS provider for parsed signal=%s; "
+                    "no Discord card published, source identity needs review",
+                    signal_id,
+                )
+                continue
             broker_state = broker_signal_state(signal_id, broker_snapshot)
             if (signal.get("status") == "ACTIVE"
                     and broker_state.get("fresh")
@@ -1928,6 +1951,7 @@ def build_bot(settings: Settings) -> commands.Bot:
             if updates >= max_updates_per_cycle:
                 break
             try:
+                channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
                 if prior.get("message_id"):
                     try:
                         msg = await channel.fetch_message(int(prior["message_id"]))
@@ -1941,10 +1965,16 @@ def build_bot(settings: Settings) -> commands.Bot:
                         continue
                 else:
                     msg = await channel.send(embed=mt5_signal_embed(signal, broker_state))
-            except (discord.Forbidden, discord.HTTPException):
-                logger.exception("MT5 signal card sync failed signal=%s", signal_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.exception(
+                    "GWS signal card delivery failed signal=%s channel=%s",
+                    signal_id, channel_id,
+                )
                 break
-            messages[signal_id] = {"message_id": msg.id, "fingerprint": fingerprint}
+            messages[signal_id] = {
+                "message_id": msg.id, "fingerprint": fingerprint,
+                "channel_id": channel_id,
+            }
             changed = True
             updates += 1
             _write_json(settings.discord_internal_signals_state_path, registry)
@@ -2188,18 +2218,21 @@ def build_bot(settings: Settings) -> commands.Bot:
             )
             return
 
-        # If this is the internal parsed-signal feed, forget deleted Discord
-        # message IDs and move the watermark forward. Otherwise the sync loop
-        # would recreate the signal cards that were just purged.
-        if channel.id == settings.discord_internal_signals_channel_id:
-            _write_json(
-                settings.discord_internal_signals_state_path,
-                {
-                    "initialized": True,
-                    "watermark": datetime.now(UTC).isoformat(),
-                    "messages": {},
-                },
-            )
+        # Only suppress cards from the purged provider channel. Never
+        # delete state for other GWS sources or reset the replay cutover.
+        if channel.id == settings.discord_internal_signals_channel_id or (
+            channel.id in (load_routes(
+                routing_path(),
+                legacy_channel_id=settings.discord_internal_signals_channel_id,
+            ) or {}).values()
+        ):
+            registry = _load_json(settings.discord_internal_signals_state_path)
+            if purge_channel_entries(
+                registry, channel_id=channel.id,
+                legacy_channel_id=settings.discord_internal_signals_channel_id,
+                timestamp=datetime.now(UTC).isoformat(),
+            ):
+                _write_json(settings.discord_internal_signals_state_path, registry)
 
         # If the configured dashboard itself was in this channel, clear its
         # stale message reference so the refresh loop does not keep looking for
